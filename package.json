@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "node hacker.js",
     "start": "node hacker.js"
   },
   "dependencies": {
