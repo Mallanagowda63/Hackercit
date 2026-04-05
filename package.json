@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node hacker.js",
+    "postinstall": "npm install --prefix backend",
     "start": "node hacker.js"
   },
   "dependencies": {

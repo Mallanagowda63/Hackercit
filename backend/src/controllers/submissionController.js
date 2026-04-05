@@ -1,10 +1,9 @@
 const prisma = require('../prismaClient');
-const Queue = require('bull');
 
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-const execQueue = new Queue('exec', redisUrl);
 const RUNNER_URL = process.env.CODE_RUNNER_URL || 'http://127.0.0.1:3000';
 const RUNNER_TIMEOUT_MS = Number(process.env.RUNNER_TIMEOUT_MS || 45000);
+let execQueue = null;
 const LEVEL_LABELS = {
   0: 'No Submission',
   1: 'Easy',
@@ -21,6 +20,15 @@ const AVATAR_GRADIENTS = [
   ['#11998e', '#38ef7d'],
   ['#f2994a', '#f2c94c'],
 ];
+
+function getExecQueue() {
+  if (!execQueue) {
+    const Queue = require('bull');
+    execQueue = new Queue('exec', redisUrl);
+  }
+
+  return execQueue;
+}
 
 function buildRunnerEndpoint(pathname) {
   const base = RUNNER_URL.endsWith('/') ? RUNNER_URL : `${RUNNER_URL}/`;
@@ -337,7 +345,7 @@ exports.runSample = async (req, res) => {
   }});
 
   // enqueue for execution worker
-  await execQueue.add({ submissionId: submission.id, runHidden: false, customInput });
+  await getExecQueue().add({ submissionId: submission.id, runHidden: false, customInput });
   res.json({ submissionId: submission.id, status: 'queued' });
 };
 

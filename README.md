@@ -46,21 +46,22 @@ node src/index.js
 
 ## Frontend Backend Configuration
 
-The frontend now reads the backend base URL from the `<meta name="codearena-backend-api-base">` tag in `index.html`.
-
-- Leave it empty to use:
-  - `http://127.0.0.1:4000` when the frontend is opened from `localhost` or `127.0.0.1`
-  - an explicit configuration error for deployed environments, to avoid silently calling the wrong host
-- Set it explicitly for split deployments, for example:
-
-```html
-<meta name="codearena-backend-api-base" content="https://your-backend.example.com" />
-```
-
-- Use same-origin only if your deployed host already proxies `/api/...` to the backend:
+The frontend now defaults to same-origin API calls through this tag in `index.html`:
 
 ```html
 <meta name="codearena-backend-api-base" content="same-origin" />
+```
+
+- Local development:
+  - the runner on `http://127.0.0.1:3000` proxies auth/problem/test/submission APIs to the backend on `http://127.0.0.1:4000`
+  - `/api/run` still executes through the runner service on `:3000`
+- Vercel deployment:
+  - `/api/*` is served by `api/[...path].js`, which reuses the backend Express app on the same host
+- Split deployment:
+  - if you host the backend somewhere else, set an explicit backend URL instead:
+
+```html
+<meta name="codearena-backend-api-base" content="https://your-backend.example.com" />
 ```
 
 ## Deployment Notes
@@ -72,7 +73,7 @@ This project is not a frontend-only app. The full flow depends on:
 - Docker installed on the deployment machine
 - permission for the runner process to run `docker`
 
-If you deploy only the static files to platforms like Netlify or Vercel static hosting, the frontend may still load, but auth and execution will fail unless the backend API on `:4000` and the runner service on `:3000` are both reachable.
+If you deploy this repo to Vercel, the frontend and `/api/*` can share the same host. You still need to provide the backend environment variables and a reachable code runner URL.
 
 For deployment, you need one of these:
 
@@ -83,7 +84,12 @@ For deployment, you need one of these:
 
 2. A platform that supports a long-running Node server and Docker access.
 
-3. An external execution service, if your deployment platform does not allow Docker access.
+3. A split setup where:
+   - the frontend and backend API run on Vercel
+   - the code runner lives on a VM/VPS or other host that can run Docker
+   - `CODE_RUNNER_URL` points at that runner host
+
+4. An external execution service, if your deployment platform does not allow Docker access.
 
 ## Health Check
 
