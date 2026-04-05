@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String              @id @default(auto()) @map("_id") @db.ObjectId
+  email              String              @unique
+  name               String?
+  usn                String?
+  department         String?
+  password           String
+  role               Role                @default(USER)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  lastLoginAt        DateTime?
+  loginCount         Int                 @default(0)
+  submissions        Submission[]
+  loginEvents        LoginEvent[]
+  notifications      Notification[]
+  verificationTokens VerificationToken[]
+  resetTokens        ResetToken[]
+  badgeIds           String[]            @default([]) @db.ObjectId
+  badges             Badge[]             @relation("UserBadges", fields: [badgeIds], references: [id])
+  verified           Boolean             @default(false)
+}
+
+model VerificationToken {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String   @db.ObjectId
+  expiresAt DateTime
+}
+
+model ResetToken {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String   @db.ObjectId
+  expiresAt DateTime
+}
+
+model Problem {
+  id          String       @id @default(auto()) @map("_id") @db.ObjectId
+  legacyId    Int?         @unique
+  title       String
+  slug        String       @unique
+  fnName      String?
+  difficulty  Difficulty
+  tags        String[]     @default([])
+  acceptance  String?
+  statement   String
+  examples    Json?
+  starterCode Json?
+  testCases   Json?
+  constraints String[]     @default([])
+  samples     Json
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  submissions Submission[]
+}
+
+model Submission {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  user      User      @relation(fields: [userId], references: [id])
+  userId    String    @db.ObjectId
+  problem   Problem   @relation(fields: [problemId], references: [id])
+  problemId String    @db.ObjectId
+  language  String
+  code      String
+  status    Status
+  timeMs    Int?
+  memoryKb  Int?
+  createdAt DateTime  @default(now())
+  results   Json?
+}
+
+model Badge {
+  id      String   @id @default(auto()) @map("_id") @db.ObjectId
+  name    String
+  desc    String?
+  userIds String[] @default([]) @db.ObjectId
+  users   User[]   @relation("UserBadges", fields: [userIds], references: [id])
+}
+
+model TestAssignment {
+  id              String           @id @default(auto()) @map("_id") @db.ObjectId
+  title           String
+  difficulty      Difficulty?
+  durationMinutes Int
+  status          AssignmentStatus @default(DRAFT)
+  problemIds      String[]         @default([]) @db.ObjectId
+  createdById     String           @db.ObjectId
+  startsAt        DateTime?
+  endsAt          DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model Notification {
+  id           String           @id @default(auto()) @map("_id") @db.ObjectId
+  user         User             @relation(fields: [userId], references: [id])
+  userId       String           @db.ObjectId
+  type         NotificationType @default(TEST_ASSIGNED)
+  title        String
+  message      String
+  assignmentId String?          @db.ObjectId
+  read         Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+}
+
+model LoginEvent {
+  id        String        @id @default(auto()) @map("_id") @db.ObjectId
+  user      User          @relation(fields: [userId], references: [id])
+  userId    String        @db.ObjectId
+  email     String
+  role      Role
+  eventType AuthEventType
+  ip        String?
+  userAgent String?
+  createdAt DateTime      @default(now())
+}
+
+enum Role {
+  ADMIN
+  SETTER
+  USER
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum Status {
+  PENDING
+  RUNNING
+  ACCEPTED
+  WRONG_ANSWER
+  TLE
+  RUNTIME_ERROR
+  COMPILE_ERROR
+  INTERNAL_ERROR
+}
+
+enum AssignmentStatus {
+  DRAFT
+  LIVE
+  ENDED
+}
+
+enum NotificationType {
+  TEST_ASSIGNED
+  TEST_STARTED
+  TEST_ENDED
+}
+
+enum AuthEventType {
+  SIGNUP
+  LOGIN
+}

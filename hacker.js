@@ -3,7 +3,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { runSubmission } from "./runner/index.js";
 
-const host = "127.0.0.1";
+const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 const rootDir = process.cwd();
 
@@ -45,7 +45,21 @@ function readJsonBody(req) {
 }
 
 createServer(async (req, res) => {
-  if (req.method === "POST" && req.url === "/api/run") {
+  const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const pathname = requestUrl.pathname;
+
+  if (req.method === "GET" && pathname === "/api/health") {
+    sendJson(res, 200, {
+      ok: true,
+      service: "codearena",
+      dockerRequired: true,
+      host,
+      port,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/run") {
     try {
       const payload = await readJsonBody(req);
       const result = await runSubmission(payload);
@@ -57,7 +71,7 @@ createServer(async (req, res) => {
     return;
   }
 
-  const reqPath = req.url === "/" ? "/index.html" : req.url || "/index.html";
+  const reqPath = pathname === "/" ? "/index.html" : pathname || "/index.html";
   const safePath = normalize(reqPath).replace(/^(\.\.[/\\])+/, "");
   const filePath = join(rootDir, safePath);
 
@@ -71,5 +85,6 @@ createServer(async (req, res) => {
   res.writeHead(200, { "Content-Type": contentType });
   createReadStream(filePath).pipe(res);
 }).listen(port, host, () => {
-  console.log(`CodeArena is running at http://${host}:${port}`);
+  const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  console.log(`CodeArena is running at http://${displayHost}:${port}`);
 });

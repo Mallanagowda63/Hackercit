@@ -1,5 +1,140 @@
 const { useState, useRef, useEffect } = React;
 
+const API_PROTOCOL = window.location.protocol === "https:" ? "https:" : "http:";
+const API_HOST = window.location.hostname || "127.0.0.1";
+const BACKEND_API_BASE = `${API_PROTOCOL}//${API_HOST}:4000`;
+const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, lastLoginAt: null, loginCount: 0 };
+
+async function readJsonSafely(response) {
+  const text = await response.text();
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Backend returned invalid JSON.");
+  }
+}
+
+function createAuthHeaders(token, hasBody = false) {
+  return {
+    ...(hasBody ? { "Content-Type": "application/json" } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+function formatPortalDate(value) {
+  if (!value) return "--";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function sameValue(left, right) {
+  return String(left ?? "") === String(right ?? "");
+}
+
+function mapProblemRecord(problem) {
+  if (!problem) return null;
+
+  const starterCode = problem.starterCode && typeof problem.starterCode === "object"
+    ? problem.starterCode
+    : { javascript: "", python: "", java: "" };
+
+  return {
+    id: problem.legacyId ?? problem.id,
+    dbId: problem.id,
+    legacyId: problem.legacyId ?? null,
+    slug: problem.slug || "",
+    title: problem.title || "Untitled Problem",
+    fnName: problem.fnName || "",
+    difficulty: problem.difficulty || "Medium",
+    tags: Array.isArray(problem.tags) ? problem.tags : [],
+    acceptance: problem.acceptance || "Custom",
+    description: problem.description || problem.statement || "",
+    examples: Array.isArray(problem.examples) ? problem.examples : [],
+    constraints: Array.isArray(problem.constraints) ? problem.constraints : [],
+    starterCode: {
+      javascript: starterCode.javascript || "",
+      python: starterCode.python || "",
+      java: starterCode.java || "",
+    },
+    testCases: Array.isArray(problem.testCases) ? problem.testCases : [],
+    samples: Array.isArray(problem.samples) ? problem.samples : [],
+    createdAt: problem.createdAt || null,
+    updatedAt: problem.updatedAt || null,
+  };
+}
+
+function resolveSubmissionProblemKey(submission, availableProblems = []) {
+  const matchedProblem = availableProblems.find((problem) => (
+    sameValue(problem.dbId, submission.problemId)
+    || sameValue(problem.id, submission.problem?.legacyId)
+    || sameValue(problem.dbId, submission.problem?.id)
+    || sameValue(problem.id, submission.problemId)
+  ));
+
+  return matchedProblem?.id
+    ?? submission.problem?.legacyId
+    ?? null;
+}
+
+function deriveSubmissionProgress(submissions, availableProblems = []) {
+  const solved = new Set();
+  const attempted = new Set();
+
+  (Array.isArray(submissions) ? submissions : []).forEach((submission) => {
+    const problemKey = resolveSubmissionProblemKey(submission, availableProblems);
+    if (problemKey === null || problemKey === undefined) return;
+
+    if (submission.status === "ACCEPTED") {
+      solved.add(problemKey);
+      attempted.delete(problemKey);
+      return;
+    }
+
+    if (!solved.has(problemKey)) {
+      attempted.add(problemKey);
+    }
+  });
+
+  return { solved, attempted };
+}
+
+function mapAssignmentRecord(assignment) {
+  if (!assignment) return null;
+
+  const problems = Array.isArray(assignment.problems)
+    ? assignment.problems.map(mapProblemRecord).filter(Boolean)
+    : [];
+
+  return {
+    id: assignment.id,
+    title: assignment.title || "Untitled Test",
+    level: assignment.difficulty || "Mixed",
+    difficulty: assignment.difficulty || "Mixed",
+    duration: Number(assignment.durationMinutes || 60),
+    durationMinutes: Number(assignment.durationMinutes || 60),
+    status: assignment.status || "DRAFT",
+    startsAt: assignment.startsAt || null,
+    endsAt: assignment.endsAt || null,
+    createdAt: assignment.createdAt || null,
+    updatedAt: assignment.updatedAt || null,
+    date: formatPortalDate(assignment.startsAt || assignment.createdAt),
+    questions: problems.map((problem) => problem.id),
+    questionIds: problems.map((problem) => problem.id),
+    problemDbIds: problems.map((problem) => problem.dbId),
+    problems,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HIDDEN REFERENCE SOLUTIONS  (never shown to student – merged silently in bg)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2377,7 +2512,152 @@ function ScreenShield({ active, message }) {
 
 
 function CodingPlatform() {
-  const [view, setView]                       = useState("list");
+  const defaultAdminProblems = [29, 34, 39]
+    .map((problemId) => PROBLEMS.find((problem) => problem.id === problemId))
+    .filter(Boolean);
+  const defaultAdminTest = {
+    id: "",
+    title: "Current Test",
+    level: "Hard",
+    difficulty: "Hard",
+    date: "23/03/2026",
+    duration: 60,
+    questions: [29, 34, 39],
+    questionIds: [29, 34, 39],
+    problemDbIds: [],
+    problems: defaultAdminProblems,
+    status: "DRAFT",
+    startsAt: null,
+    endsAt: null,
+    createdAt: null,
+  };
+  const defaultPreviousTests = [
+    { id: "t-2203", name: "Algorithm Sprint 1", date: "22/03/2026", difficulty: "Medium", winner: "Aarav", average: 82 },
+    { id: "t-2103", name: "Campus Mock Round", date: "21/03/2026", difficulty: "Hard", winner: "Diya", average: 76 },
+    { id: "t-1903", name: "Data Structures Drill", date: "19/03/2026", difficulty: "Easy", winner: "Nikhil", average: 91 },
+  ];
+  const defaultLeaderboard = [
+    {
+      username: "Aarav",
+      rating: 1920,
+      avatarGradient: ["#f6c453", "#ff8f5c"],
+      overall: { rank: 1, score: 2478, problemsSolved: 153, timePenalty: "05h 12m", trend: 1 },
+      contest: { rank: 1, score: 98, problemsSolved: 5, timePenalty: "08m 12s", trend: 1, timeTaken: "41m 12s" },
+      global: { rank: 2, score: 2386, problemsSolved: 148, timePenalty: "05h 47m", trend: 1 },
+    },
+    {
+      username: "Diya",
+      rating: 1885,
+      avatarGradient: ["#d9dde6", "#8f98a8"],
+      overall: { rank: 2, score: 2412, problemsSolved: 149, timePenalty: "05h 34m", trend: 0 },
+      contest: { rank: 2, score: 95, problemsSolved: 5, timePenalty: "11m 08s", trend: 0, timeTaken: "44m 08s" },
+      global: { rank: 1, score: 2401, problemsSolved: 151, timePenalty: "05h 11m", trend: 1 },
+    },
+    {
+      username: "Karthik",
+      rating: 1840,
+      avatarGradient: ["#c88a56", "#8f5a3a"],
+      overall: { rank: 3, score: 2350, problemsSolved: 144, timePenalty: "06h 02m", trend: -1 },
+      contest: { rank: 3, score: 91, problemsSolved: 4, timePenalty: "14m 20s", trend: 1, timeTaken: "47m 20s" },
+      global: { rank: 4, score: 2292, problemsSolved: 139, timePenalty: "06h 19m", trend: -1 },
+    },
+    {
+      username: "Meera",
+      rating: 1798,
+      avatarGradient: ["#7c6af7", "#4fd1c5"],
+      overall: { rank: 4, score: 2264, problemsSolved: 138, timePenalty: "06h 40m", trend: 1 },
+      contest: { rank: 4, score: 88, problemsSolved: 4, timePenalty: "16m 03s", trend: 0, timeTaken: "49m 03s" },
+      global: { rank: 5, score: 2210, problemsSolved: 132, timePenalty: "06h 54m", trend: 1 },
+    },
+    {
+      username: "Rohan",
+      rating: 1746,
+      avatarGradient: ["#56ccf2", "#2f80ed"],
+      overall: { rank: 5, score: 2195, problemsSolved: 131, timePenalty: "07h 05m", trend: -1 },
+      contest: { rank: 5, score: 84, problemsSolved: 4, timePenalty: "19m 44s", trend: -1, timeTaken: "53m 44s" },
+      global: { rank: 6, score: 2148, problemsSolved: 125, timePenalty: "07h 18m", trend: -1 },
+    },
+    {
+      username: "Anika",
+      rating: 1712,
+      avatarGradient: ["#ff7eb3", "#ff758c"],
+      overall: { rank: 6, score: 2141, problemsSolved: 126, timePenalty: "07h 28m", trend: 1 },
+      contest: { rank: 6, score: 82, problemsSolved: 4, timePenalty: "22m 18s", trend: 1, timeTaken: "56m 22s" },
+      global: { rank: 7, score: 2084, problemsSolved: 120, timePenalty: "07h 41m", trend: 1 },
+    },
+    {
+      username: "Nikhil",
+      rating: 1680,
+      avatarGradient: ["#11998e", "#38ef7d"],
+      overall: { rank: 7, score: 2098, problemsSolved: 123, timePenalty: "07h 49m", trend: 0 },
+      contest: { rank: 7, score: 78, problemsSolved: 3, timePenalty: "25m 07s", trend: -1, timeTaken: "58m 11s" },
+      global: { rank: 8, score: 2046, problemsSolved: 118, timePenalty: "08h 03m", trend: 0 },
+    },
+    {
+      username: "Sana",
+      rating: 1651,
+      avatarGradient: ["#f2994a", "#f2c94c"],
+      overall: { rank: 8, score: 2057, problemsSolved: 119, timePenalty: "08h 10m", trend: 1 },
+      contest: { rank: 8, score: 74, problemsSolved: 3, timePenalty: "27m 55s", trend: 1, timeTaken: "61m 39s" },
+      global: { rank: 9, score: 1994, problemsSolved: 114, timePenalty: "08h 26m", trend: 1 },
+    },
+  ];
+  const defaultActiveUsers = [
+    { name: "Aarav", department: "CSE", status: "Solving" },
+    { name: "Diya", department: "ISE", status: "Running tests" },
+    { name: "Meera", department: "AIML", status: "Reviewing" },
+    { name: "Rohan", department: "ECE", status: "Submitted" },
+  ];
+
+  const [view, setView]                       = useState("home");
+  const [userRole, setUserRole]               = useState(null);
+  const [currentUser, setCurrentUser]         = useState(EMPTY_CURRENT_USER);
+  const [authToken, setAuthToken]             = useState("");
+  const [authModalOpen, setAuthModalOpen]     = useState(false);
+  const [authMode, setAuthMode]               = useState("");
+  const [authRole, setAuthRole]               = useState("");
+  const [authEmail, setAuthEmail]             = useState("");
+  const [authPassword, setAuthPassword]       = useState("");
+  const [authName, setAuthName]               = useState("");
+  const [authUsn, setAuthUsn]                 = useState("");
+  const [authDepartment, setAuthDepartment]   = useState("");
+  const [authError, setAuthError]             = useState("");
+  const [authSubmitting, setAuthSubmitting]   = useState(false);
+  const [authPoliciesAccepted, setAuthPoliciesAccepted] = useState(false);
+  const [problemBank, setProblemBank]         = useState([]);
+  const [problemBankLoading, setProblemBankLoading] = useState(false);
+  const [adminAssignments, setAdminAssignments] = useState([]);
+  const [adminAssignmentsLoading, setAdminAssignmentsLoading] = useState(false);
+  const [activeAssignment, setActiveAssignment] = useState(null);
+  const [studentNotifications, setStudentNotifications] = useState([]);
+  const [notificationCount, setNotificationCount] = useState(0);
+  const [loginEvents, setLoginEvents]         = useState([]);
+  const [portalMessage, setPortalMessage]     = useState("");
+  const [portalError, setPortalError]         = useState("");
+  const [adminSyncingProblems, setAdminSyncingProblems] = useState(false);
+  const [adminCreatingTest, setAdminCreatingTest] = useState(false);
+  const [adminStartingTest, setAdminStartingTest] = useState(false);
+  const [adminCurrentTest, setAdminCurrentTest] = useState(defaultAdminTest);
+  const [previousTests, setPreviousTests]     = useState(defaultPreviousTests);
+  const [selectedPreviousTest, setSelectedPreviousTest] = useState(defaultPreviousTests[0]);
+  const [leaderboard, setLeaderboard]         = useState([]);
+  const [activeUsers, setActiveUsers]         = useState(defaultActiveUsers);
+  const [participantsCount, setParticipantsCount] = useState(defaultActiveUsers.length);
+  const [adminTimerSeconds, setAdminTimerSeconds] = useState(defaultAdminTest.duration * 60);
+  const [adminWarning, setAdminWarning]       = useState("");
+  const [solutionsVisible, setSolutionsVisible] = useState(false);
+  const [adminCreateForm, setAdminCreateForm] = useState({
+    title: "Fresh Challenge",
+    level: "Hard",
+    date: "24/03/2026",
+    duration: "60",
+    questions: defaultAdminProblems.map((problem) => problem.dbId || problem.id),
+  });
+  const [adminSubmissionProblemId, setAdminSubmissionProblemId] = useState(defaultAdminTest.questions[0]);
+  const [adminSubmissionLang, setAdminSubmissionLang] = useState("javascript");
+  const [adminSubmissionCode, setAdminSubmissionCode] = useState("");
+  const [adminExecution, setAdminExecution]   = useState(null);
+  const [adminExecuting, setAdminExecuting]   = useState(false);
   const [selectedProblem, setSelectedProblem] = useState(null);
   const [lang, setLang]                       = useState("javascript");
   const [code, setCode]                       = useState("");
@@ -2389,24 +2669,252 @@ function CodingPlatform() {
   const [solved, setSolved]                   = useState(new Set());
   const [filterDiff, setFilterDiff]           = useState("All");
   const [searchQuery, setSearchQuery]         = useState("");
+  const [leaderboardSearch, setLeaderboardSearch] = useState("");
+  const [leaderboardScope, setLeaderboardScope] = useState("All");
+  const [leaderboardPage, setLeaderboardPage] = useState(1);
+  const [hoveredLeaderboardRank, setHoveredLeaderboardRank] = useState(null);
+  const [leaderboardReady, setLeaderboardReady] = useState(false);
+  const [leaderboardUpdating, setLeaderboardUpdating] = useState(true);
+  const [contestEntered, setContestEntered]     = useState(false);
+  const [contestTimerSeconds, setContestTimerSeconds] = useState(defaultAdminTest.duration * 60);
+  const [attemptedProblems, setAttemptedProblems] = useState(new Set());
+  const [contestSecurityLocked, setContestSecurityLocked] = useState(false);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [profileDraft, setProfileDraft]         = useState({
+    handle: "@codearena",
+    bio: "Competitive programmer focused on clean implementations, contest consistency, and steady rating growth.",
+    badge: "Expert",
+  });
   const [consoleOpen, setConsoleOpen]         = useState(false);
   const [errorBanner, setErrorBanner]         = useState(null);
   const [screenShield, setScreenShield]       = useState(false);
   const [shieldMessage, setShieldMessage]     = useState("Screen capture is disabled in this demo.");
   const textareaRef = useRef(null);
   const shieldTimerRef = useRef(null);
+  const triggerShield = (message, duration = 1800) => {
+    setShieldMessage(message);
+    setScreenShield(true);
+
+    if (shieldTimerRef.current) clearTimeout(shieldTimerRef.current);
+    if (duration > 0) {
+      shieldTimerRef.current = setTimeout(() => setScreenShield(false), duration);
+    }
+  };
+
+  const performApiRequest = async (path, options = {}) => {
+    const hasBody = Boolean(options.body);
+    const response = await fetch(`${BACKEND_API_BASE}${path}`, {
+      ...options,
+      headers: {
+        ...createAuthHeaders(authToken, hasBody),
+        ...(options.headers || {}),
+      },
+    });
+
+    const data = await readJsonSafely(response);
+    if (!response.ok) {
+      throw new Error(data.error || "Request failed.");
+    }
+
+    return data;
+  };
+
+  const loadProblemBank = async () => {
+    setProblemBankLoading(true);
+
+    try {
+      const data = await performApiRequest("/api/problems?includeContent=1");
+      const mappedProblems = Array.isArray(data.problems)
+        ? data.problems.map(mapProblemRecord).filter(Boolean)
+        : [];
+      setProblemBank(mappedProblems);
+      return mappedProblems;
+    } finally {
+      setProblemBankLoading(false);
+    }
+  };
+
+  const syncProblemBankToDatabase = async (silent = false) => {
+    setAdminSyncingProblems(true);
+
+    try {
+      await performApiRequest("/api/problems/import", {
+        method: "POST",
+        body: JSON.stringify({
+          problems: PROBLEMS.map((problem) => ({
+            legacyId: problem.id,
+            title: problem.title,
+            slug: problem.slug,
+            fnName: problem.fnName,
+            difficulty: problem.difficulty,
+            tags: problem.tags,
+            acceptance: problem.acceptance,
+            description: problem.description,
+            examples: problem.examples,
+            starterCode: problem.starterCode,
+            testCases: problem.testCases,
+            constraints: problem.constraints,
+            samples: problem.samples || problem.examples,
+          })),
+        }),
+      });
+
+      const problems = await loadProblemBank();
+      if (!silent) {
+        setPortalMessage(`Problem bank synced to MongoDB. ${problems.length} problems are available for assignment.`);
+      }
+      setPortalError("");
+      return problems;
+    } catch (error) {
+      setPortalError(error.message || "Unable to sync problems right now.");
+      throw error;
+    } finally {
+      setAdminSyncingProblems(false);
+    }
+  };
+
+  const loadAdminPortalData = async () => {
+    setAdminAssignmentsLoading(true);
+    setPortalError("");
+
+    try {
+      let problems = await loadProblemBank();
+      if (!problems.length) {
+        problems = await syncProblemBankToDatabase(true);
+      }
+
+      const [testsData, studentsData, loginEventData, leaderboardData] = await Promise.all([
+        performApiRequest("/api/tests"),
+        performApiRequest("/api/auth/students"),
+        performApiRequest("/api/auth/login-events"),
+        performApiRequest("/api/submissions/leaderboard"),
+      ]);
+
+      const assignments = Array.isArray(testsData.assignments)
+        ? testsData.assignments.map(mapAssignmentRecord).filter(Boolean)
+        : [];
+      const currentAssignment = assignments.find((assignment) => assignment.status === "LIVE")
+        || assignments[0]
+        || {
+          ...defaultAdminTest,
+          problems,
+          questions: problems.slice(0, 3).map((problem) => problem.id),
+          questionIds: problems.slice(0, 3).map((problem) => problem.id),
+          problemDbIds: problems.slice(0, 3).map((problem) => problem.dbId),
+        };
+
+      const history = assignments
+        .filter((assignment) => assignment.id !== currentAssignment.id)
+        .map((assignment) => ({
+          id: assignment.id,
+          name: assignment.title,
+          date: assignment.date,
+          difficulty: assignment.level,
+          winner: assignment.status === "ENDED" ? "Completed" : assignment.status,
+          average: assignment.questionIds.length * 25,
+        }));
+
+      const students = Array.isArray(studentsData.students) ? studentsData.students : [];
+      const loggedInStudents = students.filter((student) => Number(student.loginCount || 0) > 0);
+      const mappedStudents = loggedInStudents.map((student) => ({
+        name: student.name || student.email,
+        department: student.department || "Department pending",
+        status: student.lastLoginAt ? "Logged In" : "Registered",
+        email: student.email,
+        usn: student.usn || "--",
+        loginCount: student.loginCount || 0,
+        lastLoginAt: student.lastLoginAt || null,
+      }));
+      const nextLeaderboard = Array.isArray(leaderboardData.leaderboard)
+        ? leaderboardData.leaderboard
+        : [];
+
+      setProblemBank(problems);
+      setAdminCreateForm((prev) => {
+        const validSelections = prev.questions.filter((problemId) => problems.some((problem) => problem.dbId === problemId));
+        return {
+          ...prev,
+          questions: validSelections.length ? validSelections : problems.slice(0, 3).map((problem) => problem.dbId),
+        };
+      });
+      setAdminAssignments(assignments);
+      setAdminCurrentTest(currentAssignment);
+      setPreviousTests(history.length ? history : defaultPreviousTests);
+      setSelectedPreviousTest(history[0] || defaultPreviousTests[0]);
+      setLeaderboard(nextLeaderboard);
+      setActiveUsers(mappedStudents);
+      setParticipantsCount(mappedStudents.length);
+      setLoginEvents(Array.isArray(loginEventData.events) ? loginEventData.events : []);
+
+      if (currentAssignment?.problems?.length) {
+        setAdminSubmissionProblemId((prev) => {
+          const stillExists = currentAssignment.problems.some((problem) => problem.id === prev);
+          return stillExists ? prev : currentAssignment.problems[0].id;
+        });
+      }
+    } catch (error) {
+      setLeaderboard([]);
+      setPortalError(error.message || "Unable to load admin portal data.");
+    } finally {
+      setAdminAssignmentsLoading(false);
+    }
+  };
+
+  const loadStudentPortalData = async (availableProblems = problemBank.length ? problemBank : PROBLEMS) => {
+    try {
+      const [assignmentData, notificationData, leaderboardData, submissionData] = await Promise.all([
+        performApiRequest("/api/tests/active"),
+        performApiRequest("/api/notifications"),
+        performApiRequest("/api/submissions/leaderboard"),
+        performApiRequest(`/api/submissions/user/${currentUser.id}`),
+      ]);
+
+      const assignment = mapAssignmentRecord(assignmentData.assignment);
+      setActiveAssignment(assignment);
+      if (assignment?.problems?.length) {
+        setAdminCurrentTest(assignment);
+      }
+
+      const notifications = Array.isArray(notificationData.notifications)
+        ? notificationData.notifications
+        : [];
+      const nextLeaderboard = Array.isArray(leaderboardData.leaderboard)
+        ? leaderboardData.leaderboard
+        : [];
+      const submissions = Array.isArray(submissionData.submissions)
+        ? submissionData.submissions
+        : [];
+      const progress = deriveSubmissionProgress(submissions, availableProblems);
+
+      setLeaderboard(nextLeaderboard);
+      setSolved(progress.solved);
+      setAttemptedProblems(progress.attempted);
+      setStudentNotifications(notifications);
+      setNotificationCount(Number(notificationData.unreadCount || 0));
+    } catch (error) {
+      setLeaderboard([]);
+      setPortalError(error.message || "Unable to load your current test.");
+    }
+  };
+
+  const markNotificationAsRead = async (notificationId) => {
+    try {
+      await performApiRequest(`/api/notifications/${notificationId}/read`, {
+        method: "POST",
+      });
+
+      setStudentNotifications((prev) => prev.map((notification) => (
+        notification.id === notificationId
+          ? { ...notification, read: true }
+          : notification
+      )));
+      setNotificationCount((prev) => Math.max(0, prev - 1));
+    } catch (error) {
+      setPortalError(error.message || "Unable to update notification.");
+    }
+  };
 
   useEffect(() => {
-    const showShield = (message, duration = 1800) => {
-      setShieldMessage(message);
-      setScreenShield(true);
-
-      if (shieldTimerRef.current) clearTimeout(shieldTimerRef.current);
-      if (duration > 0) {
-        shieldTimerRef.current = setTimeout(() => setScreenShield(false), duration);
-      }
-    };
-
     const handleKeyDown = (e) => {
       const key = e.key || "";
       const lowerKey = key.toLowerCase();
@@ -2414,7 +2922,7 @@ function CodingPlatform() {
 
       if (key === "PrintScreen" || isSnipShortcut) {
         e.preventDefault();
-        showShield("Screen capture shortcut blocked. Sensitive content hidden temporarily.");
+        triggerShield("Screen capture shortcut blocked. Sensitive content hidden temporarily.");
 
         if (navigator.clipboard?.writeText) {
           navigator.clipboard.writeText("").catch(() => {});
@@ -2423,7 +2931,7 @@ function CodingPlatform() {
 
       if ((e.ctrlKey || e.metaKey) && lowerKey === "p") {
         e.preventDefault();
-        showShield("Printing is disabled for this page.", 1500);
+        triggerShield("Printing is disabled for this page.", 1500);
       }
     };
 
@@ -2445,9 +2953,186 @@ function CodingPlatform() {
     };
   }, []);
 
+  useEffect(() => {
+    if (view !== "admin") return undefined;
+
+    const handleAdminVisibility = () => {
+      if (document.hidden) {
+        setAdminWarning("Warning: tab switching detected while the test dashboard is active.");
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleAdminVisibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleAdminVisibility);
+    };
+  }, [view]);
+
+  useEffect(() => {
+    if (!adminCurrentTest) {
+      setAdminTimerSeconds(0);
+      return undefined;
+    }
+
+    if (adminCurrentTest.status === "ENDED") {
+      setAdminTimerSeconds(0);
+      return undefined;
+    }
+
+    if (!adminCurrentTest.endsAt) {
+      setAdminTimerSeconds((adminCurrentTest.duration || 60) * 60);
+      return undefined;
+    }
+
+    const syncAdminTimer = () => {
+      const remaining = Math.max(0, Math.floor((new Date(adminCurrentTest.endsAt).getTime() - Date.now()) / 1000));
+      setAdminTimerSeconds(remaining);
+    };
+
+    syncAdminTimer();
+    const countdown = setInterval(syncAdminTimer, 1000);
+    return () => clearInterval(countdown);
+  }, [adminCurrentTest]);
+
+  useEffect(() => {
+    if (view !== "admin") return;
+    if (adminTimerSeconds !== 0) return;
+    if (!adminSubmissionCode.trim() || adminExecuting || adminExecution?.autoSubmitted) return;
+
+    const autoSubmit = async () => {
+      await handleAdminRun(true);
+    };
+
+    autoSubmit();
+  }, [adminTimerSeconds, view, adminSubmissionCode, adminExecuting, adminExecution]);
+
+  useEffect(() => {
+    if (view !== "leaderboard") {
+      setLeaderboardReady(false);
+      setHoveredLeaderboardRank(null);
+      return undefined;
+    }
+
+    setLeaderboardUpdating(true);
+    const revealTimer = setTimeout(() => setLeaderboardReady(true), 60);
+    const updatePulse = setInterval(() => {
+      setLeaderboardUpdating((prev) => !prev);
+    }, 900);
+
+    return () => {
+      clearTimeout(revealTimer);
+      clearInterval(updatePulse);
+    };
+  }, [view]);
+
+  useEffect(() => {
+    setLeaderboardPage(1);
+  }, [leaderboardSearch, leaderboardScope]);
+
+  useEffect(() => {
+    setContestEntered(false);
+    setContestSecurityLocked(false);
+  }, [activeAssignment?.id, adminCurrentTest.id]);
+
+  useEffect(() => {
+    const assignmentTimerTarget = activeAssignment?.endsAt || adminCurrentTest.endsAt;
+    const fallbackDuration = activeAssignment?.duration || adminCurrentTest.duration || 60;
+
+    if (!assignmentTimerTarget) {
+      setContestTimerSeconds(fallbackDuration * 60);
+      return undefined;
+    }
+
+    const syncContestTimer = () => {
+      const remaining = Math.max(0, Math.floor((new Date(assignmentTimerTarget).getTime() - Date.now()) / 1000));
+      setContestTimerSeconds(remaining);
+    };
+
+    syncContestTimer();
+    const timer = setInterval(syncContestTimer, 1000);
+    return () => clearInterval(timer);
+  }, [activeAssignment, adminCurrentTest]);
+
+  useEffect(() => {
+    if (!contestEntered) return;
+    if (contestTimerSeconds > 0) return;
+
+    setContestEntered(false);
+    setContestSecurityLocked(false);
+    setScreenShield(false);
+  }, [contestEntered, contestTimerSeconds]);
+
+  useEffect(() => {
+    if (!contestEntered) {
+      setContestSecurityLocked(false);
+      return undefined;
+    }
+
+    const ensureContestFocus = () => {
+      const hidden = document.hidden;
+      const fullscreenActive = Boolean(document.fullscreenElement);
+      const shouldLock = hidden || !fullscreenActive;
+
+      setContestSecurityLocked(shouldLock);
+
+      if (shouldLock) {
+        triggerShield("Contest mode requires fullscreen. Return to fullscreen and stay on this tab to continue.", 0);
+      } else {
+        setScreenShield(false);
+      }
+    };
+
+    const handleBlur = () => {
+      setContestSecurityLocked(true);
+      triggerShield("Tab switching is blocked during the contest. Return to fullscreen to continue.", 0);
+    };
+
+    document.addEventListener("visibilitychange", ensureContestFocus);
+    document.addEventListener("fullscreenchange", ensureContestFocus);
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", ensureContestFocus);
+
+    ensureContestFocus();
+
+    return () => {
+      document.removeEventListener("visibilitychange", ensureContestFocus);
+      document.removeEventListener("fullscreenchange", ensureContestFocus);
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", ensureContestFocus);
+    };
+  }, [contestEntered]);
+
+  useEffect(() => {
+    if (!authToken || !currentUser.id) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadPortal = async () => {
+      if (cancelled) return;
+
+      if (currentUser.role === "admin") {
+        await loadAdminPortalData();
+        return;
+      }
+
+      const loadedProblems = await loadProblemBank().catch(() => []);
+      await loadStudentPortalData(loadedProblems.length ? loadedProblems : PROBLEMS);
+    };
+
+    loadPortal();
+    const interval = setInterval(loadPortal, currentUser.role === "admin" ? 20000 : 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [authToken, currentUser.id, currentUser.role]);
+
   const openProblem = (p) => {
     setSelectedProblem(p);
-    setCode(p.starterCode[lang]);
+    setCode(p.starterCode?.[lang] || "");
     setRunResult(null);
     setActiveTab("description");
     setConsoleTab("testcase");
@@ -2456,9 +3141,408 @@ function CodingPlatform() {
     setView("problem");
   };
 
+  const openLeaderboard = (scope = leaderboardScope) => {
+    setLeaderboardScope(scope);
+    setLeaderboardPage(1);
+    setView("leaderboard");
+  };
+
+  const openContest = () => {
+    setView("contest");
+  };
+
+  const requestContestFullscreen = async () => {
+    if (document.fullscreenElement) return true;
+
+    const root = document.documentElement;
+    if (!root?.requestFullscreen) return false;
+
+    try {
+      await root.requestFullscreen({ navigationUI: "hide" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleEnterContest = async (problemToOpen = contestProblems[0]) => {
+    if (contestStatus === "Ended" || contestStatus === "Awaiting Start") {
+      setPortalError(contestStatus === "Awaiting Start" ? "No live test has been started for students yet." : "");
+      return;
+    }
+
+    setPortalError("");
+
+    const fullscreenGranted = await requestContestFullscreen();
+    if (!fullscreenGranted) {
+      triggerShield("Fullscreen permission is required to start the contest.", 2200);
+      return;
+    }
+
+    setContestEntered(true);
+    setContestSecurityLocked(false);
+    if (problemToOpen) openProblem(problemToOpen);
+  };
+
+  const openProfile = () => {
+    setView("profile");
+  };
+
   const handleLangChange = (l) => {
     setLang(l);
-    if (selectedProblem) setCode(selectedProblem.starterCode[l]);
+    if (selectedProblem) setCode(selectedProblem.starterCode?.[l] || "");
+  };
+
+  const openAuthFlow = () => {
+    setAuthModalOpen(true);
+    setAuthMode("");
+    setAuthRole("");
+    setAuthName("");
+    setAuthUsn("");
+    setAuthDepartment("");
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError("");
+    setAuthPoliciesAccepted(false);
+  };
+
+  const closeAuthFlow = () => {
+    setAuthModalOpen(false);
+    setAuthMode("");
+    setAuthRole("");
+    setAuthName("");
+    setAuthUsn("");
+    setAuthDepartment("");
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError("");
+    setAuthPoliciesAccepted(false);
+  };
+
+  const chooseAuthMode = (mode) => {
+    setAuthMode(mode);
+    setAuthRole("");
+    setAuthName("");
+    setAuthUsn("");
+    setAuthDepartment("");
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError("");
+    setAuthPoliciesAccepted(false);
+  };
+
+  const chooseAuthRole = (role) => {
+    setAuthRole(role);
+    setAuthName("");
+    setAuthUsn("");
+    setAuthDepartment("");
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError("");
+    setAuthPoliciesAccepted(false);
+  };
+
+  const handleAuthSubmit = async () => {
+    const name = authName.trim();
+    const usn = authUsn.trim();
+    const department = authDepartment.trim();
+    const email = authEmail.trim();
+    const password = authPassword.trim();
+    const emailPattern = /^[A-Z0-9._%+-]+@cambridge\.edu\.in$/i;
+
+    if (!authMode || !authRole) {
+      setAuthError("Choose login or sign up and select a role first.");
+      return;
+    }
+
+    if (!email || !password) {
+      setAuthError("Enter both email ID and password.");
+      return;
+    }
+
+    if (authMode === "signup") {
+      if (!name || !department) {
+        setAuthError("Enter name and department to sign up.");
+        return;
+      }
+
+      if (authRole === "student" && !usn) {
+        setAuthError("Enter USN for student sign up.");
+        return;
+      }
+
+      if (!authPoliciesAccepted) {
+        setAuthError("Accept the Terms and Conditions and Privacy Policy to create an account.");
+        return;
+      }
+    }
+
+    if (!emailPattern.test(email)) {
+      setAuthError("Only @cambridge.edu.in email addresses are allowed.");
+      return;
+    }
+
+    setAuthSubmitting(true);
+
+    try {
+      const endpoint = authMode === "signup" ? "/api/auth/register" : "/api/auth/login";
+      const payload = authMode === "signup"
+        ? { email, password, name, usn, department, role: authRole }
+        : { email, password, role: authRole };
+
+      const response = await fetch(`${BACKEND_API_BASE}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await readJsonSafely(response);
+      if (!response.ok) {
+        throw new Error(data.error || "Authentication failed.");
+      }
+
+      const user = data.user || {
+        id: "",
+        role: authRole,
+        email,
+        name,
+        usn,
+        department,
+        verified: false,
+        lastLoginAt: null,
+        loginCount: 0,
+      };
+
+      const resolvedRole = user.role || authRole;
+      const identitySeed = (user.name || email.split("@")[0] || "coder").toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+      setCurrentUser({
+        id: user.id || "",
+        role: resolvedRole,
+        email: user.email || email,
+        name: user.name || "",
+        usn: user.usn || "",
+        department: user.department || "",
+        verified: Boolean(user.verified),
+        lastLoginAt: user.lastLoginAt || null,
+        loginCount: Number(user.loginCount || 0),
+      });
+      setAuthToken(data.token || "");
+      setProfileDraft((prev) => ({
+        ...prev,
+        handle: `@${identitySeed || "coder"}`,
+        bio: (user.department || department)
+          ? `${user.department || department} ${resolvedRole === "admin" ? "admin" : "student"} building speed, accuracy, and cleaner problem solving each round.`
+          : prev.bio,
+        badge: resolvedRole === "admin" ? "Coordinator" : prev.badge,
+      }));
+      setUserRole(resolvedRole);
+      setPortalMessage("");
+      setPortalError("");
+      setAuthModalOpen(false);
+      setAuthError("");
+      setView(resolvedRole === "admin" ? "admin" : "list");
+    } catch (error) {
+      const message = String(error?.message || "");
+      setAuthError(
+        message.includes("Failed to fetch")
+          ? `Cannot reach backend API at ${BACKEND_API_BASE}. Start the backend on port 4000 and try again.`
+          : message || "Unable to complete authentication right now."
+      );
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const signOut = () => {
+    setUserRole(null);
+    setCurrentUser(EMPTY_CURRENT_USER);
+    setAuthToken("");
+    setProblemBank([]);
+    setAdminAssignments([]);
+    setActiveAssignment(null);
+    setStudentNotifications([]);
+    setNotificationCount(0);
+    setLoginEvents([]);
+    setPortalMessage("");
+    setPortalError("");
+    setLeaderboard([]);
+    setActiveUsers(defaultActiveUsers);
+    setParticipantsCount(defaultActiveUsers.length);
+    setAdminWarning("");
+    setSolutionsVisible(false);
+    setAdminExecution(null);
+    setContestEntered(false);
+    setContestSecurityLocked(false);
+    setAttemptedProblems(new Set());
+    setSolved(new Set());
+    setContestTimerSeconds(adminCurrentTest.duration * 60);
+    setScreenShield(false);
+    setProfileEditorOpen(false);
+    setProfileDraft({
+      handle: "@codearena",
+      bio: "Competitive programmer focused on clean implementations, contest consistency, and steady rating growth.",
+      badge: "Expert",
+    });
+    closeAuthFlow();
+    setView("home");
+  };
+
+  useEffect(() => {
+    const selected = adminCurrentTest.problems?.find((problem) => problem.id === adminSubmissionProblemId)
+      || problemBank.find((problem) => problem.id === adminSubmissionProblemId)
+      || PROBLEMS.find((problem) => problem.id === adminSubmissionProblemId);
+    if (selected) {
+      setAdminSubmissionCode(selected.starterCode?.[adminSubmissionLang] || "");
+    }
+  }, [adminCurrentTest, adminSubmissionProblemId, adminSubmissionLang, problemBank]);
+
+  const handleAdminCreateInput = (field, value) => {
+    setAdminCreateForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const formatCountdown = (totalSeconds) => {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  };
+  const formatContestCountdown = (totalSeconds) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  };
+
+  async function handleAdminRun(autoSubmitted = false) {
+    const selected = adminSelectedProblem;
+    if (!selected) return;
+
+    setAdminExecuting(true);
+    setAdminExecution(null);
+
+    const fallbackError = (message) =>
+      selected.testCases.map((tc, index) => ({
+        ...tc,
+        actual: null,
+        status: "error",
+        error: `Case ${index + 1}: ${message}`,
+      }));
+
+    try {
+      const response = await fetch(`${BACKEND_API_BASE}/api/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: adminSubmissionLang,
+          sourceCode: adminSubmissionCode,
+          fnName: selected.fnName,
+          testCases: selected.testCases,
+        }),
+      });
+
+      const responseText = await response.text();
+      let data = null;
+
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        const snippet = responseText.slice(0, 160).replace(/\s+/g, " ").trim();
+        throw new Error(snippet || "Execution API returned invalid JSON.");
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Execution failed.");
+      }
+
+      setAdminExecution({
+        tests: data.tests || [],
+        runtime: data.runtime || "N/A",
+        status: data.status || "failed",
+        autoSubmitted,
+      });
+    } catch (error) {
+      setAdminExecution({
+        tests: fallbackError(error.message),
+        runtime: "N/A",
+        status: "failed",
+        autoSubmitted,
+      });
+    } finally {
+      setAdminExecuting(false);
+    }
+  }
+
+  const toggleCreateQuestion = (problemDbId) => {
+    setAdminCreateForm((prev) => {
+      const exists = prev.questions.includes(problemDbId);
+      return {
+        ...prev,
+        questions: exists
+          ? prev.questions.filter((value) => value !== problemDbId)
+          : [...prev.questions, problemDbId],
+      };
+    });
+  };
+
+  const handleCreateTest = async () => {
+    const duration = Math.max(1, Number(adminCreateForm.duration) || 60);
+    if (!adminCreateForm.questions.length) {
+      setPortalError("Select at least one database problem for the test.");
+      return;
+    }
+
+    setAdminCreatingTest(true);
+    setPortalError("");
+
+    try {
+      const data = await performApiRequest("/api/tests", {
+        method: "POST",
+        body: JSON.stringify({
+          title: adminCreateForm.title.trim() || "Fresh Challenge",
+          difficulty: adminCreateForm.level,
+          durationMinutes: duration,
+          problemIds: adminCreateForm.questions,
+        }),
+      });
+
+      const createdAssignment = mapAssignmentRecord(data.assignment);
+      setAdminCurrentTest(createdAssignment);
+      setAdminTimerSeconds(duration * 60);
+      setAdminSubmissionProblemId(createdAssignment?.problems?.[0]?.id || "");
+      setSolutionsVisible(false);
+      setPortalMessage(`Draft test "${createdAssignment.title}" saved. Start it when you're ready to notify students.`);
+      await loadAdminPortalData();
+    } catch (error) {
+      setPortalError(error.message || "Unable to create the test.");
+    } finally {
+      setAdminCreatingTest(false);
+    }
+  };
+
+  const handleStartAssignedTest = async () => {
+    if (!adminCurrentTest.id) {
+      setPortalError("Create a draft test first, then start it.");
+      return;
+    }
+
+    setAdminStartingTest(true);
+    setPortalError("");
+
+    try {
+      const data = await performApiRequest(`/api/tests/${adminCurrentTest.id}/start`, {
+        method: "POST",
+      });
+
+      const startedAssignment = mapAssignmentRecord(data.assignment);
+      setActiveAssignment(startedAssignment);
+      setAdminCurrentTest(startedAssignment);
+      setAdminSubmissionProblemId(startedAssignment?.problems?.[0]?.id || "");
+      setPortalMessage(`Test started. Notifications were sent to ${data.notifiedStudents || 0} logged-in students.`);
+      await loadAdminPortalData();
+    } catch (error) {
+      setPortalError(error.message || "Unable to start the test.");
+    } finally {
+      setAdminStartingTest(false);
+    }
   };
 
   // ── CORE RUN / SUBMIT ──────────────────────────────────────────────────────
@@ -2472,7 +3556,7 @@ function CodingPlatform() {
     await new Promise((r) => setTimeout(r, 700));
 
     const p        = selectedProblem;
-    const refSol   = REFERENCE_SOLUTIONS[p.id];
+    const refSol   = REFERENCE_SOLUTIONS[p.legacyId ?? p.id];
     let   results  = [];
     let   runtime  = Math.floor(60 + Math.random() * 60) + " ms";
     let   memory   = (Math.random() * 5 + 40).toFixed(1) + " MB";
@@ -2480,38 +3564,70 @@ function CodingPlatform() {
     let   status   = "failed";
 
     try {
-      const response = await fetch("/api/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language: lang,
-          sourceCode: code,
-          fnName: p.fnName,
-          testCases: p.testCases,
-        }),
-      });
-      const data = await response.json();
+      if (isSubmit) {
+        const data = await performApiRequest("/api/submissions/submit", {
+          method: "POST",
+          body: JSON.stringify({
+            problemId: String(p.dbId || p.id),
+            language: lang,
+            code,
+          }),
+        });
 
-      if (!response.ok) {
-        throw new Error(data.error || "Execution failed.");
+        results = data.tests || [];
+        runtime = data.runtime || runtime;
+        memory  = data.memory || memory;
+        beats   = data.beats || beats;
+        status  = data.status || status;
+      } else {
+        const response = await fetch(`${BACKEND_API_BASE}/api/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            language: lang,
+            sourceCode: code,
+            fnName: p.fnName,
+            testCases: p.testCases,
+          }),
+        });
+        const responseText = await response.text();
+        let data = null;
+
+        try {
+          data = responseText ? JSON.parse(responseText) : {};
+        } catch {
+          const snippet = responseText.slice(0, 160).replace(/\s+/g, " ").trim();
+          throw new Error(
+            snippet.startsWith("<")
+              ? "Deployment returned HTML instead of JSON. Make sure the frontend calls the backend API on port 4000, and that backend forwards to the runner service on port 3000."
+              : `Execution API returned invalid JSON. Response started with: ${snippet || "empty response"}`
+          );
+        }
+
+        if (!response.ok) {
+          throw new Error(data.error || "Execution failed.");
+        }
+
+        results = data.tests || [];
+        runtime = data.runtime || runtime;
+        memory  = data.memory || memory;
+        beats   = data.beats || beats;
+        status  = data.status || status;
       }
-
-      results = data.tests || [];
-      runtime = data.runtime || runtime;
-      memory  = data.memory || memory;
-      beats   = data.beats || beats;
-      status  = data.status || status;
     } catch (error) {
-      if (lang === "javascript") {
+      if (!isSubmit && lang === "javascript") {
         const refCode = refSol?.javascript || "";
         results = runJavaScript(code, refCode, p.testCases, p.fnName);
         status = results.every(r => r.status === "pass") ? "passed" : "failed";
       } else {
+          const deploymentHint = !isSubmit && error.message.includes("returned HTML instead of JSON")
+          ? " This usually means the frontend is not reaching the backend API on port 4000 correctly."
+          : "";
         results = p.testCases.map((tc, i) => ({
           ...tc,
           actual: null,
           status: "error",
-          error: `Case ${i+1}: ${error.message}`
+          error: `Case ${i+1}: ${error.message}${deploymentHint}${isSubmit ? " Submission was not saved." : ""}`
         }));
         status = "failed";
       }
@@ -2534,7 +3650,16 @@ function CodingPlatform() {
     if (errors.length > 0) setErrorBanner(errors);
 
     const allPassed = results.every(r => r.status === "pass");
-    if (isSubmit && allPassed) setSolved(prev => new Set([...prev, p.id]));
+    if (allPassed) {
+      setAttemptedProblems((prev) => {
+        const next = new Set(prev);
+        next.delete(p.id);
+        return next;
+      });
+      if (isSubmit) setSolved(prev => new Set([...prev, p.id]));
+    } else {
+      setAttemptedProblems((prev) => new Set([...prev, p.id]));
+    }
 
     setRunResult({
       type: isSubmit ? "submit" : "run",
@@ -2546,6 +3671,9 @@ function CodingPlatform() {
       beats,
     });
 
+    if (isSubmit && authToken && currentUser.id) {
+      await loadStudentPortalData(problemCatalog);
+    }
 
     if (isSubmit) setSubmitting(false); else setRunning(false);
   };
@@ -2560,17 +3688,284 @@ function CodingPlatform() {
     }
   };
 
-  const filteredProblems = PROBLEMS.filter(p =>
+  const problemCatalog = problemBank.length ? problemBank : PROBLEMS;
+  const filteredProblems = problemCatalog.filter(p =>
     (filterDiff === "All" || p.difficulty === filterDiff) &&
     p.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const activeContestAssignment = activeAssignment || (adminCurrentTest.status === "LIVE" ? adminCurrentTest : null);
+  const contestDisplayName = activeContestAssignment?.title
+    || (adminCurrentTest.title === "Current Test" ? "Weekly Coding Contest #1" : adminCurrentTest.title);
+  const contestStatus = !activeContestAssignment
+    ? "Awaiting Start"
+    : contestTimerSeconds <= 0
+      ? "Ended"
+      : "Live";
+  const contestStatusTone = contestStatus === "Live"
+    ? { color:"#73f0b3", border:"#1f4e3a", background:"#0e1b15" }
+    : contestStatus === "Ended"
+      ? { color:"#ff9b9b", border:"#5a262d", background:"#1b0f13" }
+      : { color:"#93c5fd", border:"#2d4f7b", background:"#0f1727" };
+  const contestProblems = (activeContestAssignment?.problems?.length ? activeContestAssignment.problems : adminCurrentTest.problems || [])
+    .map((problem, index) => {
+      if (!problem) return null;
+
+      const status = solved.has(problem.id)
+        ? {
+            icon: "✔",
+            label: "Solved",
+            color: "#73f0b3",
+            background: "#0f1c15",
+            border: "#1f4e3a",
+          }
+        : attemptedProblems.has(problem.id)
+          ? {
+              icon: "❌",
+              label: "Attempted",
+              color: "#ff9b9b",
+              background: "#1a1014",
+              border: "#5a262d",
+            }
+          : {
+              icon: "⏳",
+              label: "Not Tried",
+              color: "#ffc86b",
+              background: "#191309",
+              border: "#5d4722",
+            };
+
+      return {
+        ...problem,
+        contestScore: Math.max(20, 40 - (index * 5)),
+        contestStatusMeta: status,
+      };
+    })
+    .filter(Boolean);
+  const leaderboardMode = leaderboardScope === "This Contest"
+    ? "contest"
+    : leaderboardScope === "Global"
+      ? "global"
+      : "overall";
+  const leaderboardRows = leaderboard
+    .map((entry) => ({
+      ...entry,
+      stats: entry[leaderboardMode],
+    }))
+    .filter((entry) =>
+      entry.username.toLowerCase().includes(leaderboardSearch.trim().toLowerCase())
+    )
+    .sort((a, b) => a.stats.rank - b.stats.rank);
+  const leaderboardPageSize = 5;
+  const leaderboardPageCount = Math.max(1, Math.ceil(leaderboardRows.length / leaderboardPageSize));
+  const safeLeaderboardPage = Math.min(leaderboardPage, leaderboardPageCount);
+  const visibleLeaderboardRows = leaderboardRows.slice(
+    (safeLeaderboardPage - 1) * leaderboardPageSize,
+    safeLeaderboardPage * leaderboardPageSize,
+  );
+  const getAvatarLabel = (name) =>
+    name
+      .split(" ")
+      .map((part) => part.charAt(0).toUpperCase())
+      .join("")
+      .slice(0, 2);
+  const getTrendMeta = (trend) =>
+    trend > 0
+      ? { icon: "↑", color: "#73f0b3", label: `Up ${trend}` }
+      : trend < 0
+        ? { icon: "↓", color: "#ff9b9b", label: `Down ${Math.abs(trend)}` }
+        : { icon: "→", color: "#8f93b4", label: "No change" };
+  const getLeaderboardAccent = (rank) => {
+    if (rank === 1) {
+      return {
+        edge: "#f3c969",
+        glow: "0 18px 42px rgba(243, 201, 105, 0.18)",
+        background: "linear-gradient(90deg, rgba(243,201,105,0.16), rgba(17,17,24,0.94) 18%)",
+        badge: "🥇",
+      };
+    }
+    if (rank === 2) {
+      return {
+        edge: "#cfd6df",
+        glow: "0 18px 42px rgba(207, 214, 223, 0.16)",
+        background: "linear-gradient(90deg, rgba(207,214,223,0.14), rgba(17,17,24,0.94) 18%)",
+        badge: "🥈",
+      };
+    }
+    if (rank === 3) {
+      return {
+        edge: "#c58a5c",
+        glow: "0 18px 42px rgba(197, 138, 92, 0.18)",
+        background: "linear-gradient(90deg, rgba(197,138,92,0.14), rgba(17,17,24,0.94) 18%)",
+        badge: "🥉",
+      };
+    }
+    return {
+      edge: "#25283a",
+      glow: "none",
+      background: "transparent",
+      badge: null,
+    };
+  };
+  const getSubmissionLevelMeta = (level) => {
+    if (level === "Hard") {
+      return { color:"#ffb4b4", border:"#5b2830", background:"#1b0f13" };
+    }
+    if (level === "Medium") {
+      return { color:"#ffd37a", border:"#5b4514", background:"#191309" };
+    }
+    if (level === "Easy") {
+      return { color:"#73f0b3", border:"#1f4e3a", background:"#0f1c15" };
+    }
+    return { color:"#8f93b4", border:"#2b3044", background:"#121621" };
+  };
 
   // ── STYLES ─────────────────────────────────────────────────────────────────
+  const formatDisplayName = (value) =>
+    value
+      .split(/[\s._-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  const profileName = currentUser.name.trim()
+    || (currentUser.email ? formatDisplayName(currentUser.email.split("@")[0]) : "Aarav");
+  const matchedLeaderboardProfile = leaderboard.find(
+    (entry) => entry.userId === currentUser.id || entry.username.toLowerCase() === profileName.toLowerCase()
+  );
+  const fallbackRating = 1680 + (solved.size * 18) - (attemptedProblems.size * 6);
+  const profileEntry = matchedLeaderboardProfile || {
+    username: profileName,
+    rating: Math.max(1450, fallbackRating),
+    avatarGradient: ["#60a5fa", "#8b5cf6"],
+    overall: {
+      rank: Math.max(18, 120 - (solved.size * 3)),
+      score: 1820 + (solved.size * 26),
+      problemsSolved: Math.max(18, solved.size * 4 + 16),
+      timePenalty: "04h 42m",
+      trend: solved.size > attemptedProblems.size ? 1 : 0,
+    },
+    contest: {
+      rank: Math.max(6, 24 - solved.size),
+      score: 76 + (solved.size * 4),
+      problemsSolved: Math.max(1, solved.size),
+      timePenalty: "18m 20s",
+      trend: solved.size > 0 ? 1 : 0,
+      timeTaken: "52m 10s",
+    },
+    global: {
+      rank: Math.max(24, 180 - (solved.size * 4)),
+      score: 1760 + (solved.size * 18),
+      problemsSolved: Math.max(20, solved.size * 4 + 14),
+      timePenalty: "05h 19m",
+      trend: solved.size > attemptedProblems.size ? 1 : -1,
+    },
+  };
+  const profileHandle = profileDraft.handle || `@${profileName.toLowerCase().replace(/\s+/g, "")}`;
+  const inferBadge = (rating) => {
+    if (rating >= 1900) return "Expert";
+    if (rating >= 1700) return "Advanced";
+    if (rating >= 1500) return "Specialist";
+    return "Pupil";
+  };
+  const profileBadgeLabel = profileDraft.badge || inferBadge(profileEntry.rating);
+  const profileStats = [
+    { label: "Problems Solved", value: profileEntry.overall.problemsSolved, accent: "#60a5fa" },
+    { label: "Accuracy %", value: `${Math.max(72, Math.min(98, 78 + solved.size * 3 - attemptedProblems.size))}%`, accent: "#22d3ee" },
+    { label: "Contest Rating", value: profileEntry.rating, accent: "#8b5cf6" },
+    { label: "Global Rank", value: `#${profileEntry.global.rank}`, accent: "#a78bfa" },
+  ];
+  const profileRatingHistory = [
+    { label: "Sep", value: profileEntry.rating - 210 },
+    { label: "Oct", value: profileEntry.rating - 165 },
+    { label: "Nov", value: profileEntry.rating - 132 },
+    { label: "Dec", value: profileEntry.rating - 88 },
+    { label: "Jan", value: profileEntry.rating - 52 },
+    { label: "Feb", value: profileEntry.rating - 24 },
+    { label: "Mar", value: profileEntry.rating + 18 },
+    { label: "Now", value: profileEntry.rating },
+  ];
+  const chartWidth = 420;
+  const chartHeight = 180;
+  const chartPadding = 22;
+  const ratingMin = Math.min(...profileRatingHistory.map((point) => point.value)) - 30;
+  const ratingMax = Math.max(...profileRatingHistory.map((point) => point.value)) + 30;
+  const ratingPoints = profileRatingHistory.map((point, index) => {
+    const x = chartPadding + ((chartWidth - (chartPadding * 2)) * index) / (profileRatingHistory.length - 1);
+    const y = chartHeight - chartPadding - (((point.value - ratingMin) / (ratingMax - ratingMin || 1)) * (chartHeight - (chartPadding * 2)));
+    return `${x},${y}`;
+  }).join(" ");
+  const solvedEasy = Array.from(solved).filter((id) => problemCatalog.find((problem) => problem.id === id)?.difficulty === "Easy").length;
+  const solvedMedium = Array.from(solved).filter((id) => problemCatalog.find((problem) => problem.id === id)?.difficulty === "Medium").length;
+  const solvedHard = Array.from(solved).filter((id) => problemCatalog.find((problem) => problem.id === id)?.difficulty === "Hard").length;
+  const profileDifficultyBreakdown = [
+    { label: "Easy", value: Math.min(42, 14 + solvedEasy), total: 42, color: "#22c55e" },
+    { label: "Medium", value: Math.min(36, 10 + solvedMedium), total: 36, color: "#facc15" },
+    { label: "Hard", value: Math.min(24, 6 + solvedHard), total: 24, color: "#ef4444" },
+  ];
+  const topicDistribution = [
+    { label: "Arrays", share: 78, color: "#60a5fa" },
+    { label: "DP", share: 56, color: "#8b5cf6" },
+    { label: "Graphs", share: 44, color: "#22d3ee" },
+    { label: "Strings", share: 64, color: "#38bdf8" },
+    { label: "Greedy", share: 39, color: "#818cf8" },
+  ];
+  const profileAchievements = [
+    { title: "Fast Finisher", detail: "Completed 5 problems inside one contest window.", color: "#22d3ee" },
+    { title: "Bug Hunter", detail: "Improved acceptance on three hard problems this week.", color: "#8b5cf6" },
+    { title: "Consistency", detail: "Active across 12 consecutive practice days.", color: "#60a5fa" },
+    { title: "Top 10 Push", detail: "Reached top 10 in a campus round.", color: "#a78bfa" },
+  ];
+  const profileSubmissionHistory = [
+    ...contestProblems.slice(0, 3).map((problem, index) => ({
+      problemId: problem.id,
+      problemName: problem.title,
+      status: solved.has(problem.id) ? "Accepted" : attemptedProblems.has(problem.id) ? "Wrong Answer" : "Pending",
+      language: lang.charAt(0).toUpperCase() + lang.slice(1),
+      time: index === 0 ? "12m ago" : index === 1 ? "1h ago" : "3h ago",
+    })),
+    ...problemCatalog.slice(0, 2).map((problem, index) => ({
+      problemId: problem.id,
+      problemName: problem.title,
+      status: index === 0 ? "Accepted" : "Time Limit",
+      language: index === 0 ? "Python" : "JavaScript",
+      time: index === 0 ? "Yesterday" : "2d ago",
+    })),
+  ].slice(0, 5);
+  const profileContestHistory = [
+    {
+      name: contestDisplayName,
+      rank: `#${profileEntry.contest.rank}`,
+      score: profileEntry.contest.score,
+      ratingChange: `+${Math.max(18, Math.round(profileEntry.rating * 0.012))}`,
+    },
+    ...previousTests.slice(0, 3).map((contest, index) => ({
+      name: contest.name,
+      rank: `#${index + 3}`,
+      score: contest.average,
+      ratingChange: index === 1 ? "-8" : `+${12 - (index * 3)}`,
+    })),
+  ];
+  const activityWeeks = Array.from({ length: 16 }, (_, weekIndex) =>
+    Array.from({ length: 7 }, (_, dayIndex) => {
+      const seed = (weekIndex * 5) + dayIndex + solved.size + (attemptedProblems.size * 2);
+      return seed % 5;
+    })
+  );
+  const activityColors = ["#1e293b", "#1d4ed8", "#2563eb", "#7c3aed", "#a855f7"];
+  const liftCard = (e) => {
+    e.currentTarget.style.transform = "translateY(-4px)";
+    e.currentTarget.style.boxShadow = "0 22px 50px rgba(37, 99, 235, 0.16)";
+  };
+  const settleCard = (e) => {
+    e.currentTarget.style.transform = "translateY(0)";
+    e.currentTarget.style.boxShadow = "0 14px 34px rgba(15, 23, 42, 0.32)";
+  };
   const S = {
     app:  { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:"#0a0a0f", color:"#e0e0e0", minHeight:"100vh", display:"flex", flexDirection:"column" },
-    nav:  { background:"#111118", borderBottom:"1px solid #1e1e2e", padding:"0 24px", display:"flex", alignItems:"center", height:56, gap:24, position:"sticky", top:0, zIndex:100 },
+    nav:  { background:"#111118", borderBottom:"1px solid #1e1e2e", padding:"10px 24px", display:"flex", alignItems:"center", minHeight:72, gap:24, position:"sticky", top:0, zIndex:100 },
     logo: { fontFamily:"'Space Grotesk',sans-serif", fontWeight:800, fontSize:20, background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", cursor:"pointer", letterSpacing:"-0.5px" },
-    navBtn: (a) => ({ background:"none", border:"none", color:a?"#fff":"#666", fontSize:13.5, cursor:"pointer", padding:"4px 0", borderBottom:a?"2px solid #7c6af7":"2px solid transparent", fontFamily:"'Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.03em" }),
+    navBtn: (a) => ({ background:"none", border:"none", color:a?"#fff":"#666", cursor:"pointer", padding:"6px 0", borderBottom:a?"2px solid #7c6af7":"2px solid transparent", fontFamily:"'Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.03em", display:"flex", flexDirection:"column", alignItems:"flex-start", gap:2 }),
+    navBtnLabel: (a) => ({ color:a?"#fff":"#8a8ea8", fontSize:13.5, fontWeight:600, lineHeight:1.1 }),
+    navBtnHint: (a) => ({ color:a?"#979cff":"#5f647f", fontSize:10.5, fontWeight:500, lineHeight:1.1, letterSpacing:"0.02em" }),
     badge: (d) => ({ padding:"3px 11px", borderRadius:999, fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", background:d==="Easy"?"#00b8a315":d==="Medium"?"#ffc01e15":"#ff375f15", color:d==="Easy"?"#00b8a3":d==="Medium"?"#ffc01e":"#ff375f" }),
     tag:  { background:"#151526", color:"#9aa0d2", padding:"4px 10px", borderRadius:999, fontSize:10.5, border:"1px solid #2a2a3e", fontFamily:"'Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.05em", textTransform:"uppercase" },
     btn:  (v) => ({ padding:"8px 18px", borderRadius:6, border:"none", cursor:"pointer", fontWeight:700, fontSize:12.5, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.04em", textTransform:"uppercase", transition:"all 0.15s",
@@ -2586,7 +3981,649 @@ function CodingPlatform() {
     exampleFieldLabel: { color:"#6f7396", fontFamily:"'Space Grotesk',sans-serif", fontSize:10.5, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase" },
     exampleFieldValue: { color:"#e6e8fb", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:1.8 },
     constraintItem: { color:"#8f93b4", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, lineHeight:1.85, letterSpacing:"0.01em" },
+    heroShell: { maxWidth:1100, margin:"0 auto", width:"100%", padding:"56px 24px 72px" },
+    homeGrid: { display:"grid", gridTemplateColumns:"1.15fr 0.85fr", gap:24, alignItems:"stretch" },
+    heroPanel: { background:"radial-gradient(circle at top left,#1f1d3d,#0f1018 58%)", border:"1px solid #2a2a3e", borderRadius:24, padding:"36px 34px", boxShadow:"0 20px 60px #00000045" },
+    roleCard: { background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #26263d", borderRadius:20, padding:"22px 20px", display:"flex", flexDirection:"column", gap:12, boxShadow:"inset 0 1px 0 #ffffff08" },
+    homeTitle: { fontFamily:"'Fraunces',serif", fontSize:52, lineHeight:1, margin:"0 0 18px", color:"#fff", letterSpacing:"-0.04em" },
+    formWrap: { maxWidth:560, width:"100%", margin:"42px auto 0", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:24, padding:"28px 26px 30px", boxShadow:"0 18px 50px #00000045" },
+    fieldLabel: { display:"block", marginBottom:8, color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
+    input: { width:"100%", boxSizing:"border-box", background:"#0f1018", border:"1px solid #26263d", color:"#eef0ff", borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif" },
+    adminBlank: { flex:1, background:"linear-gradient(180deg,#0a0a0f,#08080d)" },
+    modalBackdrop: { position:"fixed", inset:0, background:"#05050bcc", backdropFilter:"blur(8px)", display:"flex", alignItems:"center", justifyContent:"center", padding:"24px", zIndex:1200 },
+    modalCard: { width:"min(720px, 100%)", maxHeight:"calc(100vh - 48px)", overflowY:"auto", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:24, padding:"28px 26px 30px", boxShadow:"0 24px 70px #00000065" },
+    startHero: { position:"relative", overflow:"hidden", background:"radial-gradient(circle at 15% 20%, #1c2350 0%, #10111b 42%, #09090f 100%)", border:"1px solid #24263a", borderRadius:30, padding:"52px 48px", boxShadow:"0 26px 70px #0000004f" },
+    startButton: { padding:"14px 24px", borderRadius:16, border:"none", cursor:"pointer", fontWeight:800, fontSize:15, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.08em", textTransform:"uppercase", color:"#fff", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", boxShadow:"0 16px 30px #7c6af733" },
+    authChoiceGrid: { display:"grid", gridTemplateColumns:"repeat(2, minmax(0, 1fr))", gap:12 },
+    authChoiceButton: (active, tone) => ({
+      background: active ? (tone==="student" ? "#101f1b" : tone==="admin" ? "#1d1508" : "#18192a") : "#0f1018",
+      border: active ? (tone==="student" ? "1px solid #2e8f76" : tone==="admin" ? "1px solid #7d5d16" : "1px solid #7c6af7") : "1px solid #202233",
+      borderRadius:16,
+      padding:"18px 16px",
+      cursor:"pointer",
+      textAlign:"left",
+      color:"#eef0ff"
+    }),
+    startInfoGrid: { display:"grid", gridTemplateColumns:"repeat(3, minmax(0, 1fr))", gap:14, marginTop:28 },
+    startInfoCard: { background:"#0f1018cc", border:"1px solid #222538", borderRadius:18, padding:"16px 16px 18px", boxShadow:"inset 0 1px 0 #ffffff08" },
+    startPillRow: { display:"flex", gap:10, flexWrap:"wrap", marginTop:20 },
+    startPill: { padding:"8px 12px", borderRadius:999, background:"#ffffff08", border:"1px solid #ffffff12", color:"#d9dcf7", fontSize:12, fontWeight:600, letterSpacing:"0.02em" },
+    authStepper: { display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:20 },
+    authStepChip: (active) => ({
+      padding:"8px 12px",
+      borderRadius:999,
+      border: active ? "1px solid #7c6af7" : "1px solid #202233",
+      background: active ? "#17192a" : "#0f1018",
+      color: active ? "#eef0ff" : "#7f84a5",
+      fontSize:11,
+      fontWeight:700,
+      letterSpacing:"0.1em",
+      textTransform:"uppercase",
+      fontFamily:"'Space Grotesk',sans-serif"
+    }),
+    adminShell: { maxWidth:1240, margin:"0 auto", width:"100%", padding:"28px 24px 40px", display:"grid", gap:22 },
+    adminCardGrid: { display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:16 },
+    adminCard: { background:"linear-gradient(180deg,#12121d,#0d0d15)", border:"1px solid #25253b", borderRadius:18, padding:"18px 18px 20px", boxShadow:"0 16px 40px #00000024, inset 0 1px 0 #ffffff08" },
+    adminSectionTitle: { fontFamily:"'Space Grotesk',sans-serif", fontSize:12, fontWeight:700, color:"#7a7f9e", letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 },
+    adminGridTwo: { display:"grid", gridTemplateColumns:"1.35fr 0.95fr", gap:18, alignItems:"start" },
+    adminTableWrap: { background:"linear-gradient(180deg,#12121d,#0d0d15)", border:"1px solid #25253b", borderRadius:18, overflow:"hidden", boxShadow:"0 16px 40px #00000024, inset 0 1px 0 #ffffff08" },
+    adminTableHead: { padding:"14px 16px", textAlign:"left", fontSize:11, color:"#7a7f9e", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"'Space Grotesk',sans-serif" },
+    adminTableCell: { padding:"14px 16px", borderTop:"1px solid #1c1d2a", fontSize:14, color:"#dfe2ff" },
+    adminSubCard: { background:"#0e0f17", border:"1px solid #202233", borderRadius:14, padding:"14px" },
   };
+
+  const userBadge = currentUser.name
+    ? currentUser.name.trim().charAt(0).toUpperCase()
+    : currentUser.email
+      ? currentUser.email.trim().charAt(0).toUpperCase()
+    : userRole === "admin"
+      ? "A"
+      : "U";
+  const profileAvatarLabel = getAvatarLabel(profileName || "U");
+  const adminSelectedProblem = adminCurrentTest.problems?.find((problem) => problem.id === adminSubmissionProblemId)
+    || problemCatalog.find((problem) => problem.id === adminSubmissionProblemId)
+    || problemCatalog[0];
+  const currentTestEnded = adminCurrentTest.status === "ENDED" || adminTimerSeconds === 0;
+  const latestUnreadNotification = studentNotifications.find((notification) => !notification.read) || studentNotifications[0] || null;
+
+  if (view === "home") return (
+    <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+      <ScreenShield active={screenShield} message={shieldMessage} />
+      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <nav style={S.nav}>
+          <span style={S.logo}>{"</> CodeArena"}</span>
+          <div style={{ marginLeft:"auto", color:"#676b89", fontSize:12, letterSpacing:"0.1em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
+            Cambridge Access Portal
+          </div>
+        </nav>
+
+        <div style={S.heroShell}>
+          <div style={S.startHero}>
+            <div style={{ position:"absolute", width:220, height:220, borderRadius:"50%", background:"#4fd1c51c", filter:"blur(10px)", right:-40, top:-60 }} />
+            <div style={{ position:"absolute", width:180, height:180, borderRadius:"50%", background:"#7c6af71f", filter:"blur(10px)", left:-30, bottom:-70 }} />
+            <div style={{ position:"relative", display:"grid", gridTemplateColumns:"1.1fr 0.9fr", gap:24, alignItems:"center" }}>
+              <div>
+                <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 12px", borderRadius:999, background:"#ffffff0a", border:"1px solid #ffffff14", color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:18 }}>
+                  Cambridge Coding Arena
+                </div>
+                <h1 style={{ ...S.homeTitle, maxWidth:720 }}>Build, compete, and track every test from one sleek portal.</h1>
+                <p style={{ ...S.problemBody, maxWidth:620, marginBottom:24 }}>
+                  A modern assignment space for students and admins with coding rounds, rankings, timers, and real-time monitoring.
+                </p>
+                <div style={{ display:"flex", gap:14, alignItems:"center", flexWrap:"wrap" }}>
+                  <button onClick={openAuthFlow} style={S.startButton}>Start</button>
+                  <span style={{ color:"#8f93b4", fontSize:14 }}>Login or sign up to enter as student or admin.</span>
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gap:14 }}>
+                <div style={{ ...S.roleCard, background:"linear-gradient(180deg,#101723,#0d0d15)" }}>
+                  <div style={{ color:"#4fd1c5", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>Student Experience</div>
+                  <div style={{ color:"#f4f5ff", fontSize:24, fontWeight:700, lineHeight:1.2 }}>Start tests quickly, run code, and track your score live.</div>
+                </div>
+                <div style={{ ...S.roleCard, background:"linear-gradient(180deg,#17130b,#0d0d15)" }}>
+                  <div style={{ color:"#ffc01e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>Admin Control</div>
+                  <div style={{ color:"#f4f5ff", fontSize:24, fontWeight:700, lineHeight:1.2 }}>Create tests, watch participants, and manage the leaderboard from one place.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {authModalOpen && (
+          <div style={S.modalBackdrop} onClick={closeAuthFlow}>
+            <div style={S.modalCard} onClick={(e) => e.stopPropagation()}>
+              <div style={{ color:"#4fd1c5", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:12 }}>Access Flow</div>
+              <h1 style={{ ...S.problemTitle, fontSize:38, marginBottom:12 }}>Enter the portal.</h1>
+              <p style={{ ...S.problemBody, marginBottom:24 }}>
+                Login uses only mail ID and password. Sign up collects the extra details needed for student or admin access.
+              </p>
+
+              <div style={{ display:"grid", gap:18 }}>
+                <div>
+                  <label style={S.fieldLabel}>Choose Action</label>
+                  <div style={S.authChoiceGrid}>
+                    <button onClick={() => chooseAuthMode("login")} style={S.authChoiceButton(authMode === "login", "default")}>
+                      <div style={{ fontWeight:700, marginBottom:4 }}>Login</div>
+                      <div style={{ color:"#8f93b4", fontSize:12 }}>Use mail ID and password only</div>
+                    </button>
+                    <button onClick={() => chooseAuthMode("signup")} style={S.authChoiceButton(authMode === "signup", "default")}>
+                      <div style={{ fontWeight:700, marginBottom:4 }}>Sign Up</div>
+                      <div style={{ color:"#8f93b4", fontSize:12 }}>Add your details and create access</div>
+                    </button>
+                  </div>
+                </div>
+
+                {authMode && (
+                  <div>
+                    <label style={S.fieldLabel}>Choose Role</label>
+                    <div style={S.authChoiceGrid}>
+                      <button onClick={() => chooseAuthRole("student")} style={S.authChoiceButton(authRole === "student", "student")}>
+                        <div style={{ fontWeight:700, marginBottom:4 }}>Student</div>
+                        <div style={{ color:"#8f93b4", fontSize:12 }}>Coding tests and leaderboard access</div>
+                      </button>
+                      <button onClick={() => chooseAuthRole("admin")} style={S.authChoiceButton(authRole === "admin", "admin")}>
+                        <div style={{ fontWeight:700, marginBottom:4 }}>Admin</div>
+                        <div style={{ color:"#8f93b4", fontSize:12 }}>Manage tests and participants</div>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {authMode && authRole && (
+                  <div style={{ display:"grid", gap:18 }}>
+                    {authMode === "signup" && (
+                      <>
+                        <div>
+                          <label style={S.fieldLabel}>Name</label>
+                          <input
+                            value={authName}
+                            onChange={e=>{ setAuthName(e.target.value); if (authError) setAuthError(""); }}
+                            style={S.input}
+                            placeholder={authRole === "admin" ? "Enter admin name" : "Enter student name"}
+                          />
+                        </div>
+
+                        {authRole === "student" && (
+                          <div>
+                            <label style={S.fieldLabel}>USN</label>
+                            <input
+                              value={authUsn}
+                              onChange={e=>{ setAuthUsn(e.target.value); if (authError) setAuthError(""); }}
+                              style={S.input}
+                              placeholder="Enter USN"
+                            />
+                          </div>
+                        )}
+
+                        <div>
+                          <label style={S.fieldLabel}>Department</label>
+                          <select
+                            value={authDepartment}
+                            onChange={e=>{ setAuthDepartment(e.target.value); if (authError) setAuthError(""); }}
+                            style={S.input}
+                          >
+                            <option value="">Select department</option>
+                            <option value="Cyber">Cyber</option>
+                            <option value="CSE">CSE</option>
+                            <option value="ECE">ECE</option>
+                            <option value="ISE">ISE</option>
+                            <option value="AIML">AIML</option>
+                          </select>
+                        </div>
+
+                        <div style={{ background:"#0f1220", border:"1px solid #232843", borderRadius:16, padding:"16px 18px", display:"grid", gap:14 }}>
+                          <div style={{ display:"grid", gap:8 }}>
+                            <div style={{ color:"#eef0ff", fontSize:14, fontWeight:700 }}>Terms and Conditions</div>
+                            <div style={{ color:"#9da4c7", fontSize:13, lineHeight:1.6 }}>
+                              By creating an account, you agree to use the portal only for authorized coding activity, keep your credentials private, provide correct student or admin details, and follow contest integrity rules without impersonation, cheating, or misuse of platform content.
+                            </div>
+                          </div>
+
+                          <div style={{ display:"grid", gap:8 }}>
+                            <div style={{ color:"#eef0ff", fontSize:14, fontWeight:700 }}>Privacy Policy</div>
+                            <div style={{ color:"#9da4c7", fontSize:13, lineHeight:1.6 }}>
+                              The portal stores the information you enter during sign up, including name, email, department, role, and student USN when applicable, to manage access, personalize your profile, and operate contests. Your details are used only for this platform experience and administrative review.
+                            </div>
+                          </div>
+
+                          <label style={{ display:"flex", gap:10, alignItems:"flex-start", color:"#d8dcff", fontSize:13, lineHeight:1.5, cursor:"pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={authPoliciesAccepted}
+                              onChange={e=>{ setAuthPoliciesAccepted(e.target.checked); if (authError) setAuthError(""); }}
+                              style={{ marginTop:2, accentColor:"#7c6af7", cursor:"pointer" }}
+                            />
+                            <span>
+                              I agree to the Terms and Conditions and Privacy Policy. This is required to create a student or admin account.
+                            </span>
+                          </label>
+                        </div>
+                      </>
+                    )}
+
+                    <div>
+                      <label style={S.fieldLabel}>Email ID</label>
+                      <input value={authEmail} onChange={e=>{ setAuthEmail(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="name@cambridge.edu.in" />
+                    </div>
+                    <div>
+                      <label style={S.fieldLabel}>Password</label>
+                      <input type="password" value={authPassword} onChange={e=>{ setAuthPassword(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="Enter password" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {authError && (
+                <div style={{ marginTop:18, background:"#180b0b", border:"1px solid #4b1717", color:"#ff9b9b", borderRadius:12, padding:"12px 14px", fontSize:13 }}>
+                  {authError}
+                </div>
+              )}
+
+              <div style={{ display:"flex", gap:12, marginTop:24 }}>
+                <button
+                  onClick={handleAuthSubmit}
+                  disabled={authSubmitting || (authMode === "signup" && !authPoliciesAccepted)}
+                  style={{
+                    ...S.btn("submit"),
+                    opacity: authSubmitting || (authMode === "signup" && !authPoliciesAccepted) ? 0.55 : 1,
+                    cursor: authSubmitting || (authMode === "signup" && !authPoliciesAccepted) ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {authSubmitting ? "Please wait..." : authMode === "signup" ? "Create Access" : "Enter Portal"}
+                </button>
+                <button onClick={closeAuthFlow} style={{ ...S.btn("default"), color:"#c8c8e8" }}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (view === "admin") return (
+    <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+      <ScreenShield active={screenShield} message={shieldMessage} />
+      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <nav style={S.nav}>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <span style={{ color:"#eef0ff", fontSize:15, fontWeight:700, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.03em" }}>Test Assignment Leaderboard</span>
+          <div style={{ marginLeft:"auto" }}>
+            <button onClick={signOut} style={{ ...S.btn("default"), color:"#c8c8e8" }}>Sign Out</button>
+          </div>
+        </nav>
+
+        <div style={S.adminShell}>
+          {adminWarning && (
+            <div style={{ background:"#181108", border:"1px solid #5b4514", color:"#ffd37a", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+              {adminWarning}
+            </div>
+          )}
+
+          {portalError && (
+            <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+              {portalError}
+            </div>
+          )}
+
+          {portalMessage && (
+            <div style={{ background:"#0e1c16", border:"1px solid #214235", color:"#9ff7c5", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+              {portalMessage}
+            </div>
+          )}
+
+          {adminAssignmentsLoading && (
+            <div style={{ background:"#10131c", border:"1px solid #22283a", color:"#c7d2fe", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+              Loading live portal data from MongoDB...
+            </div>
+          )}
+
+          <div style={S.adminCardGrid}>
+            <div style={S.adminCard}>
+              <div style={S.adminSectionTitle}>Current Test</div>
+              <div style={{ fontSize:24, fontWeight:700, color:"#f4f5ff", marginBottom:14 }}>{adminCurrentTest.title}</div>
+              <div style={{ display:"grid", gap:8, color:"#a9aed0", fontSize:14 }}>
+                <div>Level: <span style={{ color:"#ff8fa3", fontWeight:700 }}>{adminCurrentTest.level}</span></div>
+                <div>Date: <span style={{ color:"#eef0ff" }}>{adminCurrentTest.date}</span></div>
+                <div>Duration: <span style={{ color:"#eef0ff" }}>{adminCurrentTest.duration} mins</span></div>
+                <div>Status: <span style={{ color:adminCurrentTest.status === "LIVE" ? "#73f0b3" : adminCurrentTest.status === "ENDED" ? "#ff9b9b" : "#93c5fd", fontWeight:700 }}>{adminCurrentTest.status || "DRAFT"}</span></div>
+                <div>Start: <span style={{ color:"#eef0ff" }}>{formatPortalDate(adminCurrentTest.startsAt)}</span></div>
+                <div>Timer: <span style={{ color:currentTestEnded?"#ff6b6b":"#4fd1c5", fontWeight:700 }}>{formatCountdown(adminTimerSeconds)}</span></div>
+              </div>
+              <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:16 }}>
+                <button
+                  onClick={handleStartAssignedTest}
+                  disabled={adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE"}
+                  style={{
+                    ...S.btn("submit"),
+                    opacity: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? 0.6 : 1,
+                    cursor: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {adminStartingTest ? "Starting..." : adminCurrentTest.status === "LIVE" ? "Test Live" : "Start Test"}
+                </button>
+                <button
+                  onClick={() => syncProblemBankToDatabase(false)}
+                  disabled={adminSyncingProblems}
+                  style={{ ...S.btn("default"), color:"#dfe2ff", opacity: adminSyncingProblems ? 0.6 : 1 }}
+                >
+                  {adminSyncingProblems ? "Syncing..." : "Sync Problems"}
+                </button>
+              </div>
+            </div>
+
+            <div style={S.adminCard}>
+              <div style={S.adminSectionTitle}>Previous Tests</div>
+              <div style={{ display:"grid", gap:10 }}>
+                {previousTests.slice(0, 4).map((test) => (
+                  <button
+                    key={test.id}
+                    onClick={() => setSelectedPreviousTest(test)}
+                    style={{
+                      background:selectedPreviousTest?.id===test.id?"#18192a":"#0f1018",
+                      border:selectedPreviousTest?.id===test.id?"1px solid #7c6af7":"1px solid #202233",
+                      borderRadius:12,
+                      color:"#dfe2ff",
+                      padding:"12px 14px",
+                      textAlign:"left",
+                      cursor:"pointer"
+                    }}
+                  >
+                    <div style={{ fontWeight:700, marginBottom:4 }}>{test.name}</div>
+                    <div style={{ color:"#8f93b4", fontSize:12 }}>{test.date} • {test.difficulty}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={S.adminCard}>
+              <div style={S.adminSectionTitle}>Participants</div>
+              <div style={{ fontSize:32, fontWeight:800, color:"#4fd1c5", lineHeight:1, marginBottom:10 }}>{participantsCount}</div>
+              <div style={{ color:"#8f93b4", fontSize:14, marginBottom:12 }}>Students with login activity stored in MongoDB</div>
+              <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 10px", borderRadius:999, background:"#0e1c16", border:"1px solid #214235", color:"#73f0b3", fontSize:12, fontWeight:700 }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", background:"#4ade80", boxShadow:"0 0 12px #4ade80" }} />
+                Login-tracked
+              </div>
+            </div>
+
+            <div style={S.adminCard}>
+              <div style={S.adminSectionTitle}>Solutions</div>
+              <div style={{ fontSize:14, color:"#8f93b4", marginBottom:14 }}>Submitted solutions become viewable after the timer ends.</div>
+              <button
+                onClick={() => setSolutionsVisible((prev) => !prev)}
+                disabled={!currentTestEnded}
+                style={{
+                  ...S.btn("default"),
+                  color:currentTestEnded?"#ffc01e":"#666",
+                  border:currentTestEnded?"1px solid #5b4514":"1px solid #2a2a3e",
+                  background:currentTestEnded?"#191309":"#12121a",
+                  opacity:currentTestEnded?1:0.7
+                }}
+              >
+                View Solutions
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:18, alignItems:"start" }}>
+            <div style={S.adminTableWrap}>
+              <div style={{ padding:"18px 18px 10px" }}>
+                <div style={S.adminSectionTitle}>Leaderboard</div>
+              </div>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr>
+                    {["Rank", "Username", "Score", "Solved", "Time Penalty"].map((heading) => (
+                      <th key={heading} style={S.adminTableHead}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaderboard.length ? leaderboard.map((entry) => {
+                    const submissionLevel = entry.contest.submissionLevel || "No Submission";
+                    const levelMeta = getSubmissionLevelMeta(submissionLevel);
+                    return (
+                      <tr key={entry.userId || entry.username}>
+                        <td style={S.adminTableCell}>{entry.contest.rank}</td>
+                        <td style={S.adminTableCell}>
+                          <div style={{ color:"#eef0ff", fontWeight:700 }}>{entry.username}</div>
+                          <div style={{ marginTop:6 }}>
+                            <span style={{ color:levelMeta.color, background:levelMeta.background, border:`1px solid ${levelMeta.border}`, borderRadius:999, padding:"3px 8px", fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase" }}>
+                              {submissionLevel}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ ...S.adminTableCell, color:"#73f0b3", fontWeight:700 }}>{entry.contest.score}</td>
+                        <td style={S.adminTableCell}>{entry.contest.problemsSolved}</td>
+                        <td style={S.adminTableCell}>{entry.contest.timePenalty}</td>
+                      </tr>
+                    );
+                  }) : (
+                    <tr>
+                      <td colSpan="5" style={{ ...S.adminTableCell, textAlign:"center", color:"#8f93b4" }}>
+                        No logged-in students have submitted yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display:"grid", gap:18 }}>
+              <div style={S.adminCard}>
+                <div style={S.adminSectionTitle}>Login Audit</div>
+                <div style={{ display:"grid", gap:10 }}>
+                  {loginEvents.slice(0, 4).map((event) => (
+                    <div key={event.id} style={S.adminSubCard}>
+                      <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:4 }}>{event.email}</div>
+                      <div style={{ color:"#8f93b4", fontSize:12, marginBottom:6 }}>
+                        {event.eventType} • {event.role} • {formatPortalDate(event.createdAt)}
+                      </div>
+                      <div style={{ color:"#9fb4ff", fontSize:12 }}>
+                        {event.ip || "IP unavailable"} • {event.userAgent || "Browser info unavailable"}
+                      </div>
+                    </div>
+                  ))}
+
+                  {!loginEvents.length && (
+                    <div style={{ color:"#8f93b4", fontSize:13 }}>No login audit rows yet.</div>
+                  )}
+                </div>
+              </div>
+
+              <div style={S.adminCard}>
+                <div style={S.adminSectionTitle}>Logged-In Students</div>
+                <div style={{ display:"grid", gap:10 }}>
+                  {activeUsers.length ? activeUsers.map((user) => (
+                    <div key={`${user.email}-${user.usn}`} style={{ ...S.adminSubCard, display:"flex", justifyContent:"space-between", alignItems:"center", gap:14 }}>
+                      <div>
+                        <div style={{ color:"#eef0ff", fontWeight:700 }}>{user.name}</div>
+                        <div style={{ color:"#8f93b4", fontSize:12 }}>{user.department} • {user.usn || "--"}</div>
+                        <div style={{ color:"#7f85a6", fontSize:12, marginTop:4 }}>Last login: {formatPortalDate(user.lastLoginAt)}</div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ color:user.status==="Logged In" ? "#73f0b3" : "#ffc01e", fontSize:12, fontWeight:700 }}>{user.status}</div>
+                        <div style={{ color:"#9fb4ff", fontSize:12, marginTop:4 }}>{user.loginCount} logins</div>
+                      </div>
+                    </div>
+                  )) : (
+                    <div style={{ color:"#8f93b4", fontSize:13 }}>No logged-in students yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(340px, 1fr))", gap:18, alignItems:"start" }}>
+            <div style={S.adminCard}>
+              <div style={S.adminSectionTitle}>Code Submission</div>
+              <div style={{ display:"grid", gap:14 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                  <div>
+                    <label style={S.fieldLabel}>Question</label>
+                    <select
+                      value={String(adminSubmissionProblemId ?? "")}
+                      onChange={(e) => {
+                        const selectedProblem = adminCurrentTest.problems?.find((problem) => String(problem.id) === e.target.value)
+                          || problemCatalog.find((problem) => String(problem.id) === e.target.value);
+                        setAdminSubmissionProblemId(selectedProblem ? selectedProblem.id : e.target.value);
+                      }}
+                      style={S.input}
+                    >
+                      {adminCurrentTest.questions.map((id) => {
+                        const problem = adminCurrentTest.problems?.find((item) => item.id === id)
+                          || problemCatalog.find((item) => item.id === id);
+                        return <option key={id} value={id}>{problem ? `${problem.id}. ${problem.title}` : id}</option>;
+                      })}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={S.fieldLabel}>Language</label>
+                    <select value={adminSubmissionLang} onChange={(e)=>setAdminSubmissionLang(e.target.value)} style={S.input}>
+                      <option value="javascript">JavaScript</option>
+                      <option value="python">Python</option>
+                      <option value="java">Java</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ ...S.adminSubCard, padding:"0", overflow:"hidden" }}>
+                  <div style={{ padding:"10px 12px", borderBottom:"1px solid #202233", color:"#8f93b4", fontSize:12 }}>
+                    Write solution for {adminSelectedProblem?.title || "the selected problem"}
+                  </div>
+                  <textarea
+                    value={adminSubmissionCode}
+                    onChange={(e)=>setAdminSubmissionCode(e.target.value)}
+                    spellCheck={false}
+                    style={{ width:"100%", minHeight:240, background:"#0b0c14", color:"#dfe2ff", border:"none", outline:"none", resize:"vertical", padding:"14px", fontFamily:"'JetBrains Mono',monospace", fontSize:13, lineHeight:1.7, boxSizing:"border-box" }}
+                  />
+                </div>
+
+                <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
+                  <button onClick={() => handleAdminRun(false)} disabled={adminExecuting} style={S.btn("run")}>
+                    {adminExecuting ? "Running..." : "Run Code"}
+                  </button>
+                  <div style={{ color:"#8f93b4", fontSize:13, alignSelf:"center" }}>
+                    Execution uses the current backend runner now. For cloud Judge0 deployment, a Judge0 endpoint and API key are still needed.
+                  </div>
+                </div>
+
+                {adminExecution && (
+                  <div style={S.adminSubCard}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, gap:12, flexWrap:"wrap" }}>
+                      <div style={{ color:adminExecution.status==="passed"?"#73f0b3":"#ff9b9b", fontWeight:700 }}>
+                        {adminExecution.autoSubmitted ? "Auto-submitted" : "Execution Result"}
+                      </div>
+                      <div style={{ color:"#8f93b4", fontSize:12 }}>Runtime: {adminExecution.runtime}</div>
+                    </div>
+                    <div style={{ display:"grid", gap:10 }}>
+                      {adminExecution.tests.map((test, index) => (
+                        <div key={index} style={{ background:"#0a0b12", border:"1px solid #202233", borderRadius:12, padding:"12px 14px" }}>
+                          <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>Case {index + 1}</div>
+                          <div style={{ color:test.status==="pass"?"#73f0b3":test.status==="fail"?"#ff9b9b":"#ffc01e", fontSize:13, marginBottom:6 }}>
+                            {test.status.toUpperCase()}
+                          </div>
+                          {test.error ? (
+                            <div style={{ color:"#ffb0b0", fontSize:12, whiteSpace:"pre-wrap" }}>{test.error}</div>
+                          ) : (
+                            <div style={{ color:"#8f93b4", fontSize:12 }}>
+                              Expected: <span style={{ color:"#dfe2ff" }}>{test.expected}</span>
+                              <br />
+                              Got: <span style={{ color:"#dfe2ff" }}>{test.actual}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gap:18 }}>
+              <div style={S.adminCard}>
+                <div style={S.adminSectionTitle}>Create New Test</div>
+                <div style={{ display:"grid", gap:14 }}>
+                  <div>
+                    <label style={S.fieldLabel}>Test Title</label>
+                    <input value={adminCreateForm.title} onChange={(e)=>handleAdminCreateInput("title", e.target.value)} style={S.input} />
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                    <div>
+                      <label style={S.fieldLabel}>Difficulty</label>
+                      <select value={adminCreateForm.level} onChange={(e)=>handleAdminCreateInput("level", e.target.value)} style={S.input}>
+                        <option>Easy</option>
+                        <option>Medium</option>
+                        <option>Hard</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={S.fieldLabel}>Duration (mins)</label>
+                      <input value={adminCreateForm.duration} onChange={(e)=>handleAdminCreateInput("duration", e.target.value)} style={S.input} />
+                    </div>
+                  </div>
+                  <div>
+                    <label style={S.fieldLabel}>Database Problems</label>
+                    <div style={{ maxHeight:220, overflowY:"auto", display:"grid", gap:10, paddingRight:4 }}>
+                      {problemBankLoading ? (
+                        <div style={{ color:"#8f93b4", fontSize:13 }}>Loading database problems...</div>
+                      ) : problemBank.length ? (
+                        problemBank.map((problem) => {
+                          const checked = adminCreateForm.questions.includes(problem.dbId);
+                          return (
+                            <label key={problem.dbId} style={{ ...S.adminSubCard, display:"flex", gap:12, alignItems:"flex-start", cursor:"pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleCreateQuestion(problem.dbId)}
+                                style={{ marginTop:2, accentColor:"#7c6af7", cursor:"pointer" }}
+                              />
+                              <span style={{ display:"grid", gap:6 }}>
+                                <span style={{ color:"#eef0ff", fontWeight:700 }}>{problem.title}</span>
+                                <span style={{ color:"#8f93b4", fontSize:12 }}>{problem.difficulty} • {problem.tags.slice(0, 3).join(", ") || "General"}</span>
+                              </span>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <div style={{ color:"#8f93b4", fontSize:13 }}>No database problems yet. Use Sync Problems first.</div>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ color:"#8f93b4", fontSize:12 }}>
+                    Selected: <span style={{ color:"#eef0ff", fontWeight:700 }}>{adminCreateForm.questions.length}</span> database problems
+                  </div>
+                  <button onClick={handleCreateTest} disabled={adminCreatingTest} style={{ ...S.btn("submit"), opacity: adminCreatingTest ? 0.65 : 1 }}>
+                    {adminCreatingTest ? "Saving..." : "Save Draft Test"}
+                  </button>
+                </div>
+              </div>
+
+              {solutionsVisible && (
+                <div style={S.adminCard}>
+                  <div style={S.adminSectionTitle}>Submitted Solutions</div>
+                  <div style={{ display:"grid", gap:10 }}>
+                    {adminCurrentTest.questions.map((id) => {
+                      const problem = adminCurrentTest.problems?.find((item) => item.id === id)
+                        || problemCatalog.find((item) => item.id === id);
+                      return (
+                        <div key={id} style={S.adminSubCard}>
+                          <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:4 }}>{problem?.title || `Problem ${id}`}</div>
+                          <div style={{ color:"#8f93b4", fontSize:12 }}>Top submission visible after test completion. Connect secure storage/backend to load real submitted code.</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   // ── PROBLEM LIST ───────────────────────────────────────────────────────────
   if (view === "list") return (
@@ -2595,24 +4632,61 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <nav style={S.nav}>
-        <span style={S.logo}>{"</> CodeArena"}</span>
-        <button style={S.navBtn(true)}>Problems</button>
-        <button style={S.navBtn(false)}>Contest</button>
-        <button style={S.navBtn(false)}>Leaderboard</button>
+        <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+        <button onClick={()=>setView("list")} style={S.navBtn(true)}>
+          <span style={S.navBtnLabel(true)}>Problems</span>
+          <span style={S.navBtnHint(true)}>Daily coding practice</span>
+        </button>
+        <button onClick={openContest} style={S.navBtn(false)}>
+          <span style={S.navBtnLabel(false)}>Contest</span>
+          <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
+        </button>
+        <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
+          <span style={S.navBtnLabel(false)}>Leaderboard</span>
+          <span style={S.navBtnHint(false)}>See the top performers</span>
+        </button>
         <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+          {notificationCount > 0 && (
+            <span style={{ padding:"6px 10px", borderRadius:999, background:"#111b22", border:"1px solid #1d4f5d", color:"#7ce7ff", fontSize:12, fontWeight:700 }}>
+              {notificationCount} new
+            </span>
+          )}
           <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
-          <div style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700 }}>U</div>
+          <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
         </div>
       </nav>
 
       <div style={{ maxWidth:1100, margin:"32px auto", padding:"0 24px", width:"100%" }}>
+        {latestUnreadNotification && (
+          <div style={{ background:"#101926", border:"1px solid #243c5a", borderRadius:16, padding:"16px 18px", marginBottom:18, display:"flex", justifyContent:"space-between", gap:16, alignItems:"center", flexWrap:"wrap" }}>
+            <div>
+              <div style={{ color:"#93c5fd", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>
+                Student Notification
+              </div>
+              <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>{latestUnreadNotification.title}</div>
+              <div style={{ color:"#9fb4ff", fontSize:13 }}>{latestUnreadNotification.message}</div>
+            </div>
+            {!latestUnreadNotification.read && (
+              <button onClick={() => markNotificationAsRead(latestUnreadNotification.id)} style={{ ...S.btn("default"), color:"#dfe2ff" }}>
+                Mark Read
+              </button>
+            )}
+          </div>
+        )}
+
+        {portalError && (
+          <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13, marginBottom:18 }}>
+            {portalError}
+          </div>
+        )}
+
         {/* Stats */}
         <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:32 }}>
           {[{label:"Easy",color:"#00b8a3"},{label:"Medium",color:"#ffc01e"},{label:"Hard",color:"#ff375f"}].map(s=>(
             <div key={s.label} style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:12 }}>
               <div style={{ width:8, height:32, borderRadius:4, background:s.color }} />
               <div>
-                <div style={{ fontSize:22, fontWeight:700, color:s.color }}>{PROBLEMS.filter(p=>p.difficulty===s.label).length}</div>
+                <div style={{ fontSize:22, fontWeight:700, color:s.color }}>{problemCatalog.filter(p=>p.difficulty===s.label).length}</div>
                 <div style={{ fontSize:12, color:"#666" }}>{s.label} Problems</div>
               </div>
             </div>
@@ -2659,6 +4733,680 @@ function CodingPlatform() {
     </div>
   );
 
+  if (view === "profile") return (
+    <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+      <ScreenShield active={screenShield} message={shieldMessage} />
+      <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+        <nav style={{ ...S.nav, background:"#0b1220", borderBottom:"1px solid #1e293b" }}>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Problems</span>
+            <span style={S.navBtnHint(false)}>Practice arena</span>
+          </button>
+          <button onClick={openContest} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Contest</span>
+            <span style={S.navBtnHint(false)}>Live round hub</span>
+          </button>
+          <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Leaderboard</span>
+            <span style={S.navBtnHint(false)}>Ranking board</span>
+          </button>
+          <button style={S.navBtn(true)}>
+            <span style={S.navBtnLabel(true)}>Profile</span>
+            <span style={S.navBtnHint(true)}>Dashboard overview</span>
+          </button>
+          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+            {notificationCount > 0 && (
+              <span style={{ padding:"6px 10px", borderRadius:999, background:"#111b22", border:"1px solid #1d4f5d", color:"#7ce7ff", fontSize:12, fontWeight:700 }}>
+                {notificationCount} new
+              </span>
+            )}
+            <div style={{ width:34, height:34, borderRadius:"50%", background:`linear-gradient(135deg, ${profileEntry.avatarGradient[0]}, ${profileEntry.avatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#081018", boxShadow:"0 0 18px rgba(96,165,250,0.28)" }}>{profileAvatarLabel}</div>
+          </div>
+        </nav>
+
+        <div style={{ maxWidth:1260, margin:"28px auto 40px", padding:"0 24px", width:"100%", display:"grid", gap:20 }}>
+          <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.92))", border:"1px solid #1e293b", borderRadius:28, padding:"28px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", gap:20, alignItems:"flex-start", flexWrap:"wrap" }}>
+              <div style={{ display:"flex", gap:18, alignItems:"center", flexWrap:"wrap" }}>
+                <div style={{ width:92, height:92, borderRadius:"50%", background:`linear-gradient(135deg, ${profileEntry.avatarGradient[0]}, ${profileEntry.avatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#081018", fontWeight:800, fontSize:28, boxShadow:"0 0 28px rgba(96,165,250,0.25)" }}>
+                  {profileAvatarLabel}
+                </div>
+                <div>
+                  <div style={{ color:"#f8fafc", fontSize:32, fontWeight:700, lineHeight:1.1 }}>{profileName}</div>
+                  <div style={{ color:"#93c5fd", fontSize:15, fontWeight:600, marginTop:6 }}>{profileHandle}</div>
+                  <div style={{ color:"#94a3b8", fontSize:14, maxWidth:620, marginTop:10, lineHeight:1.7 }}>{profileDraft.bio}</div>
+                  <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:14 }}>
+                    <span style={{ padding:"8px 12px", borderRadius:999, background:"#111c34", border:"1px solid #1d4ed8", color:"#93c5fd", fontSize:12, fontWeight:700 }}>Rating {profileEntry.rating}</span>
+                    <span style={{ padding:"8px 12px", borderRadius:999, background:"#18112e", border:"1px solid #7c3aed", color:"#c4b5fd", fontSize:12, fontWeight:700 }}>{profileBadgeLabel}</span>
+                  </div>
+                </div>
+              </div>
+
+              <button onClick={() => setProfileEditorOpen((prev) => !prev)} style={{ ...S.btn("submit"), minHeight:46, boxShadow:"0 14px 28px rgba(124,58,237,0.28)" }}>
+                {profileEditorOpen ? "Close Editor" : "Edit Profile"}
+              </button>
+            </div>
+
+            {profileEditorOpen && (
+              <div style={{ marginTop:22, display:"grid", gap:12, gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", alignItems:"end" }}>
+                <div>
+                  <label style={{ ...S.fieldLabel, color:"#94a3b8" }}>Handle</label>
+                  <input value={profileDraft.handle} onChange={(e)=>setProfileDraft((prev) => ({ ...prev, handle: e.target.value }))} style={{ ...S.input, background:"#0b1220", border:"1px solid #22304a" }} />
+                </div>
+                <div>
+                  <label style={{ ...S.fieldLabel, color:"#94a3b8" }}>Bio</label>
+                  <input value={profileDraft.bio} onChange={(e)=>setProfileDraft((prev) => ({ ...prev, bio: e.target.value }))} style={{ ...S.input, background:"#0b1220", border:"1px solid #22304a" }} />
+                </div>
+                <button onClick={() => setProfileEditorOpen(false)} style={{ ...S.btn("default"), color:"#e2e8f0", minHeight:46 }}>
+                  Save
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:16 }}>
+            {profileStats.map((stat) => (
+              <div key={stat.label} onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:22, padding:"18px 18px 20px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:10 }}>{stat.label}</div>
+                <div style={{ color:stat.accent, fontSize:30, fontWeight:700, lineHeight:1 }}>{stat.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:20, alignItems:"start" }}>
+            <div style={{ display:"grid", gap:20 }}>
+              <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"center", marginBottom:18, flexWrap:"wrap" }}>
+                  <div>
+                    <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase" }}>Rating Graph</div>
+                    <div style={{ color:"#f8fafc", fontSize:24, fontWeight:700, marginTop:6 }}>Rating over time</div>
+                  </div>
+                  <div style={{ color:"#22d3ee", fontSize:13, fontWeight:700 }}>+18 this month</div>
+                </div>
+                <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} style={{ width:"100%", height:220 }}>
+                  <defs>
+                    <linearGradient id="profileRatingStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" stopColor="#38bdf8" />
+                      <stop offset="100%" stopColor="#8b5cf6" />
+                    </linearGradient>
+                  </defs>
+                  {[0, 1, 2, 3].map((step) => {
+                    const y = chartPadding + ((chartHeight - (chartPadding * 2)) * step) / 3;
+                    return <line key={step} x1={chartPadding} y1={y} x2={chartWidth - chartPadding} y2={y} stroke="#1e293b" strokeWidth="1" />;
+                  })}
+                  <polyline fill="none" stroke="url(#profileRatingStroke)" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" points={ratingPoints} />
+                  {profileRatingHistory.map((point, index) => {
+                    const x = chartPadding + ((chartWidth - (chartPadding * 2)) * index) / (profileRatingHistory.length - 1);
+                    const y = chartHeight - chartPadding - (((point.value - ratingMin) / (ratingMax - ratingMin || 1)) * (chartHeight - (chartPadding * 2)));
+                    return (
+                      <g key={point.label}>
+                        <circle cx={x} cy={y} r="5" fill="#0b1220" stroke="#60a5fa" strokeWidth="3" />
+                        <text x={x} y={chartHeight - 6} textAnchor="middle" fill="#94a3b8" fontSize="11">{point.label}</text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))", gap:20 }}>
+                <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+                  <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Problem Breakdown</div>
+                  <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Difficulty progress</div>
+                  <div style={{ display:"grid", gap:14 }}>
+                    {profileDifficultyBreakdown.map((item) => (
+                      <div key={item.label}>
+                        <div style={{ display:"flex", justifyContent:"space-between", color:"#cbd5e1", fontSize:14, marginBottom:8 }}>
+                          <span>{item.label}</span>
+                          <span>{item.value}/{item.total}</span>
+                        </div>
+                        <div style={{ height:10, borderRadius:999, background:"#111827", overflow:"hidden" }}>
+                          <div style={{ width:`${(item.value / item.total) * 100}%`, height:"100%", borderRadius:999, background:item.color, boxShadow:`0 0 18px ${item.color}55`, transition:"width 0.35s ease" }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+                  <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Topic Distribution</div>
+                  <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Most practiced topics</div>
+                  <div style={{ display:"grid", gap:12 }}>
+                    {topicDistribution.map((topic) => (
+                      <div key={topic.label}>
+                        <div style={{ display:"flex", justifyContent:"space-between", color:"#cbd5e1", fontSize:14, marginBottom:7 }}>
+                          <span>{topic.label}</span>
+                          <span>{topic.share}%</span>
+                        </div>
+                        <div style={{ height:9, borderRadius:999, background:"#111827", overflow:"hidden" }}>
+                          <div style={{ width:`${topic.share}%`, height:"100%", borderRadius:999, background:topic.color, transition:"width 0.35s ease" }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Activity Heatmap</div>
+                <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Consistency grid</div>
+                <div style={{ display:"flex", gap:5, alignItems:"flex-end", flexWrap:"nowrap", overflowX:"auto", paddingBottom:6 }}>
+                  {activityWeeks.map((week, weekIndex) => (
+                    <div key={weekIndex} style={{ display:"grid", gap:5 }}>
+                      {week.map((level, dayIndex) => (
+                        <div key={`${weekIndex}-${dayIndex}`} style={{ width:14, height:14, borderRadius:4, background:activityColors[level], boxShadow:level ? `0 0 12px ${activityColors[level]}44` : "none" }} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gap:20 }}>
+              <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Achievements</div>
+                <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Badges unlocked</div>
+                <div style={{ display:"grid", gap:12 }}>
+                  {profileAchievements.map((achievement) => (
+                    <div key={achievement.title} style={{ background:"#111827", border:`1px solid ${achievement.color}55`, borderRadius:18, padding:"14px 14px 16px" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+                        <span style={{ width:12, height:12, borderRadius:"50%", background:achievement.color, boxShadow:`0 0 14px ${achievement.color}` }} />
+                        <span style={{ color:"#f8fafc", fontWeight:700 }}>{achievement.title}</span>
+                      </div>
+                      <div style={{ color:"#94a3b8", fontSize:13, lineHeight:1.6 }}>{achievement.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Profile Pulse</div>
+                <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:14 }}>Current form</div>
+                <div style={{ display:"grid", gap:10, color:"#cbd5e1", fontSize:14, lineHeight:1.7 }}>
+                  <div>Best contest rank: <span style={{ color:"#93c5fd", fontWeight:700 }}>#{profileEntry.contest.rank}</span></div>
+                  <div>Global trend: <span style={{ color:getTrendMeta(profileEntry.global.trend).color, fontWeight:700 }}>{getTrendMeta(profileEntry.global.trend).label}</span></div>
+                  <div>Penalty discipline: <span style={{ color:"#c4b5fd", fontWeight:700 }}>{profileEntry.overall.timePenalty}</span></div>
+                  <div>Favorite lane: <span style={{ color:"#67e8f9", fontWeight:700 }}>{topicDistribution[0].label}</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(360px, 1fr))", gap:20 }}>
+            <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+              <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Submission History</div>
+              <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:16 }}>Recent runs</div>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr>
+                    {["Problem Name", "Status", "Language", "Time"].map((heading) => (
+                      <th key={heading} style={{ textAlign:"left", padding:"0 0 12px", color:"#64748b", fontSize:11, textTransform:"uppercase", letterSpacing:"0.1em" }}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {profileSubmissionHistory.map((row) => (
+                    <tr key={`${row.problemId}-${row.time}`} style={{ borderTop:"1px solid #172033" }}>
+                      <td style={{ padding:"12px 0" }}>
+                        <button onClick={() => openProblem(problemCatalog.find((problem) => problem.id === row.problemId) || problemCatalog[0])} style={{ background:"none", border:"none", padding:0, color:"#93c5fd", cursor:"pointer", fontWeight:600, textAlign:"left" }}>
+                          {row.problemName}
+                        </button>
+                      </td>
+                      <td style={{ padding:"12px 0", color:row.status === "Accepted" ? "#22c55e" : row.status === "Wrong Answer" ? "#f87171" : "#fbbf24", fontWeight:600 }}>{row.status}</td>
+                      <td style={{ padding:"12px 0", color:"#cbd5e1" }}>{row.language}</td>
+                      <td style={{ padding:"12px 0", color:"#94a3b8" }}>{row.time}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+              <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Contest History</div>
+              <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:16 }}>Recent rounds</div>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr>
+                    {["Contest Name", "Rank", "Score", "Rating Change"].map((heading) => (
+                      <th key={heading} style={{ textAlign:"left", padding:"0 0 12px", color:"#64748b", fontSize:11, textTransform:"uppercase", letterSpacing:"0.1em" }}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {profileContestHistory.map((row) => (
+                    <tr key={row.name} style={{ borderTop:"1px solid #172033" }}>
+                      <td style={{ padding:"12px 0", color:"#e2e8f0", fontWeight:600 }}>{row.name}</td>
+                      <td style={{ padding:"12px 0", color:"#93c5fd" }}>{row.rank}</td>
+                      <td style={{ padding:"12px 0", color:"#cbd5e1" }}>{row.score}</td>
+                      <td style={{ padding:"12px 0", color:String(row.ratingChange).startsWith("-") ? "#f87171" : "#22c55e", fontWeight:700 }}>{row.ratingChange}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (view === "contest") return (
+    <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+      <ScreenShield active={screenShield} message={shieldMessage} />
+      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <nav style={S.nav}>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Problems</span>
+            <span style={S.navBtnHint(false)}>Daily coding practice</span>
+          </button>
+          <button onClick={openContest} style={S.navBtn(true)}>
+            <span style={S.navBtnLabel(true)}>Contest</span>
+            <span style={S.navBtnHint(true)}>Timed challenge rounds</span>
+          </button>
+          <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Leaderboard</span>
+            <span style={S.navBtnHint(false)}>See the top performers</span>
+          </button>
+          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+            <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
+            <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
+          </div>
+        </nav>
+
+        <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:"0 24px", width:"100%", display:"grid", gap:20 }}>
+          {latestUnreadNotification && (
+            <div style={{ background:"#101926", border:"1px solid #243c5a", borderRadius:16, padding:"16px 18px", display:"flex", justifyContent:"space-between", gap:16, alignItems:"center", flexWrap:"wrap" }}>
+              <div>
+                <div style={{ color:"#93c5fd", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>
+                  Student Notification
+                </div>
+                <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>{latestUnreadNotification.title}</div>
+                <div style={{ color:"#9fb4ff", fontSize:13 }}>{latestUnreadNotification.message}</div>
+              </div>
+              {!latestUnreadNotification.read && (
+                <button onClick={() => markNotificationAsRead(latestUnreadNotification.id)} style={{ ...S.btn("default"), color:"#dfe2ff" }}>
+                  Mark Read
+                </button>
+              )}
+            </div>
+          )}
+
+          {portalError && (
+            <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+              {portalError}
+            </div>
+          )}
+
+          <div style={{ background:"radial-gradient(circle at top left, rgba(124,106,247,0.22), rgba(10,10,15,0.98) 50%)", border:"1px solid #25253b", borderRadius:24, padding:"28px 28px 30px", boxShadow:"0 24px 70px rgba(0,0,0,0.32)" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", gap:20, alignItems:"flex-start", flexWrap:"wrap" }}>
+              <div style={{ maxWidth:720 }}>
+                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Live Contest</div>
+                <h1 style={{ margin:"0 0 12px", color:"#f5f6ff", fontFamily:"'Fraunces',serif", fontSize:42, lineHeight:1, letterSpacing:"-0.04em" }}>{contestDisplayName}</h1>
+                <div style={{ color:"#a9aed0", fontSize:15, lineHeight:1.7, marginBottom:18 }}>
+                  Solve the active round, keep your penalty low, and move fast through the curated set of contest problems.
+                </div>
+                <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+                  <div style={{ padding:"10px 14px", borderRadius:14, background:"#0f131c", border:"1px solid #24283a" }}>
+                    <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>Countdown</div>
+                    <div style={{ color:"#eef0ff", fontSize:28, fontWeight:700, lineHeight:1 }}>{formatContestCountdown(contestTimerSeconds)}</div>
+                  </div>
+                  <div style={{ padding:"10px 14px", borderRadius:999, border:`1px solid ${contestStatusTone.border}`, background:contestStatusTone.background, color:contestStatusTone.color, fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
+                    {contestStatus}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gap:12, minWidth:"min(100%, 280px)" }}>
+                <button
+                  onClick={() => handleEnterContest(contestProblems[0])}
+                  disabled={contestStatus === "Ended" || contestStatus === "Awaiting Start"}
+                  style={{
+                    ...S.btn("submit"),
+                    minHeight:52,
+                    minWidth:220,
+                    fontSize:13,
+                    opacity:contestStatus === "Ended" || contestStatus === "Awaiting Start" ? 0.55 : 1,
+                    cursor:contestStatus === "Ended" || contestStatus === "Awaiting Start" ? "not-allowed" : "pointer",
+                    boxShadow:"0 16px 30px rgba(124,106,247,0.28)",
+                  }}
+                >
+                  {contestStatus === "Awaiting Start" ? "Awaiting Admin Start" : contestStatus === "Ended" ? "Contest Ended" : contestEntered ? "Resume Contest" : "Enter Contest"}
+                </button>
+                <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px", color:"#a9aed0", fontSize:14, lineHeight:1.7 }}>
+                  <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>Contest Snapshot</div>
+                  <div>Problems: <span style={{ color:"#f5f6ff" }}>{contestProblems.length}</span></div>
+                  <div>Participants: <span style={{ color:"#f5f6ff" }}>{participantsCount}</span></div>
+                  <div>Duration: <span style={{ color:"#f5f6ff" }}>{activeContestAssignment?.duration || adminCurrentTest.duration} mins</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:20, alignItems:"start" }}>
+            <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:22, overflow:"hidden", boxShadow:"0 18px 40px rgba(0,0,0,0.22)" }}>
+              <div style={{ padding:"20px 22px 16px", borderBottom:"1px solid #1c1d2a" }}>
+                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:8 }}>Problem List</div>
+                <div style={{ color:"#f5f6ff", fontSize:24, fontWeight:700 }}>Contest Problems</div>
+              </div>
+              <div style={{ padding:"0 14px 14px" }}>
+                <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 10px" }}>
+                  <thead>
+                    <tr>
+                      {["Problem Name", "Difficulty", "Status", "Score"].map((heading) => (
+                        <th key={heading} style={{ textAlign:"left", padding:"14px 16px 8px", fontSize:11, color:"#7a7f9e", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:"'Space Grotesk',sans-serif" }}>
+                          {heading}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {contestProblems.map((problem, index) => (
+                      <tr
+                        key={problem.id}
+                        onClick={() => {
+                          if (!contestEntered) {
+                            handleEnterContest(problem);
+                            return;
+                          }
+                          openProblem(problem);
+                        }}
+                        style={{ cursor:"pointer", transition:"transform 0.18s ease, filter 0.18s ease" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = "scale(1.01)";
+                          e.currentTarget.style.filter = "brightness(1.04)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = "scale(1)";
+                          e.currentTarget.style.filter = "none";
+                        }}
+                      >
+                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538", borderLeft:"1px solid #222538", borderRadius:"16px 0 0 16px" }}>
+                          <div style={{ color:"#f5f6ff", fontWeight:700, marginBottom:4 }}>{problem.title}</div>
+                          <div style={{ color:"#7f85a6", fontSize:12 }}>Problem #{problem.id}</div>
+                        </td>
+                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538" }}>
+                          <span style={S.badge(problem.difficulty)}>{problem.difficulty}</span>
+                        </td>
+                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538" }}>
+                          <span style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"8px 10px", borderRadius:999, background:problem.contestStatusMeta.background, border:`1px solid ${problem.contestStatusMeta.border}`, color:problem.contestStatusMeta.color, fontSize:12, fontWeight:700 }}>
+                            <span>{problem.contestStatusMeta.icon}</span>
+                            <span>{problem.contestStatusMeta.label}</span>
+                          </span>
+                        </td>
+                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538", borderRight:"1px solid #222538", borderRadius:"0 16px 16px 0", color:"#73f0b3", fontWeight:700, fontSize:16 }}>
+                          {problem.contestScore}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gap:18 }}>
+              <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:22, padding:"20px 22px", boxShadow:"0 18px 40px rgba(0,0,0,0.22)" }}>
+                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Round Status</div>
+                <div style={{ display:"grid", gap:10, color:"#a9aed0", fontSize:14, lineHeight:1.7 }}>
+                  <div>Contest Name: <span style={{ color:"#eef0ff", fontWeight:700 }}>{contestDisplayName}</span></div>
+                  <div>Time Left: <span style={{ color:"#4fd1c5", fontWeight:700 }}>{formatContestCountdown(contestTimerSeconds)}</span></div>
+                  <div>Status: <span style={{ color:contestStatusTone.color, fontWeight:700 }}>{contestStatus}</span></div>
+                  <div>Joined: <span style={{ color:"#eef0ff", fontWeight:700 }}>{contestEntered ? "Yes" : "Not yet"}</span></div>
+                </div>
+              </div>
+
+              <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:22, padding:"20px 22px", boxShadow:"0 18px 40px rgba(0,0,0,0.22)" }}>
+                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>How Scoring Works</div>
+                <div style={{ display:"grid", gap:10, color:"#a9aed0", fontSize:14, lineHeight:1.7 }}>
+                  <div>Easy problems are quick confidence builders and keep your scoreboard moving.</div>
+                  <div>Medium problems reward balanced speed and accuracy under pressure.</div>
+                  <div>Hard problems swing the leaderboard fastest, but penalty matters.</div>
+                </div>
+              </div>
+
+              <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:22, padding:"20px 22px", boxShadow:"0 18px 40px rgba(0,0,0,0.22)" }}>
+                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Progress</div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(110px, 1fr))", gap:10 }}>
+                  <div style={{ background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 12px" }}>
+                    <div style={{ color:"#73f0b3", fontSize:24, fontWeight:700 }}>{contestProblems.filter((problem) => problem.contestStatusMeta.label === "Solved").length}</div>
+                    <div style={{ color:"#7f85a6", fontSize:12 }}>Solved</div>
+                  </div>
+                  <div style={{ background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 12px" }}>
+                    <div style={{ color:"#ff9b9b", fontSize:24, fontWeight:700 }}>{contestProblems.filter((problem) => problem.contestStatusMeta.label === "Attempted").length}</div>
+                    <div style={{ color:"#7f85a6", fontSize:12 }}>Attempted</div>
+                  </div>
+                  <div style={{ background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 12px" }}>
+                    <div style={{ color:"#ffc86b", fontSize:24, fontWeight:700 }}>{contestProblems.filter((problem) => problem.contestStatusMeta.label === "Not Tried").length}</div>
+                    <div style={{ color:"#7f85a6", fontSize:12 }}>Pending</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (view === "leaderboard") return (
+    <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+      <ScreenShield active={screenShield} message={shieldMessage} />
+      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <nav style={S.nav}>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Problems</span>
+            <span style={S.navBtnHint(false)}>Daily coding practice</span>
+          </button>
+          <button onClick={openContest} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Contest</span>
+            <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
+          </button>
+          <button onClick={()=>openLeaderboard("All")} style={S.navBtn(true)}>
+            <span style={S.navBtnLabel(true)}>Leaderboard</span>
+            <span style={S.navBtnHint(true)}>See the top performers</span>
+          </button>
+          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+            <div style={{ padding:"8px 12px", borderRadius:999, border:"1px solid #273246", background:leaderboardUpdating ? "#111b22" : "#12121a", color:leaderboardUpdating ? "#7ce7ff" : "#8f93b4", fontSize:12, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", transition:"all 0.25s ease" }}>
+              <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", background:leaderboardUpdating ? "#4fd1c5" : "#48506b", marginRight:8, boxShadow:leaderboardUpdating ? "0 0 12px #4fd1c566" : "none" }} />
+              Updating...
+            </div>
+            <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
+          </div>
+        </nav>
+
+        <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:"0 24px", width:"100%" }}>
+          <div
+            style={{
+              background:"radial-gradient(circle at top left, rgba(124,106,247,0.22), rgba(10,10,15,0.98) 52%)",
+              border:"1px solid #25253b",
+              borderRadius:24,
+              padding:"28px 26px 30px",
+              boxShadow:"0 24px 70px rgba(0,0,0,0.32)",
+              opacity:leaderboardReady ? 1 : 0,
+              transform:leaderboardReady ? "translateY(0)" : "translateY(18px)",
+              transition:"opacity 0.45s ease, transform 0.45s ease",
+            }}
+          >
+            <div style={{ display:"flex", justifyContent:"space-between", gap:18, alignItems:"flex-start", flexWrap:"wrap", marginBottom:22 }}>
+              <div>
+                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Live Rankings</div>
+                <h1 style={{ margin:"0 0 10px", color:"#f5f6ff", fontFamily:"'Fraunces',serif", fontSize:42, lineHeight:1, letterSpacing:"-0.04em" }}>Leaderboard Table</h1>
+                <div style={{ color:"#a9aed0", maxWidth:640, fontSize:15, lineHeight:1.7 }}>
+                  Track contest momentum, compare ratings, and see who is climbing in real time across the current round and the broader arena.
+                </div>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(2, minmax(160px, 1fr))", gap:12, minWidth:"min(100%, 360px)" }}>
+                <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px" }}>
+                  <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Current Scope</div>
+                  <div style={{ color:"#eef0ff", fontSize:20, fontWeight:700 }}>{leaderboardScope}</div>
+                </div>
+                <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px" }}>
+                  <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Visible Users</div>
+                  <div style={{ color:"#73f0b3", fontSize:20, fontWeight:700 }}>{leaderboardRows.length}</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", marginBottom:18 }}>
+              <input
+                placeholder="Search username..."
+                value={leaderboardSearch}
+                onChange={(e)=>setLeaderboardSearch(e.target.value)}
+                style={{ flex:1, minWidth:240, background:"#0e1017", border:"1px solid #24283a", borderRadius:12, padding:"12px 14px", color:"#eef0ff", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, outline:"none" }}
+              />
+              <select
+                value={leaderboardScope}
+                onChange={(e)=>setLeaderboardScope(e.target.value)}
+                style={{ minWidth:170, background:"#0e1017", border:"1px solid #24283a", borderRadius:12, padding:"12px 14px", color:"#eef0ff", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, outline:"none", cursor:"pointer" }}
+              >
+                {["All", "This Contest", "Global"].map((scope) => (
+                  <option key={scope} value={scope}>{scope}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ background:"#0d1017", border:"1px solid #202437", borderRadius:22, padding:"14px", boxShadow:"inset 0 1px 0 rgba(255,255,255,0.03)" }}>
+              <div style={{ maxHeight:520, overflowY:"auto", paddingRight:4 }}>
+                <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 10px" }}>
+                  <thead>
+                    <tr>
+                      {["Rank", "User", "Score", "Problems Solved", "Time Penalty"].map((heading) => (
+                        <th
+                          key={heading}
+                          style={{
+                            position:"sticky",
+                            top:0,
+                            zIndex:2,
+                            textAlign:"left",
+                            padding:"0 16px 12px",
+                            fontSize:11,
+                            color:"#7a7f9e",
+                            fontWeight:700,
+                            textTransform:"uppercase",
+                            letterSpacing:"0.12em",
+                            fontFamily:"'Space Grotesk',sans-serif",
+                            background:"#0d1017",
+                          }}
+                        >
+                          {heading}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleLeaderboardRows.length ? visibleLeaderboardRows.map((entry, index) => {
+                      const accent = getLeaderboardAccent(entry.stats.rank);
+                      const submissionLevel = entry.stats.submissionLevel || "No Submission";
+                      const levelMeta = getSubmissionLevelMeta(submissionLevel);
+                      const trend = getTrendMeta(entry.stats.trend);
+                      const isHovered = hoveredLeaderboardRank === entry.username;
+                      const absoluteIndex = ((safeLeaderboardPage - 1) * leaderboardPageSize) + index;
+                      const rowBackground = accent.badge
+                        ? accent.background
+                        : absoluteIndex % 2 === 0
+                          ? "#11131b"
+                          : "#0c0e15";
+                      const baseCellStyle = {
+                        background: rowBackground,
+                        borderTop:`1px solid ${accent.edge}`,
+                        borderBottom:`1px solid ${accent.edge}`,
+                        padding:"16px",
+                        transition:"background 0.2s ease, border-color 0.2s ease",
+                      };
+
+                      return (
+                        <tr
+                          key={`${leaderboardMode}-${entry.userId || entry.username}`}
+                          onMouseEnter={() => setHoveredLeaderboardRank(entry.username)}
+                          onMouseLeave={() => setHoveredLeaderboardRank(null)}
+                          style={{
+                            transform: isHovered ? "scale(1.012)" : "scale(1)",
+                            transition:"transform 0.2s ease, filter 0.2s ease",
+                            filter: isHovered ? "brightness(1.04)" : "none",
+                          }}
+                        >
+                          <td style={{ ...baseCellStyle, borderLeft:`1px solid ${accent.edge}`, borderRadius:"16px 0 0 16px", boxShadow:accent.glow }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:10, color:"#eef0ff", fontWeight:700 }}>
+                              <span style={{ fontSize:18 }}>{accent.badge || "#"}</span>
+                              <div>
+                                <div style={{ color:"#eef0ff", fontSize:18, lineHeight:1 }}>{entry.stats.rank}</div>
+                                <div style={{ color:trend.color, fontSize:12, marginTop:4 }}>{trend.icon} {trend.label}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td style={baseCellStyle}>
+                            <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                              <div style={{ width:42, height:42, borderRadius:"50%", background:`linear-gradient(135deg, ${entry.avatarGradient[0]}, ${entry.avatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#081018", fontWeight:800, fontSize:14, boxShadow:"inset 0 1px 0 rgba(255,255,255,0.25)" }}>
+                                {getAvatarLabel(entry.username)}
+                              </div>
+                              <div>
+                                <div style={{ color:"#f5f6ff", fontSize:15, fontWeight:700 }}>{entry.username}</div>
+                                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginTop:4 }}>
+                                  <span style={{ color:"#8f93b4", fontSize:12 }}>Rating {entry.rating}</span>
+                                  <span style={{ color:levelMeta.color, fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", border:`1px solid ${levelMeta.border}`, background:levelMeta.background, borderRadius:999, padding:"3px 8px" }}>
+                                    {submissionLevel}
+                                  </span>
+                                  <span style={{ color:"#7c6af7", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", border:"1px solid #2f3150", borderRadius:999, padding:"3px 8px" }}>
+                                    {leaderboardScope === "This Contest" ? "Round" : leaderboardScope === "Global" ? "Global" : "All Arena"}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ ...baseCellStyle, color:"#73f0b3", fontWeight:700, fontSize:16 }}>{entry.stats.score}</td>
+                          <td style={{ ...baseCellStyle, color:"#eef0ff", fontWeight:600 }}>{entry.stats.problemsSolved}</td>
+                          <td style={{ ...baseCellStyle, borderRight:`1px solid ${accent.edge}`, borderRadius:"0 16px 16px 0", color:"#dfe2ff", fontWeight:600, boxShadow:accent.glow }}>
+                            {entry.stats.timePenalty}
+                          </td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td colSpan="5" style={{ padding:"38px 18px", textAlign:"center", color:"#8f93b4", background:"#0d1017" }}>
+                          {leaderboardSearch.trim()
+                            ? "No leaderboard entries matched that username."
+                            : "No logged-in students have leaderboard data yet."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {leaderboardPageCount > 1 && (
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginTop:18, flexWrap:"wrap" }}>
+                  <div style={{ color:"#7a7f9e", fontSize:12 }}>
+                    Page {safeLeaderboardPage} of {leaderboardPageCount}
+                  </div>
+                  <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                    <button
+                      onClick={() => setLeaderboardPage((prev) => Math.max(1, prev - 1))}
+                      disabled={safeLeaderboardPage === 1}
+                      style={{ ...S.btn("default"), opacity:safeLeaderboardPage === 1 ? 0.45 : 1 }}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setLeaderboardPage((prev) => Math.min(leaderboardPageCount, prev + 1))}
+                      disabled={safeLeaderboardPage === leaderboardPageCount}
+                      style={{ ...S.btn("default"), opacity:safeLeaderboardPage === leaderboardPageCount ? 0.45 : 1 }}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   
   const p = selectedProblem;
   const consoleHeight = consoleOpen ? 260 : 42;
@@ -2686,7 +5434,7 @@ function CodingPlatform() {
         </div>
       </nav>
 
-      <div style={{ display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 56px)" }}>
+      <div style={{ display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 72px)" }}>
 
         
         <div style={{ width:"42%", display:"flex", flexDirection:"column", borderRight:"1px solid #1e1e2e", overflow:"hidden" }}>
@@ -2875,27 +5623,3 @@ function CodingPlatform() {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<CodingPlatform />);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -1,0 +1,48 @@
+version: '3.8'
+services:
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - hacknet
+
+  redis:
+    image: redis:7
+    command: ["redis-server","--appendonly","yes"]
+    networks:
+      - hacknet
+
+  backend:
+    build: ../backend
+    env_file:
+      - ../backend/.env.example
+    ports:
+      - "4000:4000"
+    depends_on:
+      - mongo
+      - redis
+    networks:
+      - hacknet
+
+  worker:
+    build: ../docker/worker
+    env_file:
+      - ../backend/.env.example
+    depends_on:
+      - redis
+      - mongo
+    networks:
+      - hacknet
+
+  sandbox:
+    build: ../docker/sandbox
+    networks:
+      - hacknet
+
+volumes:
+  mongo-data:
+
+networks:
+  hacknet:
+    driver: bridge

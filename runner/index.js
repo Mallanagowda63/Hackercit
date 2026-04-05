@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,27 @@ import { buildRunnerFiles } from "./templates.js";
 const DOCKER_TIMEOUT_MS = Number(process.env.DOCKER_TIMEOUT_MS || 30000);
 const MEMORY_LIMIT = "128m";
 const CPU_LIMIT = "0.5";
+const DOCKER_BIN = resolveDockerBin();
+
+function resolveDockerBin() {
+  const configured = String(process.env.DOCKER_BIN || "").trim();
+  if (configured) {
+    return configured;
+  }
+
+  if (process.platform === "win32") {
+    const windowsCandidates = [
+      "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+      "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker",
+    ];
+    const found = windowsCandidates.find((candidate) => existsSync(candidate));
+    if (found) {
+      return found;
+    }
+  }
+
+  return "docker";
+}
 
 function makeHttpError(message, statusCode = 400) {
   const error = new Error(message);
@@ -61,7 +83,7 @@ function executeDocker({ image, command, workingDir }) {
       ...command,
     ];
 
-    const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(DOCKER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -87,7 +109,7 @@ function executeDocker({ image, command, workingDir }) {
       settled = true;
 
       if (error.code === "ENOENT") {
-        reject(makeHttpError("Docker is not installed or not available in PATH.", 500));
+        reject(makeHttpError(`Docker CLI was not found. Checked "${DOCKER_BIN}".`, 500));
         return;
       }
 

@@ -1,11 +1,22 @@
-# CodeArena Docker Runner
+# CodeArena Split Architecture
 
-This project now includes a minimal backend API for Docker-based code execution.
+This project now uses a split architecture where the frontend talks to the backend API, and the backend forwards code execution to the Docker runner service.
+
+## Architecture
+
+```text
+Frontend (React Native / Web)
+        ↓
+Backend API (4000)
+        ↓
+Code Runner Service (3000 + Docker)
+```
 
 ## What it does
 
-- Serves the existing frontend
-- Exposes `POST /api/run`
+- Serves the existing web frontend from the runner service
+- Exposes the backend API on port `4000`
+- Forwards `POST /api/run` from the backend to the runner service
 - Runs JavaScript, Python, and Java inside Docker containers
 - Applies basic isolation:
   - `--rm`
@@ -17,13 +28,72 @@ This project now includes a minimal backend API for Docker-based code execution.
 
 1. Install Node.js 20+.
 2. Install Docker Desktop and make sure Linux containers are enabled.
-3. From this folder, run:
+3. Start the runner service from this folder:
 
 ```bash
 npm start
 ```
 
-4. Open `http://127.0.0.1:3000`.
+4. Start the backend API:
+
+```bash
+cd backend
+npm install
+node src/index.js
+```
+
+5. Open `http://127.0.0.1:3000`.
+
+## Deployment Notes
+
+This project is not a frontend-only app. The full flow depends on:
+
+- a backend API on `http://127.0.0.1:4000`
+- a code runner service on `http://127.0.0.1:3000`
+- Docker installed on the deployment machine
+- permission for the runner process to run `docker`
+
+If you deploy only the static files to platforms like Netlify or Vercel static hosting, the frontend may still load, but auth and execution will fail unless the backend API on `:4000` and the runner service on `:3000` are both reachable.
+
+For deployment, you need one of these:
+
+1. A VPS or server where you install:
+   - Node.js
+   - Docker
+   - this project
+
+2. A platform that supports a long-running Node server and Docker access.
+
+3. An external execution service, if your deployment platform does not allow Docker access.
+
+## Health Check
+
+The services now expose:
+
+```text
+GET http://127.0.0.1:3000/api/health
+GET http://127.0.0.1:4000/health
+GET http://127.0.0.1:4000/api/run/health
+```
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "service": "codearena",
+  "dockerRequired": true
+}
+```
+
+## Important Limitation
+
+Most modern frontend hosting platforms do not allow you to run Docker commands from your app server.
+
+So for production deployment:
+
+- if you deploy on your own VM/VPS: this Docker runner approach works
+- if you deploy on a restricted platform: use an external judge API instead of local Docker
 
 ## Docker images used
 
