@@ -3,14 +3,23 @@ const { useState, useRef, useEffect } = React;
 const API_HOST = window.location.hostname || "127.0.0.1";
 const LOCAL_API_PROTOCOL = window.location.protocol === "https:" ? "https:" : "http:";
 const LOCAL_BACKEND_API_BASE = `${LOCAL_API_PROTOCOL}//${API_HOST}:4000`;
-const CONFIGURED_BACKEND_API_BASE = (
+const CONFIGURED_BACKEND_API_BASE_RAW = (
   window.__CODEARENA_CONFIG__?.backendApiBase ||
   document.querySelector('meta[name="codearena-backend-api-base"]')?.content ||
   ""
-).trim().replace(/\/+$/, "");
+).trim();
 const IS_LOCAL_FRONTEND = API_HOST === "127.0.0.1" || API_HOST === "localhost";
-const BACKEND_API_BASE = CONFIGURED_BACKEND_API_BASE || (IS_LOCAL_FRONTEND ? LOCAL_BACKEND_API_BASE : "");
-const BACKEND_API_TARGET = BACKEND_API_BASE || window.location.origin;
+const USES_SAME_ORIGIN_BACKEND = CONFIGURED_BACKEND_API_BASE_RAW.toLowerCase() === "same-origin";
+const CONFIGURED_BACKEND_API_BASE = USES_SAME_ORIGIN_BACKEND
+  ? ""
+  : CONFIGURED_BACKEND_API_BASE_RAW.replace(/\/+$/, "");
+const BACKEND_API_BASE = CONFIGURED_BACKEND_API_BASE_RAW
+  ? CONFIGURED_BACKEND_API_BASE
+  : (IS_LOCAL_FRONTEND ? LOCAL_BACKEND_API_BASE : null);
+const BACKEND_API_TARGET = USES_SAME_ORIGIN_BACKEND
+  ? `${window.location.origin}/api/...`
+  : (BACKEND_API_BASE || "backend API (not configured)");
+const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
 const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, lastLoginAt: null, loginCount: 0 };
 
 async function readJsonSafely(response) {
@@ -20,8 +29,27 @@ async function readJsonSafely(response) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("Backend returned invalid JSON.");
+    const contentType = response.headers.get("content-type") || "unknown content type";
+    const snippet = text.slice(0, 160).replace(/\s+/g, " ").trim();
+
+    if (snippet.startsWith("<")) {
+      throw new Error(
+        `Expected JSON from ${response.url || BACKEND_API_TARGET}, but received HTML. Check the configured backend API URL.`
+      );
+    }
+
+    throw new Error(
+      `Backend returned invalid JSON (${contentType}).${snippet ? ` Response started with: ${snippet}` : ""}`
+    );
   }
+}
+
+function buildBackendApiUrl(path) {
+  if (!BACKEND_API_BASE && BACKEND_API_BASE !== "") {
+    throw new Error(BACKEND_API_CONFIGURATION_ERROR);
+  }
+
+  return `${BACKEND_API_BASE}${path}`;
 }
 
 function createAuthHeaders(token, hasBody = false) {
@@ -2711,7 +2739,7 @@ function CodingPlatform() {
 
   const performApiRequest = async (path, options = {}) => {
     const hasBody = Boolean(options.body);
-    const response = await fetch(`${BACKEND_API_BASE}${path}`, {
+    const response = await fetch(buildBackendApiUrl(path), {
       ...options,
       headers: {
         ...createAuthHeaders(authToken, hasBody),
@@ -3298,7 +3326,7 @@ function CodingPlatform() {
         ? { email, password, name, usn, department, role: authRole }
         : { email, password, role: authRole };
 
-      const response = await fetch(`${BACKEND_API_BASE}${endpoint}`, {
+      const response = await fetch(buildBackendApiUrl(endpoint), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -3436,7 +3464,7 @@ function CodingPlatform() {
       }));
 
     try {
-      const response = await fetch(`${BACKEND_API_BASE}/api/run`, {
+      const response = await fetch(buildBackendApiUrl("/api/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3588,7 +3616,7 @@ function CodingPlatform() {
         beats   = data.beats || beats;
         status  = data.status || status;
       } else {
-        const response = await fetch(`${BACKEND_API_BASE}/api/run`, {
+        const response = await fetch(buildBackendApiUrl("/api/run"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

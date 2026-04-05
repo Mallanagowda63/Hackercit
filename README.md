@@ -50,11 +50,17 @@ The frontend now reads the backend base URL from the `<meta name="codearena-back
 
 - Leave it empty to use:
   - `http://127.0.0.1:4000` when the frontend is opened from `localhost` or `127.0.0.1`
-  - same-origin `/api/...` routes for deployed environments behind a reverse proxy
+  - an explicit configuration error for deployed environments, to avoid silently calling the wrong host
 - Set it explicitly for split deployments, for example:
 
 ```html
 <meta name="codearena-backend-api-base" content="https://your-backend.example.com" />
+```
+
+- Use same-origin only if your deployed host already proxies `/api/...` to the backend:
+
+```html
+<meta name="codearena-backend-api-base" content="same-origin" />
 ```
 
 ## Deployment Notes

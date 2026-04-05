@@ -2,13 +2,28 @@ const { useEffect, useMemo, useState } = React;
 const API_HOST = window.location.hostname || "127.0.0.1";
 const LOCAL_API_PROTOCOL = window.location.protocol === "https:" ? "https:" : "http:";
 const LOCAL_BACKEND_API_BASE = `${LOCAL_API_PROTOCOL}//${API_HOST}:4000`;
-const CONFIGURED_BACKEND_API_BASE = (
+const CONFIGURED_BACKEND_API_BASE_RAW = (
   window.__CODEARENA_CONFIG__?.backendApiBase ||
   document.querySelector('meta[name="codearena-backend-api-base"]')?.content ||
   ""
-).trim().replace(/\/+$/, "");
+).trim();
 const IS_LOCAL_FRONTEND = API_HOST === "127.0.0.1" || API_HOST === "localhost";
-const BACKEND_API_BASE = CONFIGURED_BACKEND_API_BASE || (IS_LOCAL_FRONTEND ? LOCAL_BACKEND_API_BASE : "");
+const USES_SAME_ORIGIN_BACKEND = CONFIGURED_BACKEND_API_BASE_RAW.toLowerCase() === "same-origin";
+const CONFIGURED_BACKEND_API_BASE = USES_SAME_ORIGIN_BACKEND
+  ? ""
+  : CONFIGURED_BACKEND_API_BASE_RAW.replace(/\/+$/, "");
+const BACKEND_API_BASE = CONFIGURED_BACKEND_API_BASE_RAW
+  ? CONFIGURED_BACKEND_API_BASE
+  : (IS_LOCAL_FRONTEND ? LOCAL_BACKEND_API_BASE : null);
+const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
+
+function buildBackendApiUrl(path) {
+  if (!BACKEND_API_BASE && BACKEND_API_BASE !== "") {
+    throw new Error(BACKEND_API_CONFIGURATION_ERROR);
+  }
+
+  return `${BACKEND_API_BASE}${path}`;
+}
 
 function AdminPortal({
   problems = [],
@@ -163,7 +178,7 @@ function AdminPortal({
     setExecution(null);
 
     try {
-      const response = await fetch(`${BACKEND_API_BASE}/api/run`, {
+      const response = await fetch(buildBackendApiUrl("/api/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -175,7 +190,18 @@ function AdminPortal({
       });
 
       const text = await response.text();
-      const data = text ? JSON.parse(text) : {};
+      let data = {};
+
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        const snippet = text.slice(0, 160).replace(/\s+/g, " ").trim();
+        throw new Error(
+          snippet.startsWith("<")
+            ? "Expected JSON from the configured backend API, but received HTML. Check the deployed backend URL."
+            : `Backend returned invalid JSON.${snippet ? ` Response started with: ${snippet}` : ""}`
+        );
+      }
 
       if (!response.ok) {
         throw new Error(data.error || "Execution failed.");
