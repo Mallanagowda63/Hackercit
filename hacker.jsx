@@ -1,8 +1,16 @@
 const { useState, useRef, useEffect } = React;
 
-const API_PROTOCOL = window.location.protocol === "https:" ? "https:" : "http:";
 const API_HOST = window.location.hostname || "127.0.0.1";
-const BACKEND_API_BASE = `${API_PROTOCOL}//${API_HOST}:4000`;
+const LOCAL_API_PROTOCOL = window.location.protocol === "https:" ? "https:" : "http:";
+const LOCAL_BACKEND_API_BASE = `${LOCAL_API_PROTOCOL}//${API_HOST}:4000`;
+const CONFIGURED_BACKEND_API_BASE = (
+  window.__CODEARENA_CONFIG__?.backendApiBase ||
+  document.querySelector('meta[name="codearena-backend-api-base"]')?.content ||
+  ""
+).trim().replace(/\/+$/, "");
+const IS_LOCAL_FRONTEND = API_HOST === "127.0.0.1" || API_HOST === "localhost";
+const BACKEND_API_BASE = CONFIGURED_BACKEND_API_BASE || (IS_LOCAL_FRONTEND ? LOCAL_BACKEND_API_BASE : "");
+const BACKEND_API_TARGET = BACKEND_API_BASE || window.location.origin;
 const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, lastLoginAt: null, loginCount: 0 };
 
 async function readJsonSafely(response) {
@@ -3346,7 +3354,7 @@ function CodingPlatform() {
       const message = String(error?.message || "");
       setAuthError(
         message.includes("Failed to fetch")
-          ? `Cannot reach backend API at ${BACKEND_API_BASE}. Start the backend on port 4000 and try again.`
+          ? `Cannot reach backend API at ${BACKEND_API_TARGET}. Make sure the backend is running and reachable, then try again.`
           : message || "Unable to complete authentication right now."
       );
     } finally {
@@ -3599,7 +3607,7 @@ function CodingPlatform() {
           const snippet = responseText.slice(0, 160).replace(/\s+/g, " ").trim();
           throw new Error(
             snippet.startsWith("<")
-              ? "Deployment returned HTML instead of JSON. Make sure the frontend calls the backend API on port 4000, and that backend forwards to the runner service on port 3000."
+              ? "Deployment returned HTML instead of JSON. Make sure the frontend points to the correct backend API and that /api/run returns JSON."
               : `Execution API returned invalid JSON. Response started with: ${snippet || "empty response"}`
           );
         }
@@ -3621,7 +3629,7 @@ function CodingPlatform() {
         status = results.every(r => r.status === "pass") ? "passed" : "failed";
       } else {
           const deploymentHint = !isSubmit && error.message.includes("returned HTML instead of JSON")
-          ? " This usually means the frontend is not reaching the backend API on port 4000 correctly."
+          ? " This usually means the frontend is not reaching the configured backend API correctly."
           : "";
         results = p.testCases.map((tc, i) => ({
           ...tc,

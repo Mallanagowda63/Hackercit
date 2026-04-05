@@ -44,6 +44,19 @@ node src/index.js
 
 5. Open `http://127.0.0.1:3000`.
 
+## Frontend Backend Configuration
+
+The frontend now reads the backend base URL from the `<meta name="codearena-backend-api-base">` tag in `index.html`.
+
+- Leave it empty to use:
+  - `http://127.0.0.1:4000` when the frontend is opened from `localhost` or `127.0.0.1`
+  - same-origin `/api/...` routes for deployed environments behind a reverse proxy
+- Set it explicitly for split deployments, for example:
+
+```html
+<meta name="codearena-backend-api-base" content="https://your-backend.example.com" />
+```
+
 ## Deployment Notes
 
 This project is not a frontend-only app. The full flow depends on:

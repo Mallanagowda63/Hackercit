@@ -1,7 +1,14 @@
 const { useEffect, useMemo, useState } = React;
-const API_PROTOCOL = window.location.protocol === "https:" ? "https:" : "http:";
 const API_HOST = window.location.hostname || "127.0.0.1";
-const BACKEND_API_BASE = `${API_PROTOCOL}//${API_HOST}:4000`;
+const LOCAL_API_PROTOCOL = window.location.protocol === "https:" ? "https:" : "http:";
+const LOCAL_BACKEND_API_BASE = `${LOCAL_API_PROTOCOL}//${API_HOST}:4000`;
+const CONFIGURED_BACKEND_API_BASE = (
+  window.__CODEARENA_CONFIG__?.backendApiBase ||
+  document.querySelector('meta[name="codearena-backend-api-base"]')?.content ||
+  ""
+).trim().replace(/\/+$/, "");
+const IS_LOCAL_FRONTEND = API_HOST === "127.0.0.1" || API_HOST === "localhost";
+const BACKEND_API_BASE = CONFIGURED_BACKEND_API_BASE || (IS_LOCAL_FRONTEND ? LOCAL_BACKEND_API_BASE : "");
 
 function AdminPortal({
   problems = [],
