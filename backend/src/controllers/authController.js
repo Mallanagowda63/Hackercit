@@ -117,6 +117,51 @@ function isDatabaseConnectionError(error) {
   );
 }
 
+function getDatabaseConnectionErrorMessage(error) {
+  const message = String(error?.message || '');
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes('set database_url or mongodb_uri')) {
+    return 'database connection failed: missing DATABASE_URL or MONGODB_URI on the deployed backend';
+  }
+
+  if (
+    normalized.includes('authentication failed')
+    || normalized.includes('auth failed')
+    || normalized.includes('scram')
+    || normalized.includes('bad auth')
+  ) {
+    return 'database connection failed: invalid MongoDB credentials';
+  }
+
+  if (
+    normalized.includes('enotfound')
+    || normalized.includes('econnrefused')
+    || normalized.includes('unreachable network')
+    || normalized.includes('timed out')
+    || normalized.includes('server selection')
+    || normalized.includes('failed to connect')
+    || normalized.includes('getaddrinfo')
+  ) {
+    return 'database connection failed: backend could not reach MongoDB. Check Atlas network access and the connection string host list.';
+  }
+
+  if (
+    normalized.includes('mongoparseerror')
+    || normalized.includes('invalid scheme')
+    || normalized.includes('invalid connection string')
+    || normalized.includes('uri malformed')
+  ) {
+    return 'database connection failed: invalid MongoDB connection string';
+  }
+
+  return 'database connection failed';
+}
+
+function sendDatabaseConnectionError(res, error) {
+  return res.status(503).json({ error: getDatabaseConnectionErrorMessage(error) });
+}
+
 exports.register = async (req, res) => {
   const { email, password, name, role, usn, department } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'email+password required' });
@@ -178,7 +223,7 @@ exports.register = async (req, res) => {
       return res.status(409).json({ error: 'account data already exists' });
     }
     if (isDatabaseConnectionError(err)) {
-      return res.status(503).json({ error: 'database connection failed' });
+      return sendDatabaseConnectionError(res, err);
     }
     return res.status(500).json({ error: 'server error' });
   }
@@ -196,7 +241,7 @@ exports.verifyEmail = async (req, res) => {
   } catch (err) {
     console.error(err);
     if (isDatabaseConnectionError(err)) {
-      return res.status(503).json({ error: 'database connection failed' });
+      return sendDatabaseConnectionError(res, err);
     }
     return res.status(500).json({ error: 'server error' });
   }
@@ -230,6 +275,9 @@ exports.login = async (req, res) => {
     return res.json({ token, user: serializeUser(updatedUser) });
   } catch (err) {
     console.error(err);
+    if (isDatabaseConnectionError(err)) {
+      return sendDatabaseConnectionError(res, err);
+    }
     return res.status(500).json({ error: 'server error' });
   }
 };
@@ -288,7 +336,7 @@ exports.listStudents = async (req, res) => {
   } catch (err) {
     console.error(err);
     if (isDatabaseConnectionError(err)) {
-      return res.status(503).json({ error: 'database connection failed' });
+      return sendDatabaseConnectionError(res, err);
     }
     return res.status(500).json({ error: 'server error' });
   }
@@ -305,7 +353,7 @@ exports.listLoginEvents = async (req, res) => {
   } catch (err) {
     console.error(err);
     if (isDatabaseConnectionError(err)) {
-      return res.status(503).json({ error: 'database connection failed' });
+      return sendDatabaseConnectionError(res, err);
     }
     return res.status(500).json({ error: 'server error' });
   }

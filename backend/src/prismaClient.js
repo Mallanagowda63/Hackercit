@@ -1,9 +1,20 @@
 const { MongoClient, ObjectId } = require('mongodb');
 
+function normalizeConnectionString(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+
+  const hasMatchingDoubleQuotes = trimmed.startsWith('"') && trimmed.endsWith('"');
+  const hasMatchingSingleQuotes = trimmed.startsWith("'") && trimmed.endsWith("'");
+  return hasMatchingDoubleQuotes || hasMatchingSingleQuotes
+    ? trimmed.slice(1, -1)
+    : trimmed;
+}
+
 const DATABASE_URL = (
-  process.env.DATABASE_URL
-  || process.env.MONGODB_URI
-  || process.env.MONGO_URL
+  normalizeConnectionString(process.env.DATABASE_URL)
+  || normalizeConnectionString(process.env.MONGODB_URI)
+  || normalizeConnectionString(process.env.MONGO_URL)
   || 'mongodb://127.0.0.1:27017/hackercit'
 );
 const IS_LOCAL_DATABASE_URL = DATABASE_URL === 'mongodb://127.0.0.1:27017/hackercit';
