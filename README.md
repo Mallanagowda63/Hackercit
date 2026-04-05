@@ -56,7 +56,7 @@ The frontend now defaults to same-origin API calls through this tag in `index.ht
   - the runner on `http://127.0.0.1:3000` proxies auth/problem/test/submission APIs to the backend on `http://127.0.0.1:4000`
   - `/api/run` still executes through the runner service on `:3000`
 - Vercel deployment:
-  - `/api/*` is served by `api/[...path].js`, which reuses the backend Express app on the same host
+  - `/api/*` is served by `api/index.js`, which reuses the backend Express app on the same host
 - Split deployment:
   - if you host the backend somewhere else, set an explicit backend URL instead:
 
@@ -74,6 +74,16 @@ This project is not a frontend-only app. The full flow depends on:
 - permission for the runner process to run `docker`
 
 If you deploy this repo to Vercel, the frontend and `/api/*` can share the same host. You still need to provide the backend environment variables and a reachable code runner URL.
+
+Required backend env vars for hosted auth:
+
+- `DATABASE_URL` or `MONGODB_URI`
+- `JWT_SECRET`
+- `FRONTEND_URL`
+
+Required if you want code execution:
+
+- `CODE_RUNNER_URL`
 
 For deployment, you need one of these:
 

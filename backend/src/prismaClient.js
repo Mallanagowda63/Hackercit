@@ -1,6 +1,12 @@
 const { MongoClient, ObjectId } = require('mongodb');
 
-const DATABASE_URL = process.env.DATABASE_URL || 'mongodb://127.0.0.1:27017/hackercit';
+const DATABASE_URL = (
+  process.env.DATABASE_URL
+  || process.env.MONGODB_URI
+  || process.env.MONGO_URL
+  || 'mongodb://127.0.0.1:27017/hackercit'
+);
+const IS_LOCAL_DATABASE_URL = DATABASE_URL === 'mongodb://127.0.0.1:27017/hackercit';
 
 let clientPromise = null;
 let mongoClient = null;
@@ -222,6 +228,10 @@ function applyUpdate(document, data) {
 
 async function getDb() {
   if (!clientPromise) {
+    if ((process.env.VERCEL || process.env.NODE_ENV === 'production') && IS_LOCAL_DATABASE_URL) {
+      throw new Error('database connection failed: set DATABASE_URL or MONGODB_URI for the deployed backend');
+    }
+
     mongoClient = new MongoClient(DATABASE_URL);
     clientPromise = mongoClient.connect().then(async (client) => {
       const db = client.db(extractDatabaseName(DATABASE_URL));
