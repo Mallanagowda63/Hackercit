@@ -108,12 +108,21 @@ function getDuplicateField(error) {
 
 function isDatabaseConnectionError(error) {
   const message = String(error?.message || '');
+  const normalizedMessage = message.toLowerCase();
+  const errorName = String(error?.name || '').toLowerCase();
   return (
-    message.includes('database connection')
-    || message.includes('querySrv')
-    || message.includes('ECONNREFUSED')
-    || message.includes('ENOTFOUND')
-    || message.includes('Mongo')
+    normalizedMessage.includes('database connection')
+    || normalizedMessage.includes('querysrv')
+    || normalizedMessage.includes('econnrefused')
+    || normalizedMessage.includes('enotfound')
+    || normalizedMessage.includes('mongodb')
+    || normalizedMessage.includes('mongo')
+    || normalizedMessage.includes('invalid scheme')
+    || normalizedMessage.includes('invalid connection string')
+    || normalizedMessage.includes('uri malformed')
+    || normalizedMessage.includes('server selection')
+    || normalizedMessage.includes('failed to connect')
+    || errorName.includes('mongo')
   );
 }
 
