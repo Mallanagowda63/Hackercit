@@ -1,9 +1,5 @@
 const prisma = require('../prismaClient');
-
-const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-const RUNNER_URL = process.env.CODE_RUNNER_URL || 'http://127.0.0.1:3000';
-const RUNNER_TIMEOUT_MS = Number(process.env.RUNNER_TIMEOUT_MS || 45000);
-let execQueue = null;
+const { executeSubmission } = require('../lib/executionService');
 const LEVEL_LABELS = {
   0: 'No Submission',
   1: 'Easy',
@@ -20,53 +16,6 @@ const AVATAR_GRADIENTS = [
   ['#11998e', '#38ef7d'],
   ['#f2994a', '#f2c94c'],
 ];
-
-function getExecQueue() {
-  if (!execQueue) {
-    const Queue = require('bull');
-    execQueue = new Queue('exec', redisUrl);
-  }
-
-  return execQueue;
-}
-
-function buildRunnerEndpoint(pathname) {
-  const base = RUNNER_URL.endsWith('/') ? RUNNER_URL : `${RUNNER_URL}/`;
-  return new URL(pathname.replace(/^\//, ''), base).toString();
-}
-
-async function executeRunner(payload) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), RUNNER_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(buildRunnerEndpoint('/api/run'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload || {}),
-      signal: controller.signal,
-    });
-
-    const text = await response.text();
-    let data = {};
-
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error('Code runner returned invalid JSON.');
-      }
-    }
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Execution failed.');
-    }
-
-    return data;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 function parseRuntimeMs(runtime) {
   const match = String(runtime || '').match(/(\d+)/);
@@ -334,19 +283,53 @@ async function resolveProblem(problemId) {
 }
 
 exports.runSample = async (req, res) => {
-  // runs code against sample tests (fast path)
-  const { problemId, language, code, customInput } = req.body;
-  const submission = await prisma.submission.create({ data: {
-    userId: req.user.id,
-    problemId,
-    language,
-    code,
-    status: 'PENDING'
-  }});
+  try {
+    const { problemId, language, code, customInput } = req.body;
+    if (!problemId || !language || !code) {
+      return res.status(400).json({ error: 'problemId, language, and code are required' });
+    }
 
-  // enqueue for execution worker
-  await getExecQueue().add({ submissionId: submission.id, runHidden: false, customInput });
-  res.json({ submissionId: submission.id, status: 'queued' });
+    const problem = await resolveProblem(problemId);
+    if (!problem) {
+      return res.status(404).json({ error: 'problem not found' });
+    }
+
+    const execution = await executeSubmission({
+      language,
+      sourceCode: code,
+      fnName: problem.fnName,
+      testCases: Array.isArray(problem.testCases) ? problem.testCases : [],
+      input: customInput || '',
+    });
+    const tests = Array.isArray(execution.tests) ? execution.tests : [];
+    const storedStatus = resolveSubmissionStatus(tests);
+    const submission = await prisma.submission.create({
+      data: {
+        userId: req.user.id,
+        problemId: problem.id,
+        language,
+        code,
+        status: storedStatus,
+        results: tests,
+        timeMs: parseRuntimeMs(execution.runtime),
+      },
+    });
+
+    return res.json({
+      submissionId: submission.id,
+      submission,
+      passed: Boolean(execution.passed),
+      status: execution.status || (storedStatus === 'ACCEPTED' ? 'passed' : 'failed'),
+      tests,
+      runtime: execution.runtime || 'N/A',
+      memory: execution.memory || 'N/A',
+      beats: execution.beats || 'N/A',
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 502).json({
+      error: error.message || 'Execution failed.',
+    });
+  }
 };
 
 exports.submit = async (req, res) => {
@@ -361,7 +344,7 @@ exports.submit = async (req, res) => {
       return res.status(404).json({ error: 'problem not found' });
     }
 
-    const execution = await executeRunner({
+    const execution = await executeSubmission({
       language,
       sourceCode: code,
       fnName: problem.fnName,
@@ -391,7 +374,7 @@ exports.submit = async (req, res) => {
       beats: execution.beats || 'N/A',
     });
   } catch (error) {
-    return res.status(502).json({
+    return res.status(error.statusCode || 502).json({
       error: error.message || 'Unable to save submission right now.',
     });
   }

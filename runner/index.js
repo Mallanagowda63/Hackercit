@@ -1,39 +1,37 @@
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { buildRunnerFiles } from "./templates.js";
 
-const DOCKER_TIMEOUT_MS = Number(process.env.DOCKER_TIMEOUT_MS || 30000);
-const MEMORY_LIMIT = "128m";
-const CPU_LIMIT = "0.5";
-const DOCKER_BIN = resolveDockerBin();
-
-function resolveDockerBin() {
-  const configured = String(process.env.DOCKER_BIN || "").trim();
-  if (configured) {
-    return configured;
-  }
-
-  if (process.platform === "win32") {
-    const windowsCandidates = [
-      "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
-      "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker",
-    ];
-    const found = windowsCandidates.find((candidate) => existsSync(candidate));
-    if (found) {
-      return found;
-    }
-  }
-
-  return "docker";
-}
+const JUDGE0_URL = String(process.env.JUDGE0_URL || "https://ce.judge0.com").replace(/\/+$/, "");
+const JUDGE0_TIMEOUT_MS = Number(process.env.JUDGE0_TIMEOUT_MS || process.env.RUNNER_TIMEOUT_MS || 45000);
+const JUDGE0_AUTH_TOKEN = String(process.env.JUDGE0_AUTH_TOKEN || "").trim();
+const JUDGE0_AUTH_USER = String(process.env.JUDGE0_AUTH_USER || "").trim();
+const JUDGE0_LANGUAGE_IDS = Object.freeze({
+  javascript: Number(process.env.JUDGE0_LANGUAGE_ID_JAVASCRIPT || 63),
+  python: Number(process.env.JUDGE0_LANGUAGE_ID_PYTHON || 71),
+  java: Number(process.env.JUDGE0_LANGUAGE_ID_JAVA || 62),
+});
 
 function makeHttpError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function safeJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function isDirectJudge0Payload(payload) {
+  return Boolean(
+    payload
+      && typeof payload === "object"
+      && typeof payload.code === "string"
+      && payload.code.trim()
+      && Number.isFinite(Number(payload.language_id)),
+  );
 }
 
 function validatePayload(payload) {
@@ -45,6 +43,10 @@ function validatePayload(payload) {
 
   if (!["javascript", "python", "java"].includes(language)) {
     throw makeHttpError("Unsupported language.");
+  }
+
+  if (!Number.isFinite(JUDGE0_LANGUAGE_IDS[language])) {
+    throw makeHttpError(`Judge0 language id is not configured for "${language}".`, 500);
   }
 
   if (typeof sourceCode !== "string" || !sourceCode.trim()) {
@@ -60,127 +62,181 @@ function validatePayload(payload) {
   }
 }
 
-function normalizeVolumePath(filePath) {
-  return filePath.replace(/\\/g, "/");
-}
-
-function executeDocker({ image, command, workingDir }) {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "--memory",
-      MEMORY_LIMIT,
-      "--cpus",
-      CPU_LIMIT,
-      "-v",
-      `${normalizeVolumePath(workingDir)}:/workspace`,
-      "-w",
-      "/workspace",
-      image,
-      ...command,
-    ];
-
-    const child = spawn(DOCKER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill();
-      reject(makeHttpError("Execution timed out.", 408));
-    }, DOCKER_TIMEOUT_MS);
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      if (settled) return;
-      settled = true;
-
-      if (error.code === "ENOENT") {
-        reject(makeHttpError(`Docker CLI was not found. Checked "${DOCKER_BIN}".`, 500));
-        return;
-      }
-
-      reject(makeHttpError(error.message || "Failed to start Docker.", 500));
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (settled) return;
-      settled = true;
-
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-function safeJsonParse(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
+function replaceOrThrow(source, searchValue, replaceValue, language) {
+  const updated = source.replace(searchValue, replaceValue);
+  if (updated === source) {
+    throw makeHttpError(`Unable to prepare ${language} code for Judge0 execution.`, 500);
   }
+
+  return updated;
 }
 
-export async function runSubmission(payload) {
-  validatePayload(payload);
+function buildExecutionSource(payload) {
+  const runner = buildRunnerFiles(payload);
+  const mainFile = Array.isArray(runner.files) ? runner.files[0] : null;
 
-  const tempRoot = join(os.tmpdir(), "codearena");
-  await mkdir(tempRoot, { recursive: true });
-  const workingDir = await mkdtemp(join(tempRoot, "run-"));
+  if (!mainFile?.content) {
+    throw makeHttpError("Runner source was not generated.", 500);
+  }
+
+  if (payload.language === "javascript") {
+    return replaceOrThrow(
+      mainFile.content,
+      'require("node:fs").writeFileSync("results.json", JSON.stringify({ tests }, null, 2));',
+      'process.stdout.write(JSON.stringify({ tests }));',
+      "javascript",
+    );
+  }
+
+  if (payload.language === "python") {
+    return replaceOrThrow(
+      mainFile.content,
+      /with open\("results\.json", "w", encoding="utf-8"\) as file:\n\s+json\.dump\(\{"tests": tests\}, file, indent=2\)/,
+      'print(json.dumps({"tests": tests}, separators=(",", ":")))',
+      "python",
+    );
+  }
+
+  if (payload.language === "java") {
+    return replaceOrThrow(
+      mainFile.content,
+      'Files.writeString(Path.of("results.json"), "{\\"tests\\":[" + String.join(",", tests) + "]}");',
+      'System.out.print("{\\"tests\\":[" + String.join(",", tests) + "]}");',
+      "java",
+    );
+  }
+
+  return mainFile.content;
+}
+
+function buildJudge0Headers() {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  if (JUDGE0_AUTH_TOKEN) {
+    headers["X-Auth-Token"] = JUDGE0_AUTH_TOKEN;
+  }
+
+  if (JUDGE0_AUTH_USER) {
+    headers["X-Auth-User"] = JUDGE0_AUTH_USER;
+  }
+
+  return headers;
+}
+
+async function postToJudge0({ sourceCode, languageId, stdin = "" }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), JUDGE0_TIMEOUT_MS);
 
   try {
-    const runner = buildRunnerFiles(payload);
-
-    await Promise.all(
-      runner.files.map((file) => writeFile(join(workingDir, file.name), file.content, "utf8")),
-    );
-
-    const startedAt = Date.now();
-    const execution = await executeDocker({
-      image: runner.image,
-      command: runner.command,
-      workingDir,
+    const response = await fetch(`${JUDGE0_URL}/submissions?base64_encoded=false&wait=true`, {
+      method: "POST",
+      headers: buildJudge0Headers(),
+      body: JSON.stringify({
+        source_code: sourceCode,
+        language_id: languageId,
+        stdin,
+      }),
+      signal: controller.signal,
     });
-    const runtime = `${Date.now() - startedAt} ms`;
 
-    const outputFile = join(workingDir, "results.json");
-    let parsed = null;
+    const text = await response.text();
+    const data = text ? safeJsonParse(text) : {};
 
-    if (execution.code === 0) {
-      const fileText = await readFile(outputFile, "utf8");
-      parsed = safeJsonParse(fileText);
+    if (!data) {
+      throw makeHttpError("Judge0 returned invalid JSON.", 502);
     }
 
-    if (!parsed) {
+    if (!response.ok) {
       throw makeHttpError(
-        execution.stderr.trim() || execution.stdout.trim() || "Runner did not produce valid results.",
-        400,
+        data.error || data.message || `Judge0 request failed with status ${response.status}.`,
+        response.status >= 400 && response.status < 600 ? response.status : 502,
       );
     }
 
-    return {
-      passed: parsed.tests.every((test) => test.status === "pass"),
-      status: parsed.tests.every((test) => test.status === "pass") ? "passed" : "failed",
-      tests: parsed.tests,
-      runtime,
-      memory: "Docker-limited",
-      beats: "N/A",
-      stderr: execution.stderr.trim(),
-    };
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw makeHttpError("Judge0 execution timed out.", 504);
+    }
+
+    if (error.statusCode) {
+      throw error;
+    }
+
+    throw makeHttpError(error.message || "Unable to reach Judge0.", 502);
   } finally {
-    await rm(workingDir, { recursive: true, force: true });
+    clearTimeout(timer);
   }
+}
+
+function formatRuntime(data) {
+  const seconds = Number(data?.time);
+  if (!Number.isFinite(seconds)) {
+    return "N/A";
+  }
+
+  return `${Math.max(1, Math.round(seconds * 1000))} ms`;
+}
+
+function formatMemory(data) {
+  const memory = Number(data?.memory);
+  if (!Number.isFinite(memory)) {
+    return "N/A";
+  }
+
+  return `${memory} KB`;
+}
+
+function extractJudge0Failure(data) {
+  return [
+    data?.compile_output,
+    data?.stderr,
+    data?.message,
+    data?.status?.description,
+  ]
+    .map((value) => String(value || "").trim())
+    .find(Boolean) || "Execution failed.";
+}
+
+function normalizeExecutionResult(parsed, execution) {
+  const tests = Array.isArray(parsed?.tests) ? parsed.tests : null;
+
+  if (!tests) {
+    throw makeHttpError(extractJudge0Failure(execution), 400);
+  }
+
+  const passed = tests.every((test) => test.status === "pass");
+
+  return {
+    passed,
+    status: passed ? "passed" : "failed",
+    tests,
+    runtime: formatRuntime(execution),
+    memory: formatMemory(execution),
+    beats: "N/A",
+    stderr: [execution?.stderr, execution?.compile_output].map((value) => String(value || "").trim()).filter(Boolean).join("\n"),
+  };
+}
+
+export async function runSubmission(payload) {
+  if (isDirectJudge0Payload(payload)) {
+    return postToJudge0({
+      sourceCode: payload.code,
+      languageId: Number(payload.language_id),
+      stdin: payload.input || "",
+    });
+  }
+
+  validatePayload(payload);
+
+  const execution = await postToJudge0({
+    sourceCode: buildExecutionSource(payload),
+    languageId: JUDGE0_LANGUAGE_IDS[payload.language],
+    stdin: payload.input || payload.stdin || payload.customInput || "",
+  });
+  const parsed = safeJsonParse(String(execution.stdout || "").trim());
+
+  return normalizeExecutionResult(parsed, execution);
 }

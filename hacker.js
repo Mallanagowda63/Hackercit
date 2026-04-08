@@ -116,14 +116,15 @@ createServer(async (req, res) => {
     sendJson(res, 200, {
       ok: true,
       service: "codearena",
-      dockerRequired: true,
+      executionProvider: "Judge0",
+      judge0Url: (process.env.JUDGE0_URL || "https://ce.judge0.com").replace(/\/+$/, ""),
       host,
       port,
     });
     return;
   }
 
-  if (req.method === "POST" && pathname === "/api/run") {
+  if (req.method === "POST" && (pathname === "/api/run" || pathname === "/run")) {
     try {
       const payload = await readJsonBody(req);
       const result = await runSubmission(payload);

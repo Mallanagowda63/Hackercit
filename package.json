@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:netlify": "node scripts/build-netlify.mjs",
     "dev": "node hacker.js",
     "postinstall": "npm install --prefix backend",
     "start": "node hacker.js"
   },
   "dependencies": {
-    "mongodb": "^7.1.1"
+    "mongodb": "^7.1.1",
+    "serverless-http": "^4.0.0"
   }
 }

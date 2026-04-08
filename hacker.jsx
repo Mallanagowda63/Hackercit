@@ -4625,7 +4625,7 @@ function CodingPlatform() {
                     {adminExecuting ? "Running..." : "Run Code"}
                   </button>
                   <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, alignSelf:"center" }}>
-                    Execution uses the current backend runner now. For cloud Judge0 deployment, a Judge0 endpoint and API key are still needed.
+                    Execution uses the current backend runner, now powered by Judge0.
                   </div>
                 </div>
 
@@ -5641,7 +5641,7 @@ function CodingPlatform() {
               <option value="java">Java</option>
             </select>
             <span style={{ fontSize:11, color: lang==="javascript"?"#4ade8077":"#ffc01e77" }}>
-              {lang==="javascript"?"Docker + Browser Fallback":"Docker Execution"}
+              {lang==="javascript"?"Judge0 + Browser Fallback":"Judge0 Execution"}
             </span>
             <div style={{ marginLeft:"auto" }}>
               <button onClick={()=>setCode(p.starterCode[lang])} style={{ background:"none", border:"1px solid #2a2a3e", color:"#555", padding:"4px 12px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Reset</button>

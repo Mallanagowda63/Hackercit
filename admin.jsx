@@ -496,7 +496,7 @@ function AdminPortal({
                   {executing ? "Running..." : "Run Code"}
                 </button>
                 <div style={{ color: "var(--text-muted)", fontSize: 13, alignSelf: "center" }}>
-                  Uses the current `/api/run` backend. Replace that backend with Judge0 later if you want hosted execution.
+                  Uses the current `/api/run` backend, now backed by Judge0 for hosted execution.
                 </div>
               </div>
 

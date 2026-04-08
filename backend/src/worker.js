@@ -14,7 +14,8 @@ execQueue.process(async (job, done) => {
 
     await prisma.submission.update({ where: { id: submissionId }, data: { status: 'RUNNING' } });
 
-    // For demo: write code to a temp file and run with node (only for JS). In prod, call Docker sandbox service.
+    // Legacy worker path kept for local experiments. The deployed `/api/run`
+    // and submission routes now execute through Judge0 directly.
     const tmpFile = `/tmp/${submissionId}.js`;
     const code = sub.code;
     const fs = require('fs');

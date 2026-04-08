@@ -6,7 +6,7 @@ Tech choices
 - Node.js + Express: fast to iterate, great NPM ecosystem, good for JSON APIs and workers.
 - MongoDB native driver: direct document access without Prisma setup or replica-set requirements.
 - Redis + Bull: job queue for execution worker.
-- Docker Compose: containerized services for local/dev.
+- Direct Judge0 execution for code runs and submissions.
 
 Quick start (after cloning)
 
@@ -17,14 +17,21 @@ cp backend/.env.example backend/.env
 # update values as needed
 ```
 
-2. Build and run with docker compose (recommended):
+2. Start the frontend/static server from the repo root:
 
 ```bash
-cd docker
-docker-compose up --build
+npm start
 ```
 
-3. Optionally verify the backend can reach MongoDB:
+3. Start the backend API:
+
+```bash
+cd backend
+npm install
+node src/index.js
+```
+
+4. Optionally verify the backend can reach MongoDB:
 
 ```bash
 cd backend
@@ -32,6 +39,6 @@ npm run db:check
 ```
 
 Notes
-- Worker currently runs untrusted JS in a simple exec wrapper for demo. Replace with a hardened Docker sandbox for production.
+- The `/api/run` flow and submission execution now call Judge0 directly.
 - Configure SMTP env for real email delivery.
 - Add rate-limiting, input validation, and helmet for production readiness.
