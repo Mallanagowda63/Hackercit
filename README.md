@@ -33,17 +33,11 @@ node src/index.js
 
 ## Deployment
 
-This repo is set up for Netlify deployment.
+This repo includes the app code, backend API, and Judge0-based execution flow.
 
 - The frontend is served as static files.
-- `/api/*` is handled by the Netlify function wrapper.
+- The backend exposes the API routes.
 - The backend calls Judge0 directly for `/api/run` and submission execution.
-
-Netlify files in this repo:
-
-- `netlify.toml`
-- `netlify/functions/api.mjs`
-- `npm run build:netlify`
 
 Required backend env vars:
 
@@ -75,21 +69,6 @@ The frontend defaults to same-origin API calls:
 ```
 
 Use an explicit backend URL only if you host the backend separately.
-
-## Netlify
-
-Netlify is now configured to:
-
-- publish the static frontend from `dist`
-- route `/api/*` to the Netlify function
-- route `/health` to the same backend function
-- keep SPA navigation working by rewriting `/*` to `index.html`
-
-The Netlify build command is:
-
-```bash
-npm run build:netlify
-```
 
 ## Health Checks
 

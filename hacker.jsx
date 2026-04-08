@@ -2695,6 +2695,7 @@ function CodingPlatform() {
   const [adminExecution, setAdminExecution]   = useState(null);
   const [adminExecuting, setAdminExecuting]   = useState(false);
   const [selectedProblem, setSelectedProblem] = useState(null);
+  const [problemNavigationSource, setProblemNavigationSource] = useState("catalog");
   const [lang, setLang]                       = useState("javascript");
   const [code, setCode]                       = useState("");
   const [activeTab, setActiveTab]             = useState("description");
@@ -3166,8 +3167,9 @@ function CodingPlatform() {
     };
   }, [authToken, currentUser.id, currentUser.role]);
 
-  const openProblem = (p) => {
+  const openProblem = (p, navigationSource = "catalog") => {
     setSelectedProblem(p);
+    setProblemNavigationSource(navigationSource);
     setCode(p.starterCode?.[lang] || "");
     setRunResult(null);
     setActiveTab("description");
@@ -3217,7 +3219,7 @@ function CodingPlatform() {
 
     setContestEntered(true);
     setContestSecurityLocked(false);
-    if (problemToOpen) openProblem(problemToOpen);
+    if (problemToOpen) openProblem(problemToOpen, "contest");
   };
 
   const openProfile = () => {
@@ -3777,6 +3779,28 @@ function CodingPlatform() {
       };
     })
     .filter(Boolean);
+  const contestProblemSet = contestProblems.filter(Boolean);
+  const catalogProblemSet = problemCatalog.filter(Boolean);
+  const problemNavigation = problemNavigationSource === "contest" && contestProblemSet.length
+    ? contestProblemSet
+    : catalogProblemSet;
+  const selectedProblemIndex = selectedProblem
+    ? problemNavigation.findIndex((problem) => (
+        sameValue(problem.id, selectedProblem.id)
+        || sameValue(problem.dbId, selectedProblem.dbId)
+      ))
+    : -1;
+  const hasPreviousProblem = selectedProblemIndex > 0;
+  const hasNextProblem = selectedProblemIndex > -1 && selectedProblemIndex < problemNavigation.length - 1;
+  const showProblemNavigation = problemNavigation.length > 1 && selectedProblemIndex > -1;
+  const openAdjacentProblem = (offset) => {
+    if (selectedProblemIndex < 0) return;
+
+    const nextProblem = problemNavigation[selectedProblemIndex + offset];
+    if (nextProblem) {
+      openProblem(nextProblem, problemNavigationSource);
+    }
+  };
   const leaderboardMode = leaderboardScope === "This Contest"
     ? "contest"
     : leaderboardScope === "Global"
@@ -4837,7 +4861,7 @@ function CodingPlatform() {
             </thead>
             <tbody>
               {filteredProblems.map(p=>(
-                <tr key={p.id} onClick={()=>openProblem(p)} style={{ borderBottom:"1px solid #0f0f1a", cursor:"pointer" }}
+                <tr key={p.id} onClick={()=>openProblem(p, "catalog")} style={{ borderBottom:"1px solid #0f0f1a", cursor:"pointer" }}
                   onMouseEnter={e=>e.currentTarget.style.background="#16161f"}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                   <td style={{ padding:"14px 16px", width:60 }}>{solved.has(p.id)?<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill="#00b8a3" fillOpacity="0.15"/><path d="M5 8l2 2 4-4" stroke="#00b8a3" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>:<span style={{ color:"#333", fontSize:12 }}>—</span>}</td>
@@ -5072,7 +5096,7 @@ function CodingPlatform() {
                   {profileSubmissionHistory.map((row) => (
                     <tr key={`${row.problemId}-${row.time}`} style={{ borderTop:"1px solid #172033" }}>
                       <td style={{ padding:"12px 0" }}>
-                        <button onClick={() => openProblem(problemCatalog.find((problem) => problem.id === row.problemId) || problemCatalog[0])} style={{ background:"none", border:"none", padding:0, color:"#93c5fd", cursor:"pointer", fontWeight:600, textAlign:"left" }}>
+                        <button onClick={() => openProblem(problemCatalog.find((problem) => problem.id === row.problemId) || problemCatalog[0], "catalog")} style={{ background:"none", border:"none", padding:0, color:"#93c5fd", cursor:"pointer", fontWeight:600, textAlign:"left" }}>
                           {row.problemName}
                         </button>
                       </td>
@@ -5234,7 +5258,7 @@ function CodingPlatform() {
                             handleEnterContest(problem);
                             return;
                           }
-                          openProblem(problem);
+                          openProblem(problem, "contest");
                         }}
                         style={{ cursor:"pointer", transition:"transform 0.18s ease, filter 0.18s ease" }}
                         onMouseEnter={(e) => {
@@ -5547,14 +5571,30 @@ function CodingPlatform() {
         <span style={S.logo} onClick={()=>setView("list")}>{"</> CodeArena"}</span>
         <span style={{ color:"#444", fontSize:14 }}>/</span>
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
-        <div style={{ marginLeft:"auto", display:"flex", gap:10 }}>
+        {showProblemNavigation && (
+          <div style={{ marginLeft:"auto", display:"flex", gap:10, alignItems:"center" }}>
+            {hasPreviousProblem && (
+              <button onClick={() => openAdjacentProblem(-1)} style={S.btn("default")}>
+                Previous
+              </button>
+            )}
+            <button
+              onClick={() => openAdjacentProblem(1)}
+              disabled={!hasNextProblem}
+              style={{ ...S.btn("default"), opacity:hasNextProblem ? 1 : 0.45 }}
+            >
+              Next
+            </button>
+          </div>
+        )}
+        {false && <div style={{ marginLeft:"auto", display:"flex", gap:10 }}>
           <button onClick={()=>simulateRun(false)} disabled={running||submitting} style={S.btn("run")}>
             {running?"⟳ Running...":"▶  Run"}
           </button>
           <button onClick={()=>simulateRun(true)} disabled={running||submitting} style={S.btn("submit")}>
             {submitting?"⟳ Submitting...":"↑  Submit"}
           </button>
-        </div>
+        </div>}
       </nav>
 
       <div style={{ display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 72px)" }}>
@@ -5655,6 +5695,15 @@ function CodingPlatform() {
             </div>
             <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onKeyDown={handleTab} spellCheck={false}
               style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"#0c0c14", color:"#c8c8e8", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }} />
+          </div>
+
+          <div style={{ background:"#0d0d15", borderTop:"1px solid #1e1e2e", padding:"10px 16px", display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
+            <button onClick={()=>simulateRun(false)} disabled={running||submitting} style={S.btn("run")}>
+              {running ? "Running..." : "Run"}
+            </button>
+            <button onClick={()=>simulateRun(true)} disabled={running||submitting} style={S.btn("submit")}>
+              {submitting ? "Submitting..." : "Submit"}
+            </button>
           </div>
 
           {/* Console */}
