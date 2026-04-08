@@ -30,6 +30,31 @@ function AdminPortal({
   onSignOut = () => {},
   onGoHome = () => {},
 }) {
+  const THEME = {
+    "--bg": "#F9FAFB",
+    "--card": "#FFFFFF",
+    "--border": "#E5E7EB",
+    "--hover-bg": "#F3F4F6",
+    "--primary": "#2563EB",
+    "--primary-hover": "#1D4ED8",
+    "--primary-light": "#DBEAFE",
+    "--secondary": "#7C3AED",
+    "--secondary-hover": "#6D28D9",
+    "--text": "#111827",
+    "--text-secondary": "#4B5563",
+    "--text-muted": "#9CA3AF",
+    "--success": "#16A34A",
+    "--warning": "#D97706",
+    "--error": "#DC2626",
+    "--info": "#2563EB",
+    "--sidebar-bg": "#FFFFFF",
+    "--sidebar-active": "#DBEAFE",
+    "--btn-secondary": "#F3F4F6",
+    "--divider": "#E5E7EB",
+    "--shadow-soft": "0 1px 3px rgba(0,0,0,0.05)",
+    "--shadow-hover": "0 10px 25px rgba(0,0,0,0.05)",
+  };
+
   const defaultTest = {
     title: "Current Test",
     level: "Hard",
@@ -233,13 +258,39 @@ function AdminPortal({
   const currentTestEnded = timerSeconds === 0;
 
   const S = {
-    app: { fontFamily: "'Outfit','Space Grotesk',sans-serif", background: "#0a0a0f", color: "#e0e0e0", minHeight: "100vh", display: "flex", flexDirection: "column" },
-    nav: { background: "#111118", borderBottom: "1px solid #1e1e2e", padding: "0 24px", display: "flex", alignItems: "center", height: 56, gap: 24, position: "sticky", top: 0, zIndex: 100 },
-    logo: { fontFamily: "'Space Grotesk',sans-serif", fontWeight: 800, fontSize: 20, background: "linear-gradient(135deg,#7c6af7,#4fd1c5)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", cursor: "pointer", letterSpacing: "-0.5px" },
+    app: {
+      ...THEME,
+      fontFamily: "'Outfit','Space Grotesk',sans-serif",
+      background: "var(--bg)",
+      color: "var(--text)",
+      minHeight: "100vh",
+      display: "flex",
+      flexDirection: "column",
+    },
+    nav: {
+      background: "var(--card)",
+      borderBottom: "1px solid var(--divider)",
+      padding: "0 24px",
+      display: "flex",
+      alignItems: "center",
+      height: 56,
+      gap: 24,
+      position: "sticky",
+      top: 0,
+      zIndex: 100,
+    },
+    logo: {
+      fontFamily: "'Space Grotesk',sans-serif",
+      fontWeight: 800,
+      fontSize: 20,
+      color: "var(--text)",
+      cursor: "pointer",
+      letterSpacing: "-0.5px",
+    },
     btn: (v) => ({
       padding: "8px 18px",
       borderRadius: 6,
-      border: "none",
+      border: "1px solid var(--border)",
       cursor: "pointer",
       fontWeight: 700,
       fontSize: 12.5,
@@ -248,21 +299,21 @@ function AdminPortal({
       textTransform: "uppercase",
       transition: "all 0.15s",
       ...(v === "run"
-        ? { background: "#1a2a1a", color: "#4ade80", border: "1px solid #2a3a2a" }
+        ? { background: "var(--success)", color: "#fff", border: "1px solid var(--success)" }
         : v === "submit"
-          ? { background: "linear-gradient(135deg,#7c6af7,#4fd1c5)", color: "#fff" }
-          : { background: "#1e1e2e", color: "#aaa", border: "1px solid #2a2a3e" }),
+          ? { background: "var(--primary)", color: "#fff", border: "1px solid var(--primary)" }
+          : { background: "var(--btn-secondary)", color: "var(--text)", border: "1px solid var(--border)" }),
     }),
-    fieldLabel: { display: "block", marginBottom: 8, color: "#8f93b4", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: "'Space Grotesk',sans-serif" },
-    input: { width: "100%", boxSizing: "border-box", background: "#0f1018", border: "1px solid #26263d", color: "#eef0ff", borderRadius: 12, padding: "13px 14px", fontSize: 14, outline: "none", fontFamily: "'Outfit','Space Grotesk',sans-serif" },
+    fieldLabel: { display: "block", marginBottom: 8, color: "var(--text-muted)", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: "'Space Grotesk',sans-serif" },
+    input: { width: "100%", boxSizing: "border-box", background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 12, padding: "13px 14px", fontSize: 14, outline: "none", fontFamily: "'Outfit','Space Grotesk',sans-serif" },
     shell: { maxWidth: 1240, margin: "0 auto", width: "100%", padding: "28px 24px 40px", display: "grid", gap: 22 },
     cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 },
-    card: { background: "linear-gradient(180deg,#12121d,#0d0d15)", border: "1px solid #25253b", borderRadius: 18, padding: "18px 18px 20px", boxShadow: "0 16px 40px #00000024, inset 0 1px 0 #ffffff08" },
-    sectionTitle: { fontFamily: "'Space Grotesk',sans-serif", fontSize: 12, fontWeight: 700, color: "#7a7f9e", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12 },
-    tableWrap: { background: "linear-gradient(180deg,#12121d,#0d0d15)", border: "1px solid #25253b", borderRadius: 18, overflow: "hidden", boxShadow: "0 16px 40px #00000024, inset 0 1px 0 #ffffff08" },
-    tableHead: { padding: "14px 16px", textAlign: "left", fontSize: 11, color: "#7a7f9e", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: "'Space Grotesk',sans-serif" },
-    tableCell: { padding: "14px 16px", borderTop: "1px solid #1c1d2a", fontSize: 14, color: "#dfe2ff" },
-    subCard: { background: "#0e0f17", border: "1px solid #202233", borderRadius: 14, padding: "14px" },
+    card: { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 18, padding: "18px 18px 20px", boxShadow: "var(--shadow-soft)" },
+    sectionTitle: { fontFamily: "'Space Grotesk',sans-serif", fontSize: 12, fontWeight: 700, color: "var(--text-muted)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12 },
+    tableWrap: { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 18, overflow: "hidden", boxShadow: "var(--shadow-soft)" },
+    tableHead: { padding: "14px 16px", textAlign: "left", fontSize: 11, color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: "'Space Grotesk',sans-serif" },
+    tableCell: { padding: "14px 16px", borderTop: "1px solid var(--divider)", fontSize: 14, color: "var(--text)" },
+    subCard: { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px" },
   };
 
   return (
@@ -271,15 +322,15 @@ function AdminPortal({
 
       <nav style={S.nav}>
         <span style={S.logo} onClick={onGoHome}>{"</> CodeArena"}</span>
-        <span style={{ color: "#eef0ff", fontSize: 15, fontWeight: 700, fontFamily: "'Space Grotesk',sans-serif", letterSpacing: "0.03em" }}>Test Assignment Leaderboard</span>
+        <span style={{ color: "var(--text)", fontSize: 15, fontWeight: 700, fontFamily: "'Space Grotesk',sans-serif", letterSpacing: "0.03em" }}>Test Assignment Leaderboard</span>
         <div style={{ marginLeft: "auto" }}>
-          <button onClick={onSignOut} style={{ ...S.btn("default"), color: "#c8c8e8" }}>Sign Out</button>
+          <button onClick={onSignOut} style={S.btn("default")}>Sign Out</button>
         </div>
       </nav>
 
       <div style={S.shell}>
         {warning && (
-          <div style={{ background: "#181108", border: "1px solid #5b4514", color: "#ffd37a", borderRadius: 14, padding: "12px 14px", fontSize: 13 }}>
+          <div style={{ background: "rgba(217,119,6,0.12)", border: "1px solid rgba(217,119,6,0.35)", color: "var(--warning)", borderRadius: 14, padding: "12px 14px", fontSize: 13 }}>
             {warning}
           </div>
         )}
@@ -287,12 +338,12 @@ function AdminPortal({
         <div style={S.cardGrid}>
           <div style={S.card}>
             <div style={S.sectionTitle}>Current Test</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#f4f5ff", marginBottom: 14 }}>{currentTest.title}</div>
-            <div style={{ display: "grid", gap: 8, color: "#a9aed0", fontSize: 14 }}>
-              <div>Level: <span style={{ color: "#ff8fa3", fontWeight: 700 }}>{currentTest.level}</span></div>
-              <div>Date: <span style={{ color: "#eef0ff" }}>{currentTest.date}</span></div>
-              <div>Duration: <span style={{ color: "#eef0ff" }}>{currentTest.duration} mins</span></div>
-              <div>Timer: <span style={{ color: currentTestEnded ? "#ff6b6b" : "#4fd1c5", fontWeight: 700 }}>{formatCountdown(timerSeconds)}</span></div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text)", marginBottom: 14 }}>{currentTest.title}</div>
+            <div style={{ display: "grid", gap: 8, color: "var(--text-secondary)", fontSize: 14 }}>
+              <div>Level: <span style={{ color: "var(--secondary)", fontWeight: 700 }}>{currentTest.level}</span></div>
+              <div>Date: <span style={{ color: "var(--text)" }}>{currentTest.date}</span></div>
+              <div>Duration: <span style={{ color: "var(--text)" }}>{currentTest.duration} mins</span></div>
+              <div>Timer: <span style={{ color: currentTestEnded ? "var(--error)" : "var(--success)", fontWeight: 700 }}>{formatCountdown(timerSeconds)}</span></div>
             </div>
           </div>
 
@@ -304,17 +355,17 @@ function AdminPortal({
                   key={test.id}
                   onClick={() => setSelectedPreviousTest(test)}
                   style={{
-                    background: selectedPreviousTest?.id === test.id ? "#18192a" : "#0f1018",
-                    border: selectedPreviousTest?.id === test.id ? "1px solid #7c6af7" : "1px solid #202233",
+                    background: selectedPreviousTest?.id === test.id ? "var(--primary-light)" : "var(--card)",
+                    border: selectedPreviousTest?.id === test.id ? "1px solid var(--primary)" : "1px solid var(--border)",
                     borderRadius: 12,
-                    color: "#dfe2ff",
+                    color: "var(--text)",
                     padding: "12px 14px",
                     textAlign: "left",
                     cursor: "pointer",
                   }}
                 >
                   <div style={{ fontWeight: 700, marginBottom: 4 }}>{test.name}</div>
-                  <div style={{ color: "#8f93b4", fontSize: 12 }}>{test.date} • {test.difficulty}</div>
+                  <div style={{ color: "var(--text-muted)", fontSize: 12 }}>{test.date} • {test.difficulty}</div>
                 </button>
               ))}
             </div>
@@ -322,25 +373,25 @@ function AdminPortal({
 
           <div style={S.card}>
             <div style={S.sectionTitle}>Participants</div>
-            <div style={{ fontSize: 32, fontWeight: 800, color: "#4fd1c5", lineHeight: 1, marginBottom: 10 }}>{participantsCount}</div>
-            <div style={{ color: "#8f93b4", fontSize: 14, marginBottom: 12 }}>Users currently taking the test</div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 999, background: "#0e1c16", border: "1px solid #214235", color: "#73f0b3", fontSize: 12, fontWeight: 700 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80", boxShadow: "0 0 12px #4ade80" }} />
+            <div style={{ fontSize: 32, fontWeight: 800, color: "var(--primary)", lineHeight: 1, marginBottom: 10 }}>{participantsCount}</div>
+            <div style={{ color: "var(--text-muted)", fontSize: 14, marginBottom: 12 }}>Users currently taking the test</div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 999, background: "rgba(22,163,74,0.10)", border: "1px solid rgba(22,163,74,0.25)", color: "var(--success)", fontSize: 12, fontWeight: 700 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--success)" }} />
               Live Count
             </div>
           </div>
 
           <div style={S.card}>
             <div style={S.sectionTitle}>Solutions</div>
-            <div style={{ fontSize: 14, color: "#8f93b4", marginBottom: 14 }}>Submitted solutions become viewable after the timer ends.</div>
+            <div style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 14 }}>Submitted solutions become viewable after the timer ends.</div>
             <button
               onClick={() => setSolutionsVisible((prev) => !prev)}
               disabled={!currentTestEnded}
               style={{
                 ...S.btn("default"),
-                color: currentTestEnded ? "#ffc01e" : "#666",
-                border: currentTestEnded ? "1px solid #5b4514" : "1px solid #2a2a3e",
-                background: currentTestEnded ? "#191309" : "#12121a",
+                color: currentTestEnded ? "var(--secondary)" : "var(--text-muted)",
+                border: currentTestEnded ? "1px solid var(--secondary)" : "1px solid var(--border)",
+                background: currentTestEnded ? "var(--primary-light)" : "var(--btn-secondary)",
                 opacity: currentTestEnded ? 1 : 0.7,
               }}
             >
@@ -367,7 +418,7 @@ function AdminPortal({
                   <tr key={entry.rank}>
                     <td style={S.tableCell}>{entry.rank}</td>
                     <td style={S.tableCell}>{entry.username}</td>
-                    <td style={{ ...S.tableCell, color: "#73f0b3", fontWeight: 700 }}>{entry.score}</td>
+                    <td style={{ ...S.tableCell, color: "var(--success)", fontWeight: 700 }}>{entry.score}</td>
                     <td style={S.tableCell}>{entry.timeTaken}</td>
                   </tr>
                 ))}
@@ -378,12 +429,12 @@ function AdminPortal({
           <div style={{ display: "grid", gap: 18 }}>
             <div style={S.card}>
               <div style={S.sectionTitle}>Previous Test Result</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#f4f5ff", marginBottom: 10 }}>{selectedPreviousTest?.name}</div>
-              <div style={{ display: "grid", gap: 8, fontSize: 14, color: "#a9aed0" }}>
-                <div>Date: <span style={{ color: "#eef0ff" }}>{selectedPreviousTest?.date}</span></div>
-                <div>Difficulty: <span style={{ color: "#ffc01e" }}>{selectedPreviousTest?.difficulty}</span></div>
-                <div>Winner: <span style={{ color: "#4fd1c5" }}>{selectedPreviousTest?.winner}</span></div>
-                <div>Average Score: <span style={{ color: "#eef0ff" }}>{selectedPreviousTest?.average}</span></div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>{selectedPreviousTest?.name}</div>
+              <div style={{ display: "grid", gap: 8, fontSize: 14, color: "var(--text-secondary)" }}>
+                <div>Date: <span style={{ color: "var(--text)" }}>{selectedPreviousTest?.date}</span></div>
+                <div>Difficulty: <span style={{ color: "var(--secondary)" }}>{selectedPreviousTest?.difficulty}</span></div>
+                <div>Winner: <span style={{ color: "var(--primary)" }}>{selectedPreviousTest?.winner}</span></div>
+                <div>Average Score: <span style={{ color: "var(--text)" }}>{selectedPreviousTest?.average}</span></div>
               </div>
             </div>
 
@@ -393,10 +444,10 @@ function AdminPortal({
                 {activeUsers.map((user) => (
                   <div key={user.name} style={{ ...S.subCard, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
-                      <div style={{ color: "#eef0ff", fontWeight: 700 }}>{user.name}</div>
-                      <div style={{ color: "#8f93b4", fontSize: 12 }}>{user.department}</div>
+                      <div style={{ color: "var(--text)", fontWeight: 700 }}>{user.name}</div>
+                      <div style={{ color: "var(--text-muted)", fontSize: 12 }}>{user.department}</div>
                     </div>
-                    <div style={{ color: user.status === "Submitted" ? "#73f0b3" : "#ffc01e", fontSize: 12, fontWeight: 700 }}>{user.status}</div>
+                    <div style={{ color: user.status === "Submitted" ? "var(--success)" : "var(--warning)", fontSize: 12, fontWeight: 700 }}>{user.status}</div>
                   </div>
                 ))}
               </div>
@@ -429,14 +480,14 @@ function AdminPortal({
               </div>
 
               <div style={{ ...S.subCard, padding: 0, overflow: "hidden" }}>
-                <div style={{ padding: "10px 12px", borderBottom: "1px solid #202233", color: "#8f93b4", fontSize: 12 }}>
+                <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--divider)", color: "var(--text-muted)", fontSize: 12 }}>
                   Write solution for {selectedProblem ? selectedProblem.title : "selected problem"}
                 </div>
                 <textarea
                   value={submissionCode}
                   onChange={(e) => setSubmissionCode(e.target.value)}
                   spellCheck={false}
-                  style={{ width: "100%", minHeight: 240, background: "#0b0c14", color: "#dfe2ff", border: "none", outline: "none", resize: "vertical", padding: "14px", fontFamily: "'JetBrains Mono',monospace", fontSize: 13, lineHeight: 1.7, boxSizing: "border-box" }}
+                  style={{ width: "100%", minHeight: 240, background: "var(--card)", color: "var(--text)", border: "none", outline: "none", resize: "vertical", padding: "14px", fontFamily: "'JetBrains Mono',monospace", fontSize: 13, lineHeight: 1.7, boxSizing: "border-box" }}
                 />
               </div>
 
@@ -444,7 +495,7 @@ function AdminPortal({
                 <button onClick={() => handleRun(false)} disabled={executing || !selectedProblem} style={S.btn("run")}>
                   {executing ? "Running..." : "Run Code"}
                 </button>
-                <div style={{ color: "#8f93b4", fontSize: 13, alignSelf: "center" }}>
+                <div style={{ color: "var(--text-muted)", fontSize: 13, alignSelf: "center" }}>
                   Uses the current `/api/run` backend. Replace that backend with Judge0 later if you want hosted execution.
                 </div>
               </div>
@@ -452,25 +503,25 @@ function AdminPortal({
               {execution && (
                 <div style={S.subCard}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ color: execution.status === "passed" ? "#73f0b3" : "#ff9b9b", fontWeight: 700 }}>
+                    <div style={{ color: execution.status === "passed" ? "var(--success)" : "var(--error)", fontWeight: 700 }}>
                       {execution.autoSubmitted ? "Auto-submitted" : "Execution Result"}
                     </div>
-                    <div style={{ color: "#8f93b4", fontSize: 12 }}>Runtime: {execution.runtime}</div>
+                    <div style={{ color: "var(--text-muted)", fontSize: 12 }}>Runtime: {execution.runtime}</div>
                   </div>
                   <div style={{ display: "grid", gap: 10 }}>
                     {execution.tests.map((test, index) => (
-                      <div key={index} style={{ background: "#0a0b12", border: "1px solid #202233", borderRadius: 12, padding: "12px 14px" }}>
-                        <div style={{ color: "#eef0ff", fontWeight: 700, marginBottom: 6 }}>Case {index + 1}</div>
-                        <div style={{ color: test.status === "pass" ? "#73f0b3" : test.status === "fail" ? "#ff9b9b" : "#ffc01e", fontSize: 13, marginBottom: 6 }}>
+                      <div key={index} style={{ background: "var(--hover-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+                        <div style={{ color: "var(--text)", fontWeight: 700, marginBottom: 6 }}>Case {index + 1}</div>
+                        <div style={{ color: test.status === "pass" ? "var(--success)" : test.status === "fail" ? "var(--error)" : "var(--warning)", fontSize: 13, marginBottom: 6 }}>
                           {String(test.status).toUpperCase()}
                         </div>
                         {test.error ? (
-                          <div style={{ color: "#ffb0b0", fontSize: 12, whiteSpace: "pre-wrap" }}>{test.error}</div>
+                          <div style={{ color: "var(--error)", fontSize: 12, whiteSpace: "pre-wrap" }}>{test.error}</div>
                         ) : (
-                          <div style={{ color: "#8f93b4", fontSize: 12 }}>
-                            Expected: <span style={{ color: "#dfe2ff" }}>{test.expected}</span>
+                          <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                            Expected: <span style={{ color: "var(--text)" }}>{test.expected}</span>
                             <br />
-                            Got: <span style={{ color: "#dfe2ff" }}>{test.actual}</span>
+                            Got: <span style={{ color: "var(--text)" }}>{test.actual}</span>
                           </div>
                         )}
                       </div>
@@ -523,8 +574,8 @@ function AdminPortal({
                     const problem = problems.find((item) => item.id === id);
                     return (
                       <div key={id} style={S.subCard}>
-                        <div style={{ color: "#eef0ff", fontWeight: 700, marginBottom: 4 }}>{problem ? problem.title : `Problem ${id}`}</div>
-                        <div style={{ color: "#8f93b4", fontSize: 12 }}>
+                        <div style={{ color: "var(--text)", fontWeight: 700, marginBottom: 4 }}>{problem ? problem.title : `Problem ${id}`}</div>
+                        <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
                           Top submission visible after test completion. Connect secure storage/backend to load real submitted code.
                         </div>
                       </div>

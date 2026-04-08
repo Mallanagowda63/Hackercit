@@ -3842,17 +3842,42 @@ function CodingPlatform() {
       badge: null,
     };
   };
+  const ADMIN_THEME = {
+    background: "#F9FAFB",
+    card: "#FFFFFF",
+    border: "#E5E7EB",
+    hoverBackground: "#F3F4F6",
+    primary: "#2563EB",
+    primaryHover: "#1D4ED8",
+    primaryLight: "#DBEAFE",
+    secondary: "#7C3AED",
+    secondaryHover: "#6D28D9",
+    text: "#111827",
+    textSecondary: "#4B5563",
+    textMuted: "#9CA3AF",
+    success: "#16A34A",
+    warning: "#D97706",
+    error: "#DC2626",
+    info: "#2563EB",
+    sidebarBackground: "#FFFFFF",
+    sidebarActive: "#DBEAFE",
+    buttonSecondary: "#F3F4F6",
+    divider: "#E5E7EB",
+    shadowSoft: "0 1px 3px rgba(0,0,0,0.05)",
+    shadowHover: "0 10px 25px rgba(0,0,0,0.05)",
+  };
+
   const getSubmissionLevelMeta = (level) => {
     if (level === "Hard") {
-      return { color:"#ffb4b4", border:"#5b2830", background:"#1b0f13" };
+      return { color: ADMIN_THEME.error, border: "rgba(220, 38, 38, 0.2)", background: "rgba(220, 38, 38, 0.08)" };
     }
     if (level === "Medium") {
-      return { color:"#ffd37a", border:"#5b4514", background:"#191309" };
+      return { color: ADMIN_THEME.warning, border: "rgba(217, 119, 6, 0.2)", background: "rgba(217, 119, 6, 0.08)" };
     }
     if (level === "Easy") {
-      return { color:"#73f0b3", border:"#1f4e3a", background:"#0f1c15" };
+      return { color: ADMIN_THEME.success, border: "rgba(22, 163, 74, 0.2)", background: "rgba(22, 163, 74, 0.08)" };
     }
-    return { color:"#8f93b4", border:"#2b3044", background:"#121621" };
+    return { color: ADMIN_THEME.textMuted, border: ADMIN_THEME.border, background: ADMIN_THEME.hoverBackground };
   };
 
   // ── STYLES ─────────────────────────────────────────────────────────────────
@@ -3997,7 +4022,10 @@ function CodingPlatform() {
   };
   const S = {
     app:  { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:"#0a0a0f", color:"#e0e0e0", minHeight:"100vh", display:"flex", flexDirection:"column" },
+    adminApp: { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:ADMIN_THEME.background, color:ADMIN_THEME.text, minHeight:"100vh", display:"flex", flexDirection:"column" },
     nav:  { background:"#111118", borderBottom:"1px solid #1e1e2e", padding:"10px 24px", display:"flex", alignItems:"center", minHeight:72, gap:24, position:"sticky", top:0, zIndex:100 },
+    adminNav: { background:ADMIN_THEME.sidebarBackground, borderBottom:`1px solid ${ADMIN_THEME.divider}`, boxShadow:ADMIN_THEME.shadowSoft, padding:"10px 24px", display:"flex", alignItems:"center", minHeight:72, gap:24, position:"sticky", top:0, zIndex:100 },
+    adminNavTitle: { color:ADMIN_THEME.text, fontSize:15, fontWeight:700, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.03em" },
     logo: { fontFamily:"'Space Grotesk',sans-serif", fontWeight:800, fontSize:20, background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", cursor:"pointer", letterSpacing:"-0.5px" },
     navBtn: (a) => ({ background:"none", border:"none", color:a?"#fff":"#666", cursor:"pointer", padding:"6px 0", borderBottom:a?"2px solid #7c6af7":"2px solid transparent", fontFamily:"'Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.03em", display:"flex", flexDirection:"column", alignItems:"flex-start", gap:2 }),
     navBtnLabel: (a) => ({ color:a?"#fff":"#8a8ea8", fontSize:13.5, fontWeight:600, lineHeight:1.1 }),
@@ -4025,7 +4053,53 @@ function CodingPlatform() {
     formWrap: { maxWidth:560, width:"100%", margin:"42px auto 0", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:24, padding:"28px 26px 30px", boxShadow:"0 18px 50px #00000045" },
     fieldLabel: { display:"block", marginBottom:8, color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
     input: { width:"100%", boxSizing:"border-box", background:"#0f1018", border:"1px solid #26263d", color:"#eef0ff", borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif" },
-    adminBlank: { flex:1, background:"linear-gradient(180deg,#0a0a0f,#08080d)" },
+    adminFieldLabel: { display:"block", marginBottom:8, color:ADMIN_THEME.textSecondary, fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
+    adminInput: { width:"100%", boxSizing:"border-box", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, color:ADMIN_THEME.text, borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif", boxShadow:ADMIN_THEME.shadowSoft },
+    adminButton: (variant) => ({
+      padding:"10px 18px",
+      borderRadius:10,
+      border:`1px solid ${ADMIN_THEME.divider}`,
+      cursor:"pointer",
+      fontWeight:700,
+      fontSize:12.5,
+      fontFamily:"'Space Grotesk',sans-serif",
+      letterSpacing:"0.04em",
+      textTransform:"uppercase",
+      transition:"all 0.15s ease",
+      boxShadow:ADMIN_THEME.shadowSoft,
+      ...(variant === "run"
+        ? { background:ADMIN_THEME.secondary, color:"#FFFFFF", border:`1px solid ${ADMIN_THEME.secondary}` }
+        : variant === "submit"
+          ? { background:ADMIN_THEME.primary, color:"#FFFFFF", border:`1px solid ${ADMIN_THEME.primary}` }
+          : { background:ADMIN_THEME.buttonSecondary, color:ADMIN_THEME.textSecondary, border:`1px solid ${ADMIN_THEME.divider}` }),
+    }),
+    adminAlert: (tone) => ({
+      borderRadius:14,
+      padding:"12px 14px",
+      fontSize:13,
+      border:`1px solid ${tone === "warning"
+        ? "rgba(217, 119, 6, 0.18)"
+        : tone === "error"
+          ? "rgba(220, 38, 38, 0.18)"
+          : tone === "success"
+            ? "rgba(22, 163, 74, 0.18)"
+            : "rgba(37, 99, 235, 0.18)"}`,
+      background:tone === "warning"
+        ? "rgba(217, 119, 6, 0.08)"
+        : tone === "error"
+          ? "rgba(220, 38, 38, 0.08)"
+          : tone === "success"
+            ? "rgba(22, 163, 74, 0.08)"
+            : ADMIN_THEME.primaryLight,
+      color:tone === "warning"
+        ? ADMIN_THEME.warning
+        : tone === "error"
+          ? ADMIN_THEME.error
+          : tone === "success"
+            ? ADMIN_THEME.success
+            : ADMIN_THEME.info,
+    }),
+    adminBlank: { flex:1, background:ADMIN_THEME.background },
     modalBackdrop: { position:"fixed", inset:0, background:"#05050bcc", backdropFilter:"blur(8px)", display:"flex", alignItems:"center", justifyContent:"center", padding:"24px", zIndex:1200 },
     modalCard: { width:"min(720px, 100%)", maxHeight:"calc(100vh - 48px)", overflowY:"auto", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:24, padding:"28px 26px 30px", boxShadow:"0 24px 70px #00000065" },
     startHero: { position:"relative", overflow:"hidden", background:"radial-gradient(circle at 15% 20%, #1c2350 0%, #10111b 42%, #09090f 100%)", border:"1px solid #24263a", borderRadius:30, padding:"52px 48px", boxShadow:"0 26px 70px #0000004f" },
@@ -4059,13 +4133,13 @@ function CodingPlatform() {
     }),
     adminShell: { maxWidth:1240, margin:"0 auto", width:"100%", padding:"28px 24px 40px", display:"grid", gap:22 },
     adminCardGrid: { display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:16 },
-    adminCard: { background:"linear-gradient(180deg,#12121d,#0d0d15)", border:"1px solid #25253b", borderRadius:18, padding:"18px 18px 20px", boxShadow:"0 16px 40px #00000024, inset 0 1px 0 #ffffff08" },
-    adminSectionTitle: { fontFamily:"'Space Grotesk',sans-serif", fontSize:12, fontWeight:700, color:"#7a7f9e", letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 },
+    adminCard: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, padding:"18px 18px 20px", boxShadow:ADMIN_THEME.shadowSoft },
+    adminSectionTitle: { fontFamily:"'Space Grotesk',sans-serif", fontSize:12, fontWeight:700, color:ADMIN_THEME.textSecondary, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 },
     adminGridTwo: { display:"grid", gridTemplateColumns:"1.35fr 0.95fr", gap:18, alignItems:"start" },
-    adminTableWrap: { background:"linear-gradient(180deg,#12121d,#0d0d15)", border:"1px solid #25253b", borderRadius:18, overflow:"hidden", boxShadow:"0 16px 40px #00000024, inset 0 1px 0 #ffffff08" },
-    adminTableHead: { padding:"14px 16px", textAlign:"left", fontSize:11, color:"#7a7f9e", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"'Space Grotesk',sans-serif" },
-    adminTableCell: { padding:"14px 16px", borderTop:"1px solid #1c1d2a", fontSize:14, color:"#dfe2ff" },
-    adminSubCard: { background:"#0e0f17", border:"1px solid #202233", borderRadius:14, padding:"14px" },
+    adminTableWrap: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, overflow:"hidden", boxShadow:ADMIN_THEME.shadowSoft },
+    adminTableHead: { padding:"14px 16px", textAlign:"left", fontSize:11, color:ADMIN_THEME.textSecondary, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"'Space Grotesk',sans-serif", background:ADMIN_THEME.hoverBackground },
+    adminTableCell: { padding:"14px 16px", borderTop:`1px solid ${ADMIN_THEME.divider}`, fontSize:14, color:ADMIN_THEME.text },
+    adminSubCard: { background:ADMIN_THEME.hoverBackground, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:14, padding:"14px" },
   };
 
   const userBadge = currentUser.name
@@ -4080,6 +4154,12 @@ function CodingPlatform() {
     || problemCatalog.find((problem) => problem.id === adminSubmissionProblemId)
     || problemCatalog[0];
   const currentTestEnded = adminCurrentTest.status === "ENDED" || adminTimerSeconds === 0;
+  const adminCurrentStatus = adminCurrentTest.status || "DRAFT";
+  const adminCurrentStatusColor = adminCurrentStatus === "LIVE"
+    ? ADMIN_THEME.success
+    : adminCurrentStatus === "ENDED"
+      ? ADMIN_THEME.error
+      : ADMIN_THEME.info;
   const latestUnreadNotification = studentNotifications.find((notification) => !notification.read) || studentNotifications[0] || null;
 
   if (view === "home") return (
@@ -4281,37 +4361,37 @@ function CodingPlatform() {
   if (view === "admin") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
-      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.adminApp, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-        <nav style={S.nav}>
+        <nav style={S.adminNav}>
           <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
-          <span style={{ color:"#eef0ff", fontSize:15, fontWeight:700, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.03em" }}>Test Assignment Leaderboard</span>
+          <span style={S.adminNavTitle}>Test Assignment Leaderboard</span>
           <div style={{ marginLeft:"auto" }}>
-            <button onClick={signOut} style={{ ...S.btn("default"), color:"#c8c8e8" }}>Sign Out</button>
+            <button onClick={signOut} style={S.adminButton("default")}>Sign Out</button>
           </div>
         </nav>
 
         <div style={S.adminShell}>
           {adminWarning && (
-            <div style={{ background:"#181108", border:"1px solid #5b4514", color:"#ffd37a", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+            <div style={S.adminAlert("warning")}>
               {adminWarning}
             </div>
           )}
 
           {portalError && (
-            <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+            <div style={S.adminAlert("error")}>
               {portalError}
             </div>
           )}
 
           {portalMessage && (
-            <div style={{ background:"#0e1c16", border:"1px solid #214235", color:"#9ff7c5", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+            <div style={S.adminAlert("success")}>
               {portalMessage}
             </div>
           )}
 
           {adminAssignmentsLoading && (
-            <div style={{ background:"#10131c", border:"1px solid #22283a", color:"#c7d2fe", borderRadius:14, padding:"12px 14px", fontSize:13 }}>
+            <div style={S.adminAlert("info")}>
               Loading live portal data from MongoDB...
             </div>
           )}
@@ -4319,21 +4399,21 @@ function CodingPlatform() {
           <div style={S.adminCardGrid}>
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Current Test</div>
-              <div style={{ fontSize:24, fontWeight:700, color:"#f4f5ff", marginBottom:14 }}>{adminCurrentTest.title}</div>
-              <div style={{ display:"grid", gap:8, color:"#a9aed0", fontSize:14 }}>
-                <div>Level: <span style={{ color:"#ff8fa3", fontWeight:700 }}>{adminCurrentTest.level}</span></div>
-                <div>Date: <span style={{ color:"#eef0ff" }}>{adminCurrentTest.date}</span></div>
-                <div>Duration: <span style={{ color:"#eef0ff" }}>{adminCurrentTest.duration} mins</span></div>
-                <div>Status: <span style={{ color:adminCurrentTest.status === "LIVE" ? "#73f0b3" : adminCurrentTest.status === "ENDED" ? "#ff9b9b" : "#93c5fd", fontWeight:700 }}>{adminCurrentTest.status || "DRAFT"}</span></div>
-                <div>Start: <span style={{ color:"#eef0ff" }}>{formatPortalDate(adminCurrentTest.startsAt)}</span></div>
-                <div>Timer: <span style={{ color:currentTestEnded?"#ff6b6b":"#4fd1c5", fontWeight:700 }}>{formatCountdown(adminTimerSeconds)}</span></div>
+              <div style={{ fontSize:24, fontWeight:700, color:ADMIN_THEME.text, marginBottom:14 }}>{adminCurrentTest.title}</div>
+              <div style={{ display:"grid", gap:8, color:ADMIN_THEME.textSecondary, fontSize:14 }}>
+                <div>Level: <span style={{ color:ADMIN_THEME.secondary, fontWeight:700 }}>{adminCurrentTest.level}</span></div>
+                <div>Date: <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{adminCurrentTest.date}</span></div>
+                <div>Duration: <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{adminCurrentTest.duration} mins</span></div>
+                <div>Status: <span style={{ color:adminCurrentStatusColor, fontWeight:700 }}>{adminCurrentStatus}</span></div>
+                <div>Start: <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{formatPortalDate(adminCurrentTest.startsAt)}</span></div>
+                <div>Timer: <span style={{ color:currentTestEnded ? ADMIN_THEME.error : ADMIN_THEME.primary, fontWeight:700 }}>{formatCountdown(adminTimerSeconds)}</span></div>
               </div>
               <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:16 }}>
                 <button
                   onClick={handleStartAssignedTest}
                   disabled={adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE"}
                   style={{
-                    ...S.btn("submit"),
+                    ...S.adminButton("submit"),
                     opacity: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? 0.6 : 1,
                     cursor: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? "not-allowed" : "pointer",
                   }}
@@ -4343,7 +4423,7 @@ function CodingPlatform() {
                 <button
                   onClick={() => syncProblemBankToDatabase(false)}
                   disabled={adminSyncingProblems}
-                  style={{ ...S.btn("default"), color:"#dfe2ff", opacity: adminSyncingProblems ? 0.6 : 1 }}
+                  style={{ ...S.adminButton("default"), opacity: adminSyncingProblems ? 0.6 : 1, cursor: adminSyncingProblems ? "not-allowed" : "pointer" }}
                 >
                   {adminSyncingProblems ? "Syncing..." : "Sync Problems"}
                 </button>
@@ -4358,17 +4438,18 @@ function CodingPlatform() {
                     key={test.id}
                     onClick={() => setSelectedPreviousTest(test)}
                     style={{
-                      background:selectedPreviousTest?.id===test.id?"#18192a":"#0f1018",
-                      border:selectedPreviousTest?.id===test.id?"1px solid #7c6af7":"1px solid #202233",
+                      background:selectedPreviousTest?.id===test.id ? ADMIN_THEME.sidebarActive : ADMIN_THEME.hoverBackground,
+                      border:selectedPreviousTest?.id===test.id ? `1px solid ${ADMIN_THEME.primary}` : `1px solid ${ADMIN_THEME.border}`,
                       borderRadius:12,
-                      color:"#dfe2ff",
+                      color:ADMIN_THEME.text,
                       padding:"12px 14px",
                       textAlign:"left",
-                      cursor:"pointer"
+                      cursor:"pointer",
+                      boxShadow:selectedPreviousTest?.id===test.id ? ADMIN_THEME.shadowSoft : "none"
                     }}
                   >
                     <div style={{ fontWeight:700, marginBottom:4 }}>{test.name}</div>
-                    <div style={{ color:"#8f93b4", fontSize:12 }}>{test.date} • {test.difficulty}</div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{test.date} | {test.difficulty}</div>
                   </button>
                 ))}
               </div>
@@ -4376,26 +4457,24 @@ function CodingPlatform() {
 
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Participants</div>
-              <div style={{ fontSize:32, fontWeight:800, color:"#4fd1c5", lineHeight:1, marginBottom:10 }}>{participantsCount}</div>
-              <div style={{ color:"#8f93b4", fontSize:14, marginBottom:12 }}>Students with login activity stored in MongoDB</div>
-              <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 10px", borderRadius:999, background:"#0e1c16", border:"1px solid #214235", color:"#73f0b3", fontSize:12, fontWeight:700 }}>
-                <span style={{ width:8, height:8, borderRadius:"50%", background:"#4ade80", boxShadow:"0 0 12px #4ade80" }} />
+              <div style={{ fontSize:32, fontWeight:800, color:ADMIN_THEME.primary, lineHeight:1, marginBottom:10 }}>{participantsCount}</div>
+              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14, marginBottom:12 }}>Students with login activity stored in MongoDB</div>
+              <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 10px", borderRadius:999, background:"rgba(22, 163, 74, 0.08)", border:"1px solid rgba(22, 163, 74, 0.18)", color:ADMIN_THEME.success, fontSize:12, fontWeight:700 }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", background:ADMIN_THEME.success, boxShadow:"0 0 0 4px rgba(22, 163, 74, 0.12)" }} />
                 Login-tracked
               </div>
             </div>
 
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Solutions</div>
-              <div style={{ fontSize:14, color:"#8f93b4", marginBottom:14 }}>Submitted solutions become viewable after the timer ends.</div>
+              <div style={{ fontSize:14, color:ADMIN_THEME.textSecondary, marginBottom:14 }}>Submitted solutions become viewable after the timer ends.</div>
               <button
                 onClick={() => setSolutionsVisible((prev) => !prev)}
                 disabled={!currentTestEnded}
                 style={{
-                  ...S.btn("default"),
-                  color:currentTestEnded?"#ffc01e":"#666",
-                  border:currentTestEnded?"1px solid #5b4514":"1px solid #2a2a3e",
-                  background:currentTestEnded?"#191309":"#12121a",
-                  opacity:currentTestEnded?1:0.7
+                  ...(currentTestEnded ? S.adminButton("run") : S.adminButton("default")),
+                  opacity:currentTestEnded?1:0.7,
+                  cursor:currentTestEnded?"pointer":"not-allowed"
                 }}
               >
                 View Solutions
@@ -4424,21 +4503,21 @@ function CodingPlatform() {
                       <tr key={entry.userId || entry.username}>
                         <td style={S.adminTableCell}>{entry.contest.rank}</td>
                         <td style={S.adminTableCell}>
-                          <div style={{ color:"#eef0ff", fontWeight:700 }}>{entry.username}</div>
+                          <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{entry.username}</div>
                           <div style={{ marginTop:6 }}>
                             <span style={{ color:levelMeta.color, background:levelMeta.background, border:`1px solid ${levelMeta.border}`, borderRadius:999, padding:"3px 8px", fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase" }}>
                               {submissionLevel}
                             </span>
                           </div>
                         </td>
-                        <td style={{ ...S.adminTableCell, color:"#73f0b3", fontWeight:700 }}>{entry.contest.score}</td>
+                        <td style={{ ...S.adminTableCell, color:ADMIN_THEME.success, fontWeight:700 }}>{entry.contest.score}</td>
                         <td style={S.adminTableCell}>{entry.contest.problemsSolved}</td>
                         <td style={S.adminTableCell}>{entry.contest.timePenalty}</td>
                       </tr>
                     );
                   }) : (
                     <tr>
-                      <td colSpan="5" style={{ ...S.adminTableCell, textAlign:"center", color:"#8f93b4" }}>
+                      <td colSpan="5" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>
                         No logged-in students have submitted yet.
                       </td>
                     </tr>
@@ -4453,18 +4532,18 @@ function CodingPlatform() {
                 <div style={{ display:"grid", gap:10 }}>
                   {loginEvents.slice(0, 4).map((event) => (
                     <div key={event.id} style={S.adminSubCard}>
-                      <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:4 }}>{event.email}</div>
-                      <div style={{ color:"#8f93b4", fontSize:12, marginBottom:6 }}>
-                        {event.eventType} • {event.role} • {formatPortalDate(event.createdAt)}
+                      <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:4 }}>{event.email}</div>
+                      <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginBottom:6 }}>
+                        {event.eventType} | {event.role} | {formatPortalDate(event.createdAt)}
                       </div>
-                      <div style={{ color:"#9fb4ff", fontSize:12 }}>
-                        {event.ip || "IP unavailable"} • {event.userAgent || "Browser info unavailable"}
+                      <div style={{ color:ADMIN_THEME.primary, fontSize:12 }}>
+                        {event.ip || "IP unavailable"} | {event.userAgent || "Browser info unavailable"}
                       </div>
                     </div>
                   ))}
 
                   {!loginEvents.length && (
-                    <div style={{ color:"#8f93b4", fontSize:13 }}>No login audit rows yet.</div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No login audit rows yet.</div>
                   )}
                 </div>
               </div>
@@ -4475,17 +4554,17 @@ function CodingPlatform() {
                   {activeUsers.length ? activeUsers.map((user) => (
                     <div key={`${user.email}-${user.usn}`} style={{ ...S.adminSubCard, display:"flex", justifyContent:"space-between", alignItems:"center", gap:14 }}>
                       <div>
-                        <div style={{ color:"#eef0ff", fontWeight:700 }}>{user.name}</div>
-                        <div style={{ color:"#8f93b4", fontSize:12 }}>{user.department} • {user.usn || "--"}</div>
-                        <div style={{ color:"#7f85a6", fontSize:12, marginTop:4 }}>Last login: {formatPortalDate(user.lastLoginAt)}</div>
+                        <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{user.name}</div>
+                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{user.department} | {user.usn || "--"}</div>
+                        <div style={{ color:ADMIN_THEME.textMuted, fontSize:12, marginTop:4 }}>Last login: {formatPortalDate(user.lastLoginAt)}</div>
                       </div>
                       <div style={{ textAlign:"right" }}>
-                        <div style={{ color:user.status==="Logged In" ? "#73f0b3" : "#ffc01e", fontSize:12, fontWeight:700 }}>{user.status}</div>
-                        <div style={{ color:"#9fb4ff", fontSize:12, marginTop:4 }}>{user.loginCount} logins</div>
+                        <div style={{ color:user.status==="Logged In" ? ADMIN_THEME.success : ADMIN_THEME.warning, fontSize:12, fontWeight:700 }}>{user.status}</div>
+                        <div style={{ color:ADMIN_THEME.primary, fontSize:12, marginTop:4 }}>{user.loginCount} logins</div>
                       </div>
                     </div>
                   )) : (
-                    <div style={{ color:"#8f93b4", fontSize:13 }}>No logged-in students yet.</div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No logged-in students yet.</div>
                   )}
                 </div>
               </div>
@@ -4498,7 +4577,7 @@ function CodingPlatform() {
               <div style={{ display:"grid", gap:14 }}>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
                   <div>
-                    <label style={S.fieldLabel}>Question</label>
+                    <label style={S.adminFieldLabel}>Question</label>
                     <select
                       value={String(adminSubmissionProblemId ?? "")}
                       onChange={(e) => {
@@ -4506,7 +4585,7 @@ function CodingPlatform() {
                           || problemCatalog.find((problem) => String(problem.id) === e.target.value);
                         setAdminSubmissionProblemId(selectedProblem ? selectedProblem.id : e.target.value);
                       }}
-                      style={S.input}
+                      style={S.adminInput}
                     >
                       {adminCurrentTest.questions.map((id) => {
                         const problem = adminCurrentTest.problems?.find((item) => item.id === id)
@@ -4516,8 +4595,8 @@ function CodingPlatform() {
                     </select>
                   </div>
                   <div>
-                    <label style={S.fieldLabel}>Language</label>
-                    <select value={adminSubmissionLang} onChange={(e)=>setAdminSubmissionLang(e.target.value)} style={S.input}>
+                    <label style={S.adminFieldLabel}>Language</label>
+                    <select value={adminSubmissionLang} onChange={(e)=>setAdminSubmissionLang(e.target.value)} style={S.adminInput}>
                       <option value="javascript">JavaScript</option>
                       <option value="python">Python</option>
                       <option value="java">Java</option>
@@ -4526,22 +4605,26 @@ function CodingPlatform() {
                 </div>
 
                 <div style={{ ...S.adminSubCard, padding:"0", overflow:"hidden" }}>
-                  <div style={{ padding:"10px 12px", borderBottom:"1px solid #202233", color:"#8f93b4", fontSize:12 }}>
+                  <div style={{ padding:"10px 12px", borderBottom:`1px solid ${ADMIN_THEME.divider}`, color:ADMIN_THEME.textSecondary, fontSize:12 }}>
                     Write solution for {adminSelectedProblem?.title || "the selected problem"}
                   </div>
                   <textarea
                     value={adminSubmissionCode}
                     onChange={(e)=>setAdminSubmissionCode(e.target.value)}
                     spellCheck={false}
-                    style={{ width:"100%", minHeight:240, background:"#0b0c14", color:"#dfe2ff", border:"none", outline:"none", resize:"vertical", padding:"14px", fontFamily:"'JetBrains Mono',monospace", fontSize:13, lineHeight:1.7, boxSizing:"border-box" }}
+                    style={{ width:"100%", minHeight:240, background:ADMIN_THEME.background, color:ADMIN_THEME.text, border:"none", outline:"none", resize:"vertical", padding:"14px", fontFamily:"'JetBrains Mono',monospace", fontSize:13, lineHeight:1.7, boxSizing:"border-box" }}
                   />
                 </div>
 
                 <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
-                  <button onClick={() => handleAdminRun(false)} disabled={adminExecuting} style={S.btn("run")}>
+                  <button
+                    onClick={() => handleAdminRun(false)}
+                    disabled={adminExecuting}
+                    style={{ ...S.adminButton("run"), opacity: adminExecuting ? 0.65 : 1, cursor: adminExecuting ? "not-allowed" : "pointer" }}
+                  >
                     {adminExecuting ? "Running..." : "Run Code"}
                   </button>
-                  <div style={{ color:"#8f93b4", fontSize:13, alignSelf:"center" }}>
+                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, alignSelf:"center" }}>
                     Execution uses the current backend runner now. For cloud Judge0 deployment, a Judge0 endpoint and API key are still needed.
                   </div>
                 </div>
@@ -4549,25 +4632,25 @@ function CodingPlatform() {
                 {adminExecution && (
                   <div style={S.adminSubCard}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, gap:12, flexWrap:"wrap" }}>
-                      <div style={{ color:adminExecution.status==="passed"?"#73f0b3":"#ff9b9b", fontWeight:700 }}>
+                      <div style={{ color:adminExecution.status==="passed" ? ADMIN_THEME.success : ADMIN_THEME.error, fontWeight:700 }}>
                         {adminExecution.autoSubmitted ? "Auto-submitted" : "Execution Result"}
                       </div>
-                      <div style={{ color:"#8f93b4", fontSize:12 }}>Runtime: {adminExecution.runtime}</div>
+                      <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Runtime: {adminExecution.runtime}</div>
                     </div>
                     <div style={{ display:"grid", gap:10 }}>
                       {adminExecution.tests.map((test, index) => (
-                        <div key={index} style={{ background:"#0a0b12", border:"1px solid #202233", borderRadius:12, padding:"12px 14px" }}>
-                          <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>Case {index + 1}</div>
-                          <div style={{ color:test.status==="pass"?"#73f0b3":test.status==="fail"?"#ff9b9b":"#ffc01e", fontSize:13, marginBottom:6 }}>
+                        <div key={index} style={{ background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:12, padding:"12px 14px" }}>
+                          <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:6 }}>Case {index + 1}</div>
+                          <div style={{ color:test.status==="pass" ? ADMIN_THEME.success : test.status==="fail" ? ADMIN_THEME.error : ADMIN_THEME.warning, fontSize:13, marginBottom:6 }}>
                             {test.status.toUpperCase()}
                           </div>
                           {test.error ? (
-                            <div style={{ color:"#ffb0b0", fontSize:12, whiteSpace:"pre-wrap" }}>{test.error}</div>
+                            <div style={{ color:ADMIN_THEME.error, fontSize:12, whiteSpace:"pre-wrap" }}>{test.error}</div>
                           ) : (
-                            <div style={{ color:"#8f93b4", fontSize:12 }}>
-                              Expected: <span style={{ color:"#dfe2ff" }}>{test.expected}</span>
+                            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
+                              Expected: <span style={{ color:ADMIN_THEME.text }}>{test.expected}</span>
                               <br />
-                              Got: <span style={{ color:"#dfe2ff" }}>{test.actual}</span>
+                              Got: <span style={{ color:ADMIN_THEME.text }}>{test.actual}</span>
                             </div>
                           )}
                         </div>
@@ -4583,28 +4666,28 @@ function CodingPlatform() {
                 <div style={S.adminSectionTitle}>Create New Test</div>
                 <div style={{ display:"grid", gap:14 }}>
                   <div>
-                    <label style={S.fieldLabel}>Test Title</label>
-                    <input value={adminCreateForm.title} onChange={(e)=>handleAdminCreateInput("title", e.target.value)} style={S.input} />
+                    <label style={S.adminFieldLabel}>Test Title</label>
+                    <input value={adminCreateForm.title} onChange={(e)=>handleAdminCreateInput("title", e.target.value)} style={S.adminInput} />
                   </div>
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
                     <div>
-                      <label style={S.fieldLabel}>Difficulty</label>
-                      <select value={adminCreateForm.level} onChange={(e)=>handleAdminCreateInput("level", e.target.value)} style={S.input}>
+                      <label style={S.adminFieldLabel}>Difficulty</label>
+                      <select value={adminCreateForm.level} onChange={(e)=>handleAdminCreateInput("level", e.target.value)} style={S.adminInput}>
                         <option>Easy</option>
                         <option>Medium</option>
                         <option>Hard</option>
                       </select>
                     </div>
                     <div>
-                      <label style={S.fieldLabel}>Duration (mins)</label>
-                      <input value={adminCreateForm.duration} onChange={(e)=>handleAdminCreateInput("duration", e.target.value)} style={S.input} />
+                      <label style={S.adminFieldLabel}>Duration (mins)</label>
+                      <input value={adminCreateForm.duration} onChange={(e)=>handleAdminCreateInput("duration", e.target.value)} style={S.adminInput} />
                     </div>
                   </div>
                   <div>
-                    <label style={S.fieldLabel}>Database Problems</label>
+                    <label style={S.adminFieldLabel}>Database Problems</label>
                     <div style={{ maxHeight:220, overflowY:"auto", display:"grid", gap:10, paddingRight:4 }}>
                       {problemBankLoading ? (
-                        <div style={{ color:"#8f93b4", fontSize:13 }}>Loading database problems...</div>
+                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>Loading database problems...</div>
                       ) : problemBank.length ? (
                         problemBank.map((problem) => {
                           const checked = adminCreateForm.questions.includes(problem.dbId);
@@ -4614,24 +4697,28 @@ function CodingPlatform() {
                                 type="checkbox"
                                 checked={checked}
                                 onChange={() => toggleCreateQuestion(problem.dbId)}
-                                style={{ marginTop:2, accentColor:"#7c6af7", cursor:"pointer" }}
+                                style={{ marginTop:2, accentColor:ADMIN_THEME.primary, cursor:"pointer" }}
                               />
                               <span style={{ display:"grid", gap:6 }}>
-                                <span style={{ color:"#eef0ff", fontWeight:700 }}>{problem.title}</span>
-                                <span style={{ color:"#8f93b4", fontSize:12 }}>{problem.difficulty} • {problem.tags.slice(0, 3).join(", ") || "General"}</span>
+                                <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{problem.title}</span>
+                                <span style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{problem.difficulty} | {problem.tags.slice(0, 3).join(", ") || "General"}</span>
                               </span>
                             </label>
                           );
                         })
                       ) : (
-                        <div style={{ color:"#8f93b4", fontSize:13 }}>No database problems yet. Use Sync Problems first.</div>
+                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No database problems yet. Use Sync Problems first.</div>
                       )}
                     </div>
                   </div>
-                  <div style={{ color:"#8f93b4", fontSize:12 }}>
-                    Selected: <span style={{ color:"#eef0ff", fontWeight:700 }}>{adminCreateForm.questions.length}</span> database problems
+                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
+                    Selected: <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{adminCreateForm.questions.length}</span> database problems
                   </div>
-                  <button onClick={handleCreateTest} disabled={adminCreatingTest} style={{ ...S.btn("submit"), opacity: adminCreatingTest ? 0.65 : 1 }}>
+                  <button
+                    onClick={handleCreateTest}
+                    disabled={adminCreatingTest}
+                    style={{ ...S.adminButton("submit"), opacity: adminCreatingTest ? 0.65 : 1, cursor: adminCreatingTest ? "not-allowed" : "pointer" }}
+                  >
                     {adminCreatingTest ? "Saving..." : "Save Draft Test"}
                   </button>
                 </div>
@@ -4646,8 +4733,8 @@ function CodingPlatform() {
                         || problemCatalog.find((item) => item.id === id);
                       return (
                         <div key={id} style={S.adminSubCard}>
-                          <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:4 }}>{problem?.title || `Problem ${id}`}</div>
-                          <div style={{ color:"#8f93b4", fontSize:12 }}>Top submission visible after test completion. Connect secure storage/backend to load real submitted code.</div>
+                          <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:4 }}>{problem?.title || `Problem ${id}`}</div>
+                          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Top submission visible after test completion. Connect secure storage/backend to load real submitted code.</div>
                         </div>
                       );
                     })}
