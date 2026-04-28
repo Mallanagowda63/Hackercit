@@ -2548,6 +2548,55 @@ function ScreenShield({ active, message }) {
   );
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightCodeLine(line, language) {
+  const keywords = {
+    javascript: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "class", "new", "try", "catch", "throw", "await", "async", "true", "false", "null", "undefined"],
+    python: ["def", "return", "if", "elif", "else", "for", "while", "in", "class", "import", "from", "try", "except", "raise", "True", "False", "None"],
+    java: ["public", "private", "protected", "class", "static", "void", "int", "double", "boolean", "String", "return", "if", "else", "for", "while", "new", "true", "false", "null"],
+  }[language] || [];
+  const keywordPattern = keywords.length ? keywords.map(escapeRegExp).join("|") : "a^";
+  const tokenPattern = new RegExp(`(//.*|#.*|"(?:\\\\.|[^"])*"|'(?:\\\\.|[^'])*'|\\b(?:${keywordPattern})\\b|\\b\\d+(?:\\.\\d+)?\\b)`, "g");
+  const pieces = [];
+  let lastIndex = 0;
+
+  line.replace(tokenPattern, (match, _token, index) => {
+    if (index > lastIndex) pieces.push({ text: line.slice(lastIndex, index), color: "#d7dcff" });
+    const color = match.startsWith("//") || match.startsWith("#")
+      ? "#6f7b95"
+      : match.startsWith("\"") || match.startsWith("'")
+        ? "#7dd3fc"
+        : /^\d/.test(match)
+          ? "#fbbf24"
+          : "#c4b5fd";
+    pieces.push({ text: match, color });
+    lastIndex = index + match.length;
+    return match;
+  });
+
+  if (lastIndex < line.length) pieces.push({ text: line.slice(lastIndex), color: "#d7dcff" });
+  return pieces.length ? pieces : [{ text: " ", color: "#d7dcff" }];
+}
+
+function CodeHighlightLayer({ code, language, scrollTop = 0 }) {
+  return (
+    <div aria-hidden="true" style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"hidden" }}>
+      <div style={{ margin:0, padding:"16px 16px 16px 56px", transform:`translateY(-${scrollTop}px)`, whiteSpace:"pre-wrap", wordBreak:"break-word", color:"#d7dcff", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", boxSizing:"border-box" }}>
+        {String(code || "").split("\n").map((line, lineIndex) => (
+          <div key={lineIndex} style={{ minHeight:21 }}>
+            {highlightCodeLine(line, language).map((piece, pieceIndex) => (
+              <span key={pieceIndex} style={{ color:piece.color }}>{piece.text}</span>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function CodingPlatform() {
   const defaultAdminProblems = [29, 34, 39]
@@ -2689,6 +2738,7 @@ function CodingPlatform() {
   const [adminAssignments, setAdminAssignments] = useState([]);
   const [adminAssignmentsLoading, setAdminAssignmentsLoading] = useState(false);
   const [activeAssignment, setActiveAssignment] = useState(null);
+  const [activeAssignments, setActiveAssignments] = useState([]);
   const [studentNotifications, setStudentNotifications] = useState([]);
   const [notificationCount, setNotificationCount] = useState(0);
   const [loginEvents, setLoginEvents]         = useState([]);
@@ -2697,6 +2747,7 @@ function CodingPlatform() {
   const [adminSyncingProblems, setAdminSyncingProblems] = useState(false);
   const [adminCreatingTest, setAdminCreatingTest] = useState(false);
   const [adminStartingTest, setAdminStartingTest] = useState(false);
+  const [adminStoppingTest, setAdminStoppingTest] = useState(false);
   const [adminCurrentTest, setAdminCurrentTest] = useState(defaultAdminTest);
   const [previousTests, setPreviousTests]     = useState(defaultPreviousTests);
   const [selectedPreviousTest, setSelectedPreviousTest] = useState(defaultPreviousTests[0]);
@@ -2747,8 +2798,14 @@ function CodingPlatform() {
   const [contestTimerSeconds, setContestTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [attemptedProblems, setAttemptedProblems] = useState(new Set());
   const [contestSecurityLocked, setContestSecurityLocked] = useState(false);
+  const [contestInstructionsOpen, setContestInstructionsOpen] = useState(false);
+  const [contestInstructionsAccepted, setContestInstructionsAccepted] = useState(false);
+  const [contestSessionEndsAt, setContestSessionEndsAt] = useState(null);
+  const [contestSessionProgress, setContestSessionProgress] = useState({});
+  const [contestResult, setContestResult] = useState(null);
   const [userSubmissions, setUserSubmissions] = useState([]);
   const [consoleOpen, setConsoleOpen]         = useState(false);
+  const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [errorBanner, setErrorBanner]         = useState(null);
   const [screenShield, setScreenShield]       = useState(false);
   const [shieldMessage, setShieldMessage]     = useState("Screen capture is disabled in this demo.");
@@ -2837,7 +2894,7 @@ function CodingPlatform() {
     }
   };
 
-  const loadAdminPortalData = async () => {
+  const loadAdminPortalData = async (preferredAssignmentId = adminCurrentTest?.id) => {
     setAdminAssignmentsLoading(true);
     setPortalError("");
 
@@ -2857,7 +2914,9 @@ function CodingPlatform() {
       const assignments = Array.isArray(testsData.assignments)
         ? testsData.assignments.map(mapAssignmentRecord).filter(Boolean)
         : [];
-      const currentAssignment = assignments.find((assignment) => assignment.status === "LIVE")
+      const liveAssignments = assignments.filter((assignment) => assignment.status === "LIVE");
+      const currentAssignment = assignments.find((assignment) => sameValue(assignment.id, preferredAssignmentId))
+        || liveAssignments[0]
         || assignments[0]
         || {
           ...defaultAdminTest,
@@ -2903,6 +2962,7 @@ function CodingPlatform() {
         };
       });
       setAdminAssignments(assignments);
+      setActiveAssignments(liveAssignments);
       setAdminCurrentTest(currentAssignment);
       setPreviousTests(history.length ? history : defaultPreviousTests);
       setSelectedPreviousTest(history[0] || defaultPreviousTests[0]);
@@ -2935,10 +2995,27 @@ function CodingPlatform() {
         performApiRequest(`/api/submissions/user/${currentUser.id}`),
       ]);
 
-      const assignment = mapAssignmentRecord(assignmentData.assignment);
+      const liveAssignments = Array.isArray(assignmentData.assignments)
+        ? assignmentData.assignments.map(mapAssignmentRecord).filter(Boolean)
+        : [];
+      const defaultAssignment = mapAssignmentRecord(assignmentData.assignment);
+      const availableLiveAssignments = liveAssignments.length
+        ? liveAssignments
+        : (defaultAssignment ? [defaultAssignment] : []);
+      const assignment = liveAssignments.find((item) => sameValue(item.id, activeAssignment?.id))
+        || defaultAssignment
+        || availableLiveAssignments[0]
+        || null;
       setActiveAssignment(assignment);
+      setActiveAssignments(availableLiveAssignments);
       if (assignment?.problems?.length) {
         setAdminCurrentTest(assignment);
+      }
+      if (contestEntered && !assignment) {
+        finishContest("Ended because the admin stopped the test.");
+      } else if (contestEntered && assignment?.id && activeAssignment?.id && !sameValue(assignment.id, activeAssignment.id)) {
+        setContestEntered(false);
+        setContestSessionEndsAt(null);
       }
 
       const notifications = Array.isArray(notificationData.notifications)
@@ -3101,41 +3178,47 @@ function CodingPlatform() {
   useEffect(() => {
     setContestEntered(false);
     setContestSecurityLocked(false);
+    setContestSessionEndsAt(null);
   }, [activeAssignment?.id, adminCurrentTest.id]);
 
   useEffect(() => {
-    const assignmentTimerTarget = activeAssignment?.endsAt || adminCurrentTest.endsAt;
     const fallbackDuration = activeAssignment?.duration || adminCurrentTest.duration || 60;
 
-    if (!assignmentTimerTarget) {
+    if (!contestSessionEndsAt) {
       setContestTimerSeconds(fallbackDuration * 60);
       return undefined;
     }
 
     const syncContestTimer = () => {
-      const remaining = Math.max(0, Math.floor((new Date(assignmentTimerTarget).getTime() - Date.now()) / 1000));
+      const remaining = Math.max(0, Math.floor((new Date(contestSessionEndsAt).getTime() - Date.now()) / 1000));
       setContestTimerSeconds(remaining);
     };
 
     syncContestTimer();
     const timer = setInterval(syncContestTimer, 1000);
     return () => clearInterval(timer);
-  }, [activeAssignment, adminCurrentTest]);
+  }, [activeAssignment, adminCurrentTest, contestSessionEndsAt]);
 
   useEffect(() => {
     if (!contestEntered) return;
+    if (!contestSessionEndsAt) return;
     if (contestTimerSeconds > 0) return;
 
-    setContestEntered(false);
-    setContestSecurityLocked(false);
-    setScreenShield(false);
-  }, [contestEntered, contestTimerSeconds]);
+    finishContest("Time ended.");
+  }, [contestEntered, contestSessionEndsAt, contestTimerSeconds]);
 
   useEffect(() => {
     if (!contestEntered) {
       setContestSecurityLocked(false);
       return undefined;
     }
+
+    let ending = false;
+    const endForSecurity = (reason) => {
+      if (ending) return;
+      ending = true;
+      finishContest(reason);
+    };
 
     const ensureContestFocus = () => {
       const hidden = document.hidden;
@@ -3145,7 +3228,7 @@ function CodingPlatform() {
       setContestSecurityLocked(shouldLock);
 
       if (shouldLock) {
-        triggerShield("Contest mode requires fullscreen. Return to fullscreen and stay on this tab to continue.", 0);
+        endForSecurity("Ended because fullscreen was closed or the window changed.");
       } else {
         setScreenShield(false);
       }
@@ -3153,11 +3236,20 @@ function CodingPlatform() {
 
     const handleBlur = () => {
       setContestSecurityLocked(true);
-      triggerShield("Tab switching is blocked during the contest. Return to fullscreen to continue.", 0);
+      endForSecurity("Ended because you switched away from the test window.");
+    };
+
+    const handleContestKeyDown = (e) => {
+      const key = e.key || "";
+      if (key === "Escape" || key === "F11" || key === "Meta" || key === "OS") {
+        e.preventDefault();
+        endForSecurity(`Ended because restricted key "${key}" was pressed.`);
+      }
     };
 
     document.addEventListener("visibilitychange", ensureContestFocus);
     document.addEventListener("fullscreenchange", ensureContestFocus);
+    window.addEventListener("keydown", handleContestKeyDown, true);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", ensureContestFocus);
 
@@ -3166,6 +3258,7 @@ function CodingPlatform() {
     return () => {
       document.removeEventListener("visibilitychange", ensureContestFocus);
       document.removeEventListener("fullscreenchange", ensureContestFocus);
+      window.removeEventListener("keydown", handleContestKeyDown, true);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", ensureContestFocus);
     };
@@ -3206,6 +3299,7 @@ function CodingPlatform() {
     setActiveTab("description");
     setConsoleTab("testcase");
     setConsoleOpen(false);
+    setEditorScrollTop(0);
     setErrorBanner(null);
     setView("problem");
   };
@@ -3220,11 +3314,68 @@ function CodingPlatform() {
     setView("contest");
   };
 
+  const buildContestResult = (reason = "Submitted", sessionProgress = contestSessionProgress) => {
+    const problems = contestProblemSet.length ? contestProblemSet : contestProblems;
+    const rows = problems.map((problem) => {
+      const status = sessionProgress[problem.id] || "not_attempted";
+      const accepted = status === "accepted";
+      const attempted = status === "rejected";
+      return {
+        id: problem.id,
+        title: problem.title,
+        difficulty: problem.difficulty,
+        score: accepted ? problem.contestScore : 0,
+        maxScore: problem.contestScore,
+        status: accepted ? "Accepted" : attempted ? "Rejected" : "Not Attempted",
+      };
+    });
+    const maxScore = rows.reduce((total, row) => total + row.maxScore, 0);
+    const score = rows.reduce((total, row) => total + row.score, 0);
+    const accepted = rows.filter((row) => row.status === "Accepted").length;
+    const rejected = rows.filter((row) => row.status === "Rejected").length;
+    const notAttempted = rows.filter((row) => row.status === "Not Attempted").length;
+
+    return {
+      title: contestDisplayName,
+      reason,
+      score,
+      maxScore,
+      accepted,
+      rejected,
+      notAttempted,
+      total: rows.length,
+      rows,
+      completedAt: new Date().toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+  };
+
+  const finishContest = (reason = "Submitted", sessionProgress = contestSessionProgress) => {
+    setContestResult(buildContestResult(reason, sessionProgress));
+    setContestEntered(false);
+    setContestSecurityLocked(false);
+    setContestInstructionsOpen(false);
+    setScreenShield(false);
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+    setView("contestResult");
+  };
+
   const goBackFromAdmin = () => {
     setView("home");
   };
 
   const goBackFromProblem = () => {
+    if (problemNavigationSource === "contest" && contestEntered) {
+      finishContest("Ended because you left the test screen.");
+      return;
+    }
     setView(problemNavigationSource === "contest" ? "contest" : "list");
   };
 
@@ -3242,13 +3393,21 @@ function CodingPlatform() {
     }
   };
 
-  const handleEnterContest = async (problemToOpen = contestProblems[0]) => {
+  const handleEnterContest = (problemToOpen = contestProblems[0]) => {
     if (contestStatus === "Ended" || contestStatus === "Awaiting Start") {
       setPortalError(contestStatus === "Awaiting Start" ? "No live test has been started for students yet." : "");
       return;
     }
 
     setPortalError("");
+    setSelectedProblem(problemToOpen || contestProblems[0] || null);
+    setContestInstructionsAccepted(false);
+    setContestInstructionsOpen(true);
+  };
+
+  const startContestAfterInstructions = async () => {
+    const problemToOpen = selectedProblem || contestProblems[0];
+    if (!contestInstructionsAccepted || !problemToOpen) return;
 
     const fullscreenGranted = await requestContestFullscreen();
     if (!fullscreenGranted) {
@@ -3258,6 +3417,10 @@ function CodingPlatform() {
 
     setContestEntered(true);
     setContestSecurityLocked(false);
+    setContestSessionEndsAt(new Date(Date.now() + ((activeContestAssignment?.duration || adminCurrentTest.duration || 60) * 60 * 1000)).toISOString());
+    setContestSessionProgress({});
+    setContestResult(null);
+    setContestInstructionsOpen(false);
     if (problemToOpen) openProblem(problemToOpen, "contest");
   };
 
@@ -3709,7 +3872,7 @@ function CodingPlatform() {
       setAdminSubmissionProblemId(createdAssignment?.problems?.[0]?.id || "");
       setSolutionsVisible(false);
       setPortalMessage(`Draft test "${createdAssignment.title}" saved. Start it when you're ready to notify students.`);
-      await loadAdminPortalData();
+      await loadAdminPortalData(createdAssignment.id);
     } catch (error) {
       setPortalError(error.message || "Unable to create the test.");
     } finally {
@@ -3736,11 +3899,37 @@ function CodingPlatform() {
       setAdminCurrentTest(startedAssignment);
       setAdminSubmissionProblemId(startedAssignment?.problems?.[0]?.id || "");
       setPortalMessage(`Test started. Notifications were sent to ${data.notifiedStudents || 0} logged-in students.`);
-      await loadAdminPortalData();
+      await loadAdminPortalData(startedAssignment.id);
     } catch (error) {
       setPortalError(error.message || "Unable to start the test.");
     } finally {
       setAdminStartingTest(false);
+    }
+  };
+
+  const handleStopAssignedTest = async () => {
+    if (!adminCurrentTest.id || adminCurrentTest.status !== "LIVE") {
+      setPortalError("Select a live test before stopping it.");
+      return;
+    }
+
+    setAdminStoppingTest(true);
+    setPortalError("");
+
+    try {
+      const data = await performApiRequest(`/api/tests/${adminCurrentTest.id}/stop`, {
+        method: "POST",
+      });
+
+      const stoppedAssignment = mapAssignmentRecord(data.assignment);
+      setAdminCurrentTest(stoppedAssignment);
+      setAdminTimerSeconds(0);
+      setPortalMessage(`Test stopped. Notifications were sent to ${data.notifiedStudents || 0} logged-in students.`);
+      await loadAdminPortalData(stoppedAssignment.id);
+    } catch (error) {
+      setPortalError(error.message || "Unable to stop the test.");
+    } finally {
+      setAdminStoppingTest(false);
     }
   };
 
@@ -3849,15 +4038,25 @@ function CodingPlatform() {
     if (errors.length > 0) setErrorBanner(errors);
 
     const allPassed = results.every(r => r.status === "pass");
+    const nextSolvedSet = new Set(solved);
+    const nextAttemptedSet = new Set(attemptedProblems);
     if (allPassed) {
-      setAttemptedProblems((prev) => {
-        const next = new Set(prev);
-        next.delete(p.id);
-        return next;
-      });
-      if (isSubmit) setSolved(prev => new Set([...prev, p.id]));
+      nextAttemptedSet.delete(p.id);
+      setAttemptedProblems(new Set(nextAttemptedSet));
+      if (isSubmit) {
+        nextSolvedSet.add(p.id);
+        setSolved(new Set(nextSolvedSet));
+      }
     } else {
-      setAttemptedProblems((prev) => new Set([...prev, p.id]));
+      nextAttemptedSet.add(p.id);
+      setAttemptedProblems(new Set(nextAttemptedSet));
+    }
+    const nextContestSessionProgress = {
+      ...contestSessionProgress,
+      ...(isSubmit && isContestProblem ? { [p.id]: allPassed ? "accepted" : "rejected" } : {}),
+    };
+    if (isSubmit && isContestProblem) {
+      setContestSessionProgress(nextContestSessionProgress);
     }
 
     setRunResult({
@@ -3875,6 +4074,9 @@ function CodingPlatform() {
     }
 
     if (isSubmit) setSubmitting(false); else setRunning(false);
+    if (isSubmit && isFinalContestProblem) {
+      finishContest("Final submission completed.", nextContestSessionProgress);
+    }
   };
   const indentUnit = "  ";
   const handleEditorIndentation = (e, value, setter, ref) => {
@@ -3956,12 +4158,15 @@ function CodingPlatform() {
     (filterDiff === "All" || p.difficulty === filterDiff) &&
     p.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
-  const activeContestAssignment = activeAssignment || (adminCurrentTest.status === "LIVE" ? adminCurrentTest : null);
+  const activeContestAssignment = activeAssignment || (currentUser.role === "admin" && adminCurrentTest.status === "LIVE" ? adminCurrentTest : null);
+  const activeContestOptions = activeAssignments.length
+    ? activeAssignments
+    : (activeContestAssignment ? [activeContestAssignment] : []);
   const contestDisplayName = activeContestAssignment?.title
     || (adminCurrentTest.title === "Current Test" ? "Weekly Coding Contest #1" : adminCurrentTest.title);
   const contestStatus = !activeContestAssignment
     ? "Awaiting Start"
-    : contestTimerSeconds <= 0
+    : contestSessionEndsAt && contestTimerSeconds <= 0
       ? "Ended"
       : "Live";
   const contestStatusTone = contestStatus === "Live"
@@ -4018,6 +4223,8 @@ function CodingPlatform() {
   const hasPreviousProblem = selectedProblemIndex > 0;
   const hasNextProblem = selectedProblemIndex > -1 && selectedProblemIndex < problemNavigation.length - 1;
   const showProblemNavigation = problemNavigation.length > 1 && selectedProblemIndex > -1;
+  const isContestProblem = problemNavigationSource === "contest" && contestEntered;
+  const isFinalContestProblem = isContestProblem && selectedProblemIndex === problemNavigation.length - 1;
   const openAdjacentProblem = (offset) => {
     if (selectedProblemIndex < 0) return;
 
@@ -4025,6 +4232,13 @@ function CodingPlatform() {
     if (nextProblem) {
       openProblem(nextProblem, problemNavigationSource);
     }
+  };
+  const handleSubmitClick = () => {
+    if (isFinalContestProblem) {
+      const confirmed = window.confirm("Are you sure you want to submit the final answer and finish the test?");
+      if (!confirmed) return;
+    }
+    simulateRun(true);
   };
   const leaderboardMode = leaderboardScope === "This Contest"
     ? "contest"
@@ -4393,6 +4607,8 @@ function CodingPlatform() {
     : adminCurrentStatus === "ENDED"
       ? ADMIN_THEME.error
       : ADMIN_THEME.info;
+  const liveAdminAssignments = adminAssignments.filter((assignment) => assignment.status === "LIVE");
+  const selectableAdminAssignments = adminAssignments.length ? adminAssignments : [adminCurrentTest].filter(Boolean);
   const loggedInRegisteredStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) > 0);
   const neverLoggedInStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) === 0);
   const departmentTotal = new Set(
@@ -5097,6 +5313,26 @@ function CodingPlatform() {
                 <div>Start: <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{formatPortalDate(adminCurrentTest.startsAt)}</span></div>
                 <div>Timer: <span style={{ color:currentTestEnded ? ADMIN_THEME.error : ADMIN_THEME.primary, fontWeight:700 }}>{formatCountdown(adminTimerSeconds)}</span></div>
               </div>
+              <div style={{ marginTop:14 }}>
+                <label style={S.adminFieldLabel}>Manage Test</label>
+                <select
+                  value={adminCurrentTest.id || ""}
+                  onChange={(e) => {
+                    const selectedAssignment = selectableAdminAssignments.find((assignment) => sameValue(assignment.id, e.target.value));
+                    if (!selectedAssignment) return;
+                    setAdminCurrentTest(selectedAssignment);
+                    setAdminSubmissionProblemId(selectedAssignment?.problems?.[0]?.id || "");
+                    setSolutionsVisible(false);
+                  }}
+                  style={S.adminInput}
+                >
+                  {selectableAdminAssignments.map((assignment) => (
+                    <option key={assignment.id || "default-test"} value={assignment.id || ""}>
+                      {assignment.title} - {assignment.status || "DRAFT"}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:16 }}>
                 <button
                   onClick={handleStartAssignedTest}
@@ -5110,6 +5346,19 @@ function CodingPlatform() {
                   {adminStartingTest ? "Starting..." : adminCurrentTest.status === "LIVE" ? "Test Live" : "Start Test"}
                 </button>
                 <button
+                  onClick={handleStopAssignedTest}
+                  disabled={adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE"}
+                  style={{
+                    ...S.adminButton("default"),
+                    color: adminCurrentTest.status === "LIVE" ? ADMIN_THEME.error : ADMIN_THEME.textSecondary,
+                    border: adminCurrentTest.status === "LIVE" ? `1px solid ${ADMIN_THEME.error}` : `1px solid ${ADMIN_THEME.border}`,
+                    opacity: adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE" ? 0.6 : 1,
+                    cursor: adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE" ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {adminStoppingTest ? "Stopping..." : "Stop Test"}
+                </button>
+                <button
                   onClick={() => syncProblemBankToDatabase(false)}
                   disabled={adminSyncingProblems}
                   style={{ ...S.adminButton("default"), opacity: adminSyncingProblems ? 0.6 : 1, cursor: adminSyncingProblems ? "not-allowed" : "pointer" }}
@@ -5120,25 +5369,35 @@ function CodingPlatform() {
             </div>
 
             <div style={S.adminCard}>
-              <div style={S.adminSectionTitle}>Previous Tests</div>
+              <div style={S.adminSectionTitle}>Test Queue</div>
+              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, marginBottom:12 }}>
+                Live now: <span style={{ color:ADMIN_THEME.success, fontWeight:700 }}>{liveAdminAssignments.length}</span>
+              </div>
               <div style={{ display:"grid", gap:10 }}>
-                {previousTests.slice(0, 4).map((test) => (
+                {selectableAdminAssignments.slice(0, 5).map((test, index) => (
                   <button
-                    key={test.id}
-                    onClick={() => setSelectedPreviousTest(test)}
+                    key={test.id || `test-${index}`}
+                    onClick={() => {
+                      setAdminCurrentTest(test);
+                      setAdminSubmissionProblemId(test?.problems?.[0]?.id || "");
+                      setSolutionsVisible(false);
+                    }}
                     style={{
-                      background:selectedPreviousTest?.id===test.id ? ADMIN_THEME.sidebarActive : ADMIN_THEME.hoverBackground,
-                      border:selectedPreviousTest?.id===test.id ? `1px solid ${ADMIN_THEME.primary}` : `1px solid ${ADMIN_THEME.border}`,
+                      background:adminCurrentTest?.id===test.id ? ADMIN_THEME.sidebarActive : ADMIN_THEME.hoverBackground,
+                      border:adminCurrentTest?.id===test.id ? `1px solid ${ADMIN_THEME.primary}` : `1px solid ${ADMIN_THEME.border}`,
                       borderRadius:12,
                       color:ADMIN_THEME.text,
                       padding:"12px 14px",
                       textAlign:"left",
                       cursor:"pointer",
-                      boxShadow:selectedPreviousTest?.id===test.id ? ADMIN_THEME.shadowSoft : "none"
+                      boxShadow:adminCurrentTest?.id===test.id ? ADMIN_THEME.shadowSoft : "none"
                     }}
                   >
-                    <div style={{ fontWeight:700, marginBottom:4 }}>{test.name}</div>
-                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{test.date} | {test.difficulty}</div>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:10, alignItems:"center" }}>
+                      <span style={{ fontWeight:700 }}>{test.title || test.name}</span>
+                      <span style={{ color:test.status === "LIVE" ? ADMIN_THEME.success : test.status === "ENDED" ? ADMIN_THEME.error : ADMIN_THEME.info, fontSize:11, fontWeight:800 }}>{test.status || "ENDED"}</span>
+                    </div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{test.date} | {test.level || test.difficulty}</div>
                   </button>
                 ))}
               </div>
@@ -5676,6 +5935,37 @@ function CodingPlatform() {
       <ScreenShield active={screenShield} message={shieldMessage} />
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        {contestInstructionsOpen && (
+          <div style={S.modalBackdrop}>
+            <div style={{ ...S.modalCard, width:"min(680px, 100%)" }}>
+              <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Test Instructions</div>
+              <h2 style={{ margin:"0 0 12px", color:"#f5f6ff", fontSize:30, lineHeight:1.1 }}>{contestDisplayName}</h2>
+              <div style={{ color:"#a9aed0", fontSize:14, lineHeight:1.8, marginBottom:18 }}>
+                The test will open in fullscreen. Leaving fullscreen, switching tabs/windows, pressing restricted keys such as Esc/F11/Windows, or returning back from the test screen will end the test and show your result.
+              </div>
+              <div style={{ display:"grid", gap:10, background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 16px", color:"#d9dcf7", fontSize:14, lineHeight:1.7, marginBottom:16 }}>
+                <div>Problems: <strong>{contestProblems.length}</strong></div>
+                <div>Duration: <strong>{activeContestAssignment?.duration || adminCurrentTest.duration} minutes</strong></div>
+                <div>Final question: use <strong>Final Submit</strong> and confirm before ending the test.</div>
+                <div>Result: accepted, rejected, and not-attempted problems will be shown with your score.</div>
+              </div>
+              <label style={{ display:"flex", gap:10, alignItems:"flex-start", color:"#cdd2ef", fontSize:14, lineHeight:1.6, marginBottom:20, cursor:"pointer" }}>
+                <input type="checkbox" checked={contestInstructionsAccepted} onChange={(e)=>setContestInstructionsAccepted(e.target.checked)} style={{ marginTop:4 }} />
+                <span>I have read the instructions and understand that leaving the test window will end my test.</span>
+              </label>
+              <div style={{ display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
+                <button onClick={()=>setContestInstructionsOpen(false)} style={S.btn("default")}>Cancel</button>
+                <button
+                  onClick={startContestAfterInstructions}
+                  disabled={!contestInstructionsAccepted}
+                  style={{ ...S.btn("submit"), opacity:contestInstructionsAccepted ? 1 : 0.5, cursor:contestInstructionsAccepted ? "pointer" : "not-allowed" }}
+                >
+                  Start Test
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <nav style={S.nav}>
           <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
@@ -5720,6 +6010,39 @@ function CodingPlatform() {
             </div>
           )}
 
+          {activeContestOptions.length > 1 && (
+            <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px", display:"grid", gap:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+                <div>
+                  <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:6 }}>Available Tests</div>
+                  <div style={{ color:"#eef0ff", fontWeight:700 }}>Choose the live test you want to attempt.</div>
+                </div>
+                <span style={{ color:"#73f0b3", fontSize:13, fontWeight:700 }}>{activeContestOptions.length} live</span>
+              </div>
+              <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                {activeContestOptions.map((assignment) => (
+                  <button
+                    key={assignment.id}
+                    onClick={() => {
+                      setActiveAssignment(assignment);
+                      setAdminCurrentTest(assignment);
+                      setContestEntered(false);
+                      setContestSessionEndsAt(null);
+                      setContestResult(null);
+                    }}
+                    style={{
+                      ...S.btn(sameValue(activeContestAssignment?.id, assignment.id) ? "submit" : "default"),
+                      minHeight:42,
+                      color:sameValue(activeContestAssignment?.id, assignment.id) ? undefined : "#dfe2ff",
+                    }}
+                  >
+                    {assignment.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ background:"radial-gradient(circle at top left, rgba(124,106,247,0.22), rgba(10,10,15,0.98) 50%)", border:"1px solid #25253b", borderRadius:24, padding:"28px 28px 30px", boxShadow:"0 24px 70px rgba(0,0,0,0.32)" }}>
             <div style={{ display:"flex", justifyContent:"space-between", gap:20, alignItems:"flex-start", flexWrap:"wrap" }}>
               <div style={{ maxWidth:720 }}>
@@ -5730,8 +6053,8 @@ function CodingPlatform() {
                 </div>
                 <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
                   <div style={{ padding:"10px 14px", borderRadius:14, background:"#0f131c", border:"1px solid #24283a" }}>
-                    <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>Countdown</div>
-                    <div style={{ color:"#eef0ff", fontSize:28, fontWeight:700, lineHeight:1 }}>{formatContestCountdown(contestTimerSeconds)}</div>
+                    <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>{contestSessionEndsAt ? "Time Left" : "Duration"}</div>
+                    <div style={{ color:"#eef0ff", fontSize:28, fontWeight:700, lineHeight:1 }}>{formatCountdown(contestTimerSeconds)}</div>
                   </div>
                   <div style={{ padding:"10px 14px", borderRadius:999, border:`1px solid ${contestStatusTone.border}`, background:contestStatusTone.background, color:contestStatusTone.color, fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
                     {contestStatus}
@@ -5753,7 +6076,7 @@ function CodingPlatform() {
                     boxShadow:"0 16px 30px rgba(124,106,247,0.28)",
                   }}
                 >
-                  {contestStatus === "Awaiting Start" ? "Awaiting Admin Start" : contestStatus === "Ended" ? "Contest Ended" : contestEntered ? "Resume Contest" : "Enter Contest"}
+                  {contestStatus === "Awaiting Start" ? "Awaiting Admin Start" : contestStatus === "Ended" ? "Contest Ended" : contestEntered ? "Resume Test" : "Start Test"}
                 </button>
                 <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px", color:"#a9aed0", fontSize:14, lineHeight:1.7 }}>
                   <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>Contest Snapshot</div>
@@ -5831,7 +6154,7 @@ function CodingPlatform() {
                 <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Round Status</div>
                 <div style={{ display:"grid", gap:10, color:"#a9aed0", fontSize:14, lineHeight:1.7 }}>
                   <div>Contest Name: <span style={{ color:"#eef0ff", fontWeight:700 }}>{contestDisplayName}</span></div>
-                  <div>Time Left: <span style={{ color:"#4fd1c5", fontWeight:700 }}>{formatContestCountdown(contestTimerSeconds)}</span></div>
+                  <div>{contestSessionEndsAt ? "Time Left" : "Duration"}: <span style={{ color:"#4fd1c5", fontWeight:700 }}>{formatCountdown(contestTimerSeconds)}</span></div>
                   <div>Status: <span style={{ color:contestStatusTone.color, fontWeight:700 }}>{contestStatus}</span></div>
                   <div>Joined: <span style={{ color:"#eef0ff", fontWeight:700 }}>{contestEntered ? "Yes" : "Not yet"}</span></div>
                 </div>
@@ -5869,6 +6192,83 @@ function CodingPlatform() {
       </div>
     </div>
   );
+
+  if (view === "contestResult") {
+    const result = contestResult || buildContestResult("Completed");
+    const percentage = result.maxScore ? Math.round((result.score / result.maxScore) * 100) : 0;
+
+    return (
+      <div style={{ ...S.app, minHeight:"100vh" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <nav style={S.nav}>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <button onClick={openContest} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Contest</span>
+            <span style={S.navBtnHint(false)}>Back to contest hub</span>
+          </button>
+          <button onClick={()=>openLeaderboard("This Contest")} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Leaderboard</span>
+            <span style={S.navBtnHint(false)}>Compare scores</span>
+          </button>
+        </nav>
+
+        <div style={{ maxWidth:1100, margin:"34px auto 44px", padding:"0 24px", width:"100%", display:"grid", gap:20 }}>
+          <div style={{ background:"radial-gradient(circle at top left, rgba(79,209,197,0.18), rgba(10,10,15,0.98) 50%)", border:"1px solid #25253b", borderRadius:24, padding:"28px", boxShadow:"0 24px 70px rgba(0,0,0,0.32)" }}>
+            <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", marginBottom:10 }}>Test Result</div>
+            <div style={{ display:"flex", justifyContent:"space-between", gap:20, flexWrap:"wrap", alignItems:"flex-end" }}>
+              <div>
+                <h1 style={{ margin:"0 0 10px", color:"#f5f6ff", fontSize:42, lineHeight:1 }}>{result.title}</h1>
+                <div style={{ color:"#a9aed0", fontSize:14 }}>{result.reason} | {result.completedAt}</div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ color:"#73f0b3", fontSize:44, fontWeight:800, lineHeight:1 }}>{result.score}/{result.maxScore}</div>
+                <div style={{ color:"#8f93b4", fontSize:13, marginTop:6 }}>{percentage}% score</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))", gap:14 }}>
+            {[
+              { label:"Accepted", value:result.accepted, color:"#73f0b3", border:"#1f4e3a", background:"#0e1b15" },
+              { label:"Rejected", value:result.rejected, color:"#ff9b9b", border:"#5a262d", background:"#1b0f13" },
+              { label:"Not Attempted", value:result.notAttempted, color:"#ffc86b", border:"#5d4722", background:"#191309" },
+              { label:"Total Problems", value:result.total, color:"#93c5fd", border:"#2d4f7b", background:"#0f1727" },
+            ].map((item) => (
+              <div key={item.label} style={{ background:item.background, border:`1px solid ${item.border}`, borderRadius:16, padding:"18px 16px" }}>
+                <div style={{ color:item.color, fontSize:30, fontWeight:800, lineHeight:1 }}>{item.value}</div>
+                <div style={{ color:"#a9aed0", fontSize:12, marginTop:8 }}>{item.label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:18, overflow:"hidden" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead>
+                <tr style={{ borderBottom:"1px solid #1e1e2e" }}>
+                  {["Problem", "Difficulty", "Status", "Score"].map((heading) => (
+                    <th key={heading} style={S.tableHead}>{heading}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map((row) => {
+                  const statusColor = row.status === "Accepted" ? "#73f0b3" : row.status === "Rejected" ? "#ff9b9b" : "#ffc86b";
+                  return (
+                    <tr key={row.id} style={{ borderBottom:"1px solid #0f0f1a" }}>
+                      <td style={{ padding:"14px 16px", color:"#eef0ff", fontWeight:700 }}>{row.title}</td>
+                      <td style={{ padding:"14px 16px" }}><span style={S.badge(row.difficulty)}>{row.difficulty}</span></td>
+                      <td style={{ padding:"14px 16px", color:statusColor, fontWeight:700 }}>{row.status}</td>
+                      <td style={{ padding:"14px 16px", color:"#d9dcf7", fontWeight:700 }}>{row.score}/{row.maxScore}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (view === "leaderboard") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
@@ -6104,6 +6504,12 @@ function CodingPlatform() {
         <span style={S.logo} onClick={()=>setView("list")}>{"</> CodeArena"}</span>
         <span style={{ color:"#444", fontSize:14 }}>/</span>
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
+        {problemNavigationSource === "contest" && contestEntered && (
+          <div style={{ display:"inline-flex", alignItems:"center", gap:8, marginLeft:14, padding:"7px 10px", borderRadius:10, background:"#0f1727", border:"1px solid #2d4f7b", color:"#93c5fd", fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
+            <span>Time Left</span>
+            <span style={{ color:contestTimerSeconds <= 60 ? "#ff9b9b" : "#eef0ff", fontFamily:"'JetBrains Mono',monospace", fontSize:13 }}>{formatCountdown(contestTimerSeconds)}</span>
+          </div>
+        )}
         {showProblemNavigation && (
           <div style={{ marginLeft:"auto", display:"flex", gap:10, alignItems:"center" }}>
             {hasPreviousProblem && (
@@ -6231,20 +6637,23 @@ function CodingPlatform() {
           </div>
 
           {/* Editor */}
-          <div style={{ flex:1, position:"relative", overflow:"hidden" }}>
+          <div style={{ flex:1, position:"relative", overflow:"hidden", background:"linear-gradient(180deg,#0d1020,#090b14)" }}>
             <div style={{ position:"absolute", left:0, top:0, bottom:0, width:44, background:"#0a0a12", borderRight:"1px solid #1a1a2a", paddingTop:16, textAlign:"right", paddingRight:8, userSelect:"none", overflowY:"hidden", zIndex:1 }}>
-              {code.split("\n").map((_,i)=><div key={i} style={{ color:"#333", fontSize:13, lineHeight:"21px" }}>{i+1}</div>)}
+              <div style={{ transform:`translateY(-${editorScrollTop}px)` }}>
+                {code.split("\n").map((_,i)=><div key={i} style={{ color:"#56607a", fontSize:13, lineHeight:"21px" }}>{i+1}</div>)}
+              </div>
             </div>
-            <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef)} spellCheck={false}
-              style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"#0c0c14", color:"#c8c8e8", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }} />
+            <CodeHighlightLayer code={code} language={lang} scrollTop={editorScrollTop} />
+            <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onScroll={(e)=>setEditorScrollTop(e.currentTarget.scrollTop)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef)} spellCheck={false}
+              style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"transparent", color:"transparent", caretColor:"#67e8f9", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f", whiteSpace:"pre-wrap", wordBreak:"break-word" }} />
           </div>
 
           <div style={{ background:"#0d0d15", borderTop:"1px solid #1e1e2e", padding:"10px 16px", display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
             <button onClick={()=>simulateRun(false)} disabled={running||submitting} style={S.btn("run")}>
               {running ? "Running..." : "Run"}
             </button>
-            <button onClick={()=>simulateRun(true)} disabled={running||submitting} style={S.btn("submit")}>
-              {submitting ? "Submitting..." : "Submit"}
+            <button onClick={handleSubmitClick} disabled={running||submitting} style={S.btn("submit")}>
+              {submitting ? "Submitting..." : isFinalContestProblem ? "Final Submit" : "Submit"}
             </button>
           </div>
 

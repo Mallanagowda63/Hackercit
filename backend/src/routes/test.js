@@ -7,5 +7,6 @@ router.get('/', requireAuth, requireRole('ADMIN'), controller.list);
 router.get('/active', requireAuth, controller.active);
 router.post('/', requireAuth, requireRole('ADMIN'), controller.create);
 router.post('/:id/start', requireAuth, requireRole('ADMIN'), controller.start);
+router.post('/:id/stop', requireAuth, requireRole('ADMIN'), controller.stop);
 
 module.exports = router;

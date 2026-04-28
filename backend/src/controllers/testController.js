@@ -70,7 +70,7 @@ exports.active = async (req, res) => {
   try {
     await closeExpiredAssignments();
     const assignments = await loadAssignmentsWithProblems({ status: 'LIVE' });
-    return res.json({ assignment: assignments[0] || null });
+    return res.json({ assignment: assignments[0] || null, assignments });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'server error' });
@@ -133,17 +133,6 @@ exports.start = async (req, res) => {
     const now = new Date();
     const endsAt = new Date(now.getTime() + (assignment.durationMinutes * 60 * 1000));
 
-    await prisma.testAssignment.updateMany({
-      where: {
-        status: 'LIVE',
-        id: { not: id },
-      },
-      data: {
-        status: 'ENDED',
-        endsAt: now,
-      },
-    });
-
     const startedAssignment = await prisma.testAssignment.update({
       where: { id },
       data: {
@@ -176,6 +165,59 @@ exports.start = async (req, res) => {
     }
 
     const [fullAssignment] = await loadAssignmentsWithProblems({ id: startedAssignment.id });
+    return res.json({
+      assignment: fullAssignment,
+      notifiedStudents: students.length,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+exports.stop = async (req, res) => {
+  try {
+    await closeExpiredAssignments();
+
+    const { id } = req.params;
+    const assignment = await prisma.testAssignment.findUnique({ where: { id } });
+    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (assignment.status !== 'LIVE') {
+      return res.status(400).json({ error: 'only a live test can be stopped' });
+    }
+
+    const now = new Date();
+    const stoppedAssignment = await prisma.testAssignment.update({
+      where: { id },
+      data: {
+        status: 'ENDED',
+        endsAt: now,
+      },
+    });
+
+    const students = await prisma.user.findMany({
+      where: {
+        role: 'USER',
+        loginCount: { gt: 0 },
+      },
+      select: { id: true },
+    });
+
+    if (students.length) {
+      await prisma.$transaction(
+        students.map((student) => prisma.notification.create({
+          data: {
+            userId: student.id,
+            type: 'TEST_ENDED',
+            title: `Test stopped: ${stoppedAssignment.title}`,
+            message: `The coding test "${stoppedAssignment.title}" has been stopped by the admin.`,
+            assignmentId: stoppedAssignment.id,
+          },
+        })),
+      );
+    }
+
+    const [fullAssignment] = await loadAssignmentsWithProblems({ id: stoppedAssignment.id });
     return res.json({
       assignment: fullAssignment,
       notifiedStudents: students.length,
