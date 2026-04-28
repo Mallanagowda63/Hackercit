@@ -70,7 +70,7 @@ function normalizeTestCases(value) {
   }));
 }
 
-function normalizeLegacyId(value) {
+function normalizeProblemNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : null;
@@ -81,6 +81,7 @@ function normalizeProblemPayload(input) {
   const statement = String(input?.statement || input?.description || '').trim();
   const difficulty = normalizeDifficulty(input?.difficulty);
   const slugSource = String(input?.slug || title).trim();
+  const number = normalizeProblemNumber(input?.number ?? input?.legacyId);
 
   if (!title) {
     throw new Error('title required');
@@ -103,8 +104,7 @@ function normalizeProblemPayload(input) {
   const testCases = normalizeTestCases(input?.testCases);
   const samples = input?.samples ?? examples;
 
-  return {
-    legacyId: normalizeLegacyId(input?.legacyId),
+  const payload = {
     title,
     slug,
     fnName: input?.fnName ? String(input.fnName).trim() : null,
@@ -118,13 +118,19 @@ function normalizeProblemPayload(input) {
     constraints: normalizeStringArray(input?.constraints),
     samples,
   };
+
+  if (number !== null) {
+    payload.legacyId = number;
+  }
+
+  return payload;
 }
 
 function serializeProblem(problem, options = {}) {
   const includeContent = Boolean(options.includeContent);
   const serialized = {
     id: problem.id,
-    legacyId: problem.legacyId ?? null,
+    number: problem.legacyId ?? null,
     title: problem.title,
     slug: problem.slug,
     fnName: problem.fnName || null,

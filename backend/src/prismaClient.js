@@ -11,12 +11,21 @@ function normalizeConnectionString(value) {
     : trimmed;
 }
 
-const DATABASE_URL = (
-  normalizeConnectionString(process.env.DATABASE_URL)
-  || normalizeConnectionString(process.env.MONGODB_URI)
-  || normalizeConnectionString(process.env.MONGO_URL)
-  || 'mongodb://127.0.0.1:27017/hackercit'
-);
+function isMongoConnectionString(value) {
+  return /^mongodb(\+srv)?:\/\//i.test(String(value || '').trim());
+}
+
+function resolveMongoConnectionString() {
+  const candidates = [
+    normalizeConnectionString(process.env.MONGODB_URI),
+    normalizeConnectionString(process.env.MONGO_URL),
+    normalizeConnectionString(process.env.DATABASE_URL),
+  ];
+
+  return candidates.find(isMongoConnectionString) || 'mongodb://127.0.0.1:27017/hackercit';
+}
+
+const DATABASE_URL = resolveMongoConnectionString();
 const IS_LOCAL_DATABASE_URL = DATABASE_URL === 'mongodb://127.0.0.1:27017/hackercit';
 
 let clientPromise = null;

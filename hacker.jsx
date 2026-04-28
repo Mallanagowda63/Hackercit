@@ -20,7 +20,7 @@ const BACKEND_API_TARGET = USES_SAME_ORIGIN_BACKEND
   ? `${window.location.origin}/api/...`
   : (BACKEND_API_BASE || "backend API (not configured)");
 const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
-const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, lastLoginAt: null, loginCount: 0 };
+const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, createdAt: null, lastLoginAt: null, loginCount: 0 };
 
 async function readJsonSafely(response) {
   const text = await response.text();
@@ -85,9 +85,9 @@ function mapProblemRecord(problem) {
     : { javascript: "", python: "", java: "" };
 
   return {
-    id: problem.legacyId ?? problem.id,
+    id: problem.number ?? problem.legacyId ?? problem.id,
     dbId: problem.id,
-    legacyId: problem.legacyId ?? null,
+    number: problem.number ?? problem.legacyId ?? null,
     slug: problem.slug || "",
     title: problem.title || "Untitled Problem",
     fnName: problem.fnName || "",
@@ -112,12 +112,14 @@ function mapProblemRecord(problem) {
 function resolveSubmissionProblemKey(submission, availableProblems = []) {
   const matchedProblem = availableProblems.find((problem) => (
     sameValue(problem.dbId, submission.problemId)
+    || sameValue(problem.id, submission.problem?.number)
     || sameValue(problem.id, submission.problem?.legacyId)
     || sameValue(problem.dbId, submission.problem?.id)
     || sameValue(problem.id, submission.problemId)
   ));
 
   return matchedProblem?.id
+    ?? submission.problem?.number
     ?? submission.problem?.legacyId
     ?? null;
 }
@@ -2644,6 +2646,28 @@ function CodingPlatform() {
     { name: "Meera", department: "AIML", status: "Reviewing" },
     { name: "Rohan", department: "ECE", status: "Submitted" },
   ];
+  const adminTabs = [
+    { id: "overview", label: "Overview" },
+    { id: "questions", label: "Question Uploads" },
+    { id: "leaderboard", label: "Leaderboard" },
+    { id: "students", label: "Student List" },
+    { id: "profile", label: "Profile" },
+  ];
+  const questionCategories = ["DSA", "SQL", "Other"];
+  const createDefaultQuestionUploadForm = () => ({
+    title: "",
+    category: "DSA",
+    difficulty: "Medium",
+    fnName: "solve",
+    tags: "",
+    statement: "",
+    constraints: "",
+    examples: "",
+    testCases: "",
+    javascript: "function solve(input) {\n  return input;\n}",
+    python: "def solve(input):\n    return input",
+    java: "public class Solution {\n  public static String solve(String input) {\n    return input;\n  }\n}",
+  });
 
   const [view, setView]                       = useState("home");
   const [userRole, setUserRole]               = useState(null);
@@ -2678,10 +2702,17 @@ function CodingPlatform() {
   const [selectedPreviousTest, setSelectedPreviousTest] = useState(defaultPreviousTests[0]);
   const [leaderboard, setLeaderboard]         = useState([]);
   const [activeUsers, setActiveUsers]         = useState(defaultActiveUsers);
+  const [registeredStudents, setRegisteredStudents] = useState([]);
   const [participantsCount, setParticipantsCount] = useState(defaultActiveUsers.length);
+  const [adminTab, setAdminTab]               = useState("overview");
   const [adminTimerSeconds, setAdminTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [adminWarning, setAdminWarning]       = useState("");
   const [solutionsVisible, setSolutionsVisible] = useState(false);
+  const [questionUploadForm, setQuestionUploadForm] = useState(createDefaultQuestionUploadForm);
+  const [questionUploading, setQuestionUploading] = useState(false);
+  const [questionUploadError, setQuestionUploadError] = useState("");
+  const [questionUploadSuccess, setQuestionUploadSuccess] = useState("");
+  const [questionCategoryFilter, setQuestionCategoryFilter] = useState("All");
   const [adminCreateForm, setAdminCreateForm] = useState({
     title: "Fresh Challenge",
     level: "Hard",
@@ -2716,17 +2747,13 @@ function CodingPlatform() {
   const [contestTimerSeconds, setContestTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [attemptedProblems, setAttemptedProblems] = useState(new Set());
   const [contestSecurityLocked, setContestSecurityLocked] = useState(false);
-  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
-  const [profileDraft, setProfileDraft]         = useState({
-    handle: "@codearena",
-    bio: "Competitive programmer focused on clean implementations, contest consistency, and steady rating growth.",
-    badge: "Expert",
-  });
+  const [userSubmissions, setUserSubmissions] = useState([]);
   const [consoleOpen, setConsoleOpen]         = useState(false);
   const [errorBanner, setErrorBanner]         = useState(null);
   const [screenShield, setScreenShield]       = useState(false);
   const [shieldMessage, setShieldMessage]     = useState("Screen capture is disabled in this demo.");
   const textareaRef = useRef(null);
+  const adminTextareaRef = useRef(null);
   const shieldTimerRef = useRef(null);
   const triggerShield = (message, duration = 1800) => {
     setShieldMessage(message);
@@ -2779,7 +2806,7 @@ function CodingPlatform() {
         method: "POST",
         body: JSON.stringify({
           problems: PROBLEMS.map((problem) => ({
-            legacyId: problem.id,
+            number: problem.id,
             title: problem.title,
             slug: problem.slug,
             fnName: problem.fnName,
@@ -2852,8 +2879,7 @@ function CodingPlatform() {
         }));
 
       const students = Array.isArray(studentsData.students) ? studentsData.students : [];
-      const loggedInStudents = students.filter((student) => Number(student.loginCount || 0) > 0);
-      const mappedStudents = loggedInStudents.map((student) => ({
+      const mappedRegisteredStudents = students.map((student) => ({
         name: student.name || student.email,
         department: student.department || "Department pending",
         status: student.lastLoginAt ? "Logged In" : "Registered",
@@ -2861,7 +2887,9 @@ function CodingPlatform() {
         usn: student.usn || "--",
         loginCount: student.loginCount || 0,
         lastLoginAt: student.lastLoginAt || null,
+        createdAt: student.createdAt || null,
       }));
+      const mappedStudents = mappedRegisteredStudents.filter((student) => Number(student.loginCount || 0) > 0);
       const nextLeaderboard = Array.isArray(leaderboardData.leaderboard)
         ? leaderboardData.leaderboard
         : [];
@@ -2879,6 +2907,7 @@ function CodingPlatform() {
       setPreviousTests(history.length ? history : defaultPreviousTests);
       setSelectedPreviousTest(history[0] || defaultPreviousTests[0]);
       setLeaderboard(nextLeaderboard);
+      setRegisteredStudents(mappedRegisteredStudents);
       setActiveUsers(mappedStudents);
       setParticipantsCount(mappedStudents.length);
       setLoginEvents(Array.isArray(loginEventData.events) ? loginEventData.events : []);
@@ -2926,10 +2955,12 @@ function CodingPlatform() {
       setLeaderboard(nextLeaderboard);
       setSolved(progress.solved);
       setAttemptedProblems(progress.attempted);
+      setUserSubmissions(submissions);
       setStudentNotifications(notifications);
       setNotificationCount(Number(notificationData.unreadCount || 0));
     } catch (error) {
       setLeaderboard([]);
+      setUserSubmissions([]);
       setPortalError(error.message || "Unable to load your current test.");
     }
   };
@@ -3189,6 +3220,14 @@ function CodingPlatform() {
     setView("contest");
   };
 
+  const goBackFromAdmin = () => {
+    setView("home");
+  };
+
+  const goBackFromProblem = () => {
+    setView(problemNavigationSource === "contest" ? "contest" : "list");
+  };
+
   const requestContestFullscreen = async () => {
     if (document.fullscreenElement) return true;
 
@@ -3352,8 +3391,6 @@ function CodingPlatform() {
       };
 
       const resolvedRole = user.role || authRole;
-      const identitySeed = (user.name || email.split("@")[0] || "coder").toLowerCase().replace(/[^a-z0-9]+/g, "");
-
       setCurrentUser({
         id: user.id || "",
         role: resolvedRole,
@@ -3362,21 +3399,17 @@ function CodingPlatform() {
         usn: user.usn || "",
         department: user.department || "",
         verified: Boolean(user.verified),
+        createdAt: user.createdAt || null,
         lastLoginAt: user.lastLoginAt || null,
         loginCount: Number(user.loginCount || 0),
       });
       setAuthToken(data.token || "");
-      setProfileDraft((prev) => ({
-        ...prev,
-        handle: `@${identitySeed || "coder"}`,
-        bio: (user.department || department)
-          ? `${user.department || department} ${resolvedRole === "admin" ? "admin" : "student"} building speed, accuracy, and cleaner problem solving each round.`
-          : prev.bio,
-        badge: resolvedRole === "admin" ? "Coordinator" : prev.badge,
-      }));
       setUserRole(resolvedRole);
       setPortalMessage("");
       setPortalError("");
+      if (resolvedRole === "admin") {
+        setAdminTab("overview");
+      }
       setAuthModalOpen(false);
       setAuthError("");
       setView(resolvedRole === "admin" ? "admin" : "list");
@@ -3406,22 +3439,22 @@ function CodingPlatform() {
     setPortalError("");
     setLeaderboard([]);
     setActiveUsers(defaultActiveUsers);
+    setRegisteredStudents([]);
     setParticipantsCount(defaultActiveUsers.length);
+    setAdminTab("overview");
     setAdminWarning("");
     setSolutionsVisible(false);
     setAdminExecution(null);
+    setQuestionUploadForm(createDefaultQuestionUploadForm());
+    setQuestionUploading(false);
+    setQuestionCategoryFilter("All");
+    setUserSubmissions([]);
     setContestEntered(false);
     setContestSecurityLocked(false);
     setAttemptedProblems(new Set());
     setSolved(new Set());
     setContestTimerSeconds(adminCurrentTest.duration * 60);
     setScreenShield(false);
-    setProfileEditorOpen(false);
-    setProfileDraft({
-      handle: "@codearena",
-      bio: "Competitive programmer focused on clean implementations, contest consistency, and steady rating growth.",
-      badge: "Expert",
-    });
     closeAuthFlow();
     setView("home");
   };
@@ -3437,6 +3470,134 @@ function CodingPlatform() {
 
   const handleAdminCreateInput = (field, value) => {
     setAdminCreateForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleQuestionUploadInput = (field, value) => {
+    if (questionUploadError) setQuestionUploadError("");
+    setQuestionUploadForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const parseUploadList = (value) =>
+    String(value || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+  const parseUploadPairs = (value, outputKey) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((entry) => ({
+            input: String(entry?.input || ""),
+            [outputKey]: String(entry?.[outputKey] || entry?.output || entry?.expected || ""),
+            ...(entry?.explanation ? { explanation: String(entry.explanation) } : {}),
+          }))
+          .filter((entry) => entry.input || entry[outputKey]);
+      }
+    } catch {
+      // Fall back to line parsing below.
+    }
+
+    return trimmed
+      .split(/\r?\n/)
+      .map((line) => {
+        const parts = line.split("=>");
+        const input = String(parts.shift() || "").trim();
+        const output = parts.join("=>").trim();
+        return {
+          input,
+          [outputKey]: output,
+        };
+      })
+      .filter((entry) => entry.input || entry[outputKey]);
+  };
+
+  const getProblemCategory = (problem) => {
+    const tags = Array.isArray(problem?.tags) ? problem.tags : [];
+    return questionCategories.find((category) =>
+      tags.some((tag) => String(tag).toLowerCase() === category.toLowerCase())
+    ) || "Other";
+  };
+
+  const handleUploadQuestion = async () => {
+    const title = questionUploadForm.title.trim();
+    const statement = questionUploadForm.statement.trim();
+
+    if (!title || !statement) {
+      setQuestionUploadError("Enter a question title and full statement before uploading.");
+      return;
+    }
+
+    if (questionUploadForm.category !== "SQL" && !questionUploadForm.fnName.trim()) {
+      setQuestionUploadError("Enter the function name used by the test cases.");
+      return;
+    }
+
+    const examples = parseUploadPairs(questionUploadForm.examples, "output");
+    const parsedTestCases = parseUploadPairs(questionUploadForm.testCases, "expected");
+    const testCases = parsedTestCases.length
+      ? parsedTestCases
+      : examples.map((example) => ({ input: example.input, expected: example.output }));
+    const tags = [
+      questionUploadForm.category,
+      ...String(questionUploadForm.tags || "")
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    ].filter((tag, index, allTags) =>
+      allTags.findIndex((candidate) => candidate.toLowerCase() === tag.toLowerCase()) === index
+    );
+
+    setQuestionUploading(true);
+    setQuestionUploadError("");
+    setQuestionUploadSuccess("");
+
+    try {
+      const data = await performApiRequest("/api/problems", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          difficulty: questionUploadForm.difficulty,
+          tags,
+          fnName: questionUploadForm.fnName.trim() || "solve",
+          statement,
+          examples,
+          testCases,
+          constraints: parseUploadList(questionUploadForm.constraints),
+          starterCode: {
+            javascript: questionUploadForm.javascript,
+            python: questionUploadForm.python,
+            java: questionUploadForm.java,
+          },
+          samples: examples,
+          acceptance: "Admin Upload",
+        }),
+      });
+
+      const savedProblem = mapProblemRecord(data.problem);
+      const nextProblems = await loadProblemBank();
+      const uploadedProblem = savedProblem || nextProblems.find((problem) => problem.title === title);
+
+      if (uploadedProblem?.dbId) {
+        setAdminCreateForm((prev) => ({
+          ...prev,
+          questions: prev.questions.includes(uploadedProblem.dbId)
+            ? prev.questions
+            : [...prev.questions, uploadedProblem.dbId],
+        }));
+      }
+
+      setQuestionUploadForm(createDefaultQuestionUploadForm());
+      setQuestionUploadSuccess(`Your question "${uploadedProblem?.title || title}" was uploaded successfully.`);
+    } catch (error) {
+      setQuestionUploadError(error.message || "Unable to upload the question.");
+    } finally {
+      setQuestionUploading(false);
+    }
   };
 
   const formatCountdown = (totalSeconds) => {
@@ -3594,7 +3755,7 @@ function CodingPlatform() {
     await new Promise((r) => setTimeout(r, 700));
 
     const p        = selectedProblem;
-    const refSol   = REFERENCE_SOLUTIONS[p.legacyId ?? p.id];
+    const refSol   = REFERENCE_SOLUTIONS[p.number ?? p.id];
     let   results  = [];
     let   runtime  = Math.floor(60 + Math.random() * 60) + " ms";
     let   memory   = (Math.random() * 5 + 40).toFixed(1) + " MB";
@@ -3715,14 +3876,78 @@ function CodingPlatform() {
 
     if (isSubmit) setSubmitting(false); else setRunning(false);
   };
-  const handleTab = (e) => {
+  const indentUnit = "  ";
+  const handleEditorIndentation = (e, value, setter, ref) => {
+    const ta = ref.current;
+    if (!ta) return;
+
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+
     if (e.key === "Tab") {
       e.preventDefault();
-      const ta    = textareaRef.current;
-      const start = ta.selectionStart;
-      const end   = ta.selectionEnd;
-      setCode(code.substring(0, start) + "  " + code.substring(end));
-      setTimeout(() => { ta.selectionStart = ta.selectionEnd = start + 2; }, 0);
+
+      const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+      const selectedText = value.slice(start, end);
+      const hasMultipleLines = selectedText.includes("\n") || start !== end && lineStart !== start;
+
+      if (hasMultipleLines) {
+        const blockEnd = end;
+        const lineEnd = value.indexOf("\n", blockEnd);
+        const selectionEnd = lineEnd === -1 ? value.length : lineEnd;
+        const block = value.slice(lineStart, selectionEnd);
+        const lines = block.split("\n");
+        const updatedLines = e.shiftKey
+          ? lines.map((line) => line.startsWith(indentUnit) ? line.slice(indentUnit.length) : line.startsWith(" ") ? line.slice(1) : line)
+          : lines.map((line) => `${indentUnit}${line}`);
+        const updatedBlock = updatedLines.join("\n");
+        const nextValue = `${value.slice(0, lineStart)}${updatedBlock}${value.slice(selectionEnd)}`;
+        const deltaPerFirstLine = e.shiftKey
+          ? (lines[0].startsWith(indentUnit) ? -indentUnit.length : lines[0].startsWith(" ") ? -1 : 0)
+          : indentUnit.length;
+        const changedChars = updatedBlock.length - block.length;
+        setter(nextValue);
+        setTimeout(() => {
+          ta.selectionStart = Math.max(lineStart, start + deltaPerFirstLine);
+          ta.selectionEnd = Math.max(lineStart, end + changedChars);
+        }, 0);
+        return;
+      }
+
+      if (e.shiftKey) {
+        const beforeCursor = value.slice(lineStart, start);
+        if (beforeCursor.endsWith(indentUnit)) {
+          const nextValue = `${value.slice(0, start - indentUnit.length)}${value.slice(end)}`;
+          setter(nextValue);
+          setTimeout(() => {
+            ta.selectionStart = ta.selectionEnd = start - indentUnit.length;
+          }, 0);
+        }
+        return;
+      }
+
+      const nextValue = `${value.slice(0, start)}${indentUnit}${value.slice(end)}`;
+      setter(nextValue);
+      setTimeout(() => {
+        ta.selectionStart = ta.selectionEnd = start + indentUnit.length;
+      }, 0);
+      return;
+    }
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+      const line = value.slice(lineStart, start);
+      const currentIndent = (line.match(/^\s*/) || [""])[0];
+      const trimmedLine = line.trimEnd();
+      const shouldIncreaseIndent = /[\{\[\(]\s*$/.test(trimmedLine);
+      const nextIndent = `${currentIndent}${shouldIncreaseIndent ? indentUnit : ""}`;
+      const nextValue = `${value.slice(0, start)}\n${nextIndent}${value.slice(end)}`;
+      setter(nextValue);
+      setTimeout(() => {
+        const cursor = start + 1 + nextIndent.length;
+        ta.selectionStart = ta.selectionEnd = cursor;
+      }, 0);
     }
   };
 
@@ -3912,130 +4137,63 @@ function CodingPlatform() {
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(" ");
   const profileName = currentUser.name.trim()
-    || (currentUser.email ? formatDisplayName(currentUser.email.split("@")[0]) : "Aarav");
+    || (currentUser.email ? formatDisplayName(currentUser.email.split("@")[0]) : "User");
   const matchedLeaderboardProfile = leaderboard.find(
     (entry) => entry.userId === currentUser.id || entry.username.toLowerCase() === profileName.toLowerCase()
   );
-  const fallbackRating = 1680 + (solved.size * 18) - (attemptedProblems.size * 6);
-  const profileEntry = matchedLeaderboardProfile || {
-    username: profileName,
-    rating: Math.max(1450, fallbackRating),
-    avatarGradient: ["#60a5fa", "#8b5cf6"],
-    overall: {
-      rank: Math.max(18, 120 - (solved.size * 3)),
-      score: 1820 + (solved.size * 26),
-      problemsSolved: Math.max(18, solved.size * 4 + 16),
-      timePenalty: "04h 42m",
-      trend: solved.size > attemptedProblems.size ? 1 : 0,
-    },
-    contest: {
-      rank: Math.max(6, 24 - solved.size),
-      score: 76 + (solved.size * 4),
-      problemsSolved: Math.max(1, solved.size),
-      timePenalty: "18m 20s",
-      trend: solved.size > 0 ? 1 : 0,
-      timeTaken: "52m 10s",
-    },
-    global: {
-      rank: Math.max(24, 180 - (solved.size * 4)),
-      score: 1760 + (solved.size * 18),
-      problemsSolved: Math.max(20, solved.size * 4 + 14),
-      timePenalty: "05h 19m",
-      trend: solved.size > attemptedProblems.size ? 1 : -1,
-    },
-  };
-  const profileHandle = profileDraft.handle || `@${profileName.toLowerCase().replace(/\s+/g, "")}`;
-  const inferBadge = (rating) => {
-    if (rating >= 1900) return "Expert";
-    if (rating >= 1700) return "Advanced";
-    if (rating >= 1500) return "Specialist";
-    return "Pupil";
-  };
-  const profileBadgeLabel = profileDraft.badge || inferBadge(profileEntry.rating);
+  const profileEntry = matchedLeaderboardProfile || null;
+  const profileAvatarGradient = profileEntry?.avatarGradient || ["#60a5fa", "#8b5cf6"];
+  const acceptedSubmissionCount = userSubmissions.filter((submission) => submission.status === "ACCEPTED").length;
+  const submissionAccuracy = userSubmissions.length
+    ? `${Math.round((acceptedSubmissionCount / userSubmissions.length) * 100)}%`
+    : "--";
   const profileStats = [
-    { label: "Problems Solved", value: profileEntry.overall.problemsSolved, accent: "#60a5fa" },
-    { label: "Accuracy %", value: `${Math.max(72, Math.min(98, 78 + solved.size * 3 - attemptedProblems.size))}%`, accent: "#22d3ee" },
-    { label: "Contest Rating", value: profileEntry.rating, accent: "#8b5cf6" },
-    { label: "Global Rank", value: `#${profileEntry.global.rank}`, accent: "#a78bfa" },
+    { label: "Problems Solved", value: solved.size, accent: "#60a5fa" },
+    { label: "Accuracy %", value: submissionAccuracy, accent: "#22d3ee" },
+    { label: "Contest Rating", value: profileEntry?.rating ?? "--", accent: "#8b5cf6" },
+    { label: "Global Rank", value: profileEntry?.global?.rank ? `#${profileEntry.global.rank}` : "--", accent: "#a78bfa" },
   ];
-  const profileRatingHistory = [
-    { label: "Sep", value: profileEntry.rating - 210 },
-    { label: "Oct", value: profileEntry.rating - 165 },
-    { label: "Nov", value: profileEntry.rating - 132 },
-    { label: "Dec", value: profileEntry.rating - 88 },
-    { label: "Jan", value: profileEntry.rating - 52 },
-    { label: "Feb", value: profileEntry.rating - 24 },
-    { label: "Mar", value: profileEntry.rating + 18 },
-    { label: "Now", value: profileEntry.rating },
+  const profileDetails = [
+    { label: "Email", value: currentUser.email || "--" },
+    { label: "Department", value: currentUser.department || "--" },
+    { label: "USN", value: currentUser.usn || "--" },
+    { label: "Role", value: currentUser.role ? formatDisplayName(currentUser.role) : "--" },
+    { label: "Joined", value: formatPortalDate(currentUser.createdAt) },
+    { label: "Last Login", value: formatPortalDate(currentUser.lastLoginAt) },
+    { label: "Login Count", value: String(currentUser.loginCount || 0) },
+    { label: "Verified", value: currentUser.verified ? "Yes" : "No" },
   ];
-  const chartWidth = 420;
-  const chartHeight = 180;
-  const chartPadding = 22;
-  const ratingMin = Math.min(...profileRatingHistory.map((point) => point.value)) - 30;
-  const ratingMax = Math.max(...profileRatingHistory.map((point) => point.value)) + 30;
-  const ratingPoints = profileRatingHistory.map((point, index) => {
-    const x = chartPadding + ((chartWidth - (chartPadding * 2)) * index) / (profileRatingHistory.length - 1);
-    const y = chartHeight - chartPadding - (((point.value - ratingMin) / (ratingMax - ratingMin || 1)) * (chartHeight - (chartPadding * 2)));
-    return `${x},${y}`;
-  }).join(" ");
   const solvedEasy = Array.from(solved).filter((id) => problemCatalog.find((problem) => problem.id === id)?.difficulty === "Easy").length;
   const solvedMedium = Array.from(solved).filter((id) => problemCatalog.find((problem) => problem.id === id)?.difficulty === "Medium").length;
   const solvedHard = Array.from(solved).filter((id) => problemCatalog.find((problem) => problem.id === id)?.difficulty === "Hard").length;
+  const totalSolvedCount = solvedEasy + solvedMedium + solvedHard;
   const profileDifficultyBreakdown = [
-    { label: "Easy", value: Math.min(42, 14 + solvedEasy), total: 42, color: "#22c55e" },
-    { label: "Medium", value: Math.min(36, 10 + solvedMedium), total: 36, color: "#facc15" },
-    { label: "Hard", value: Math.min(24, 6 + solvedHard), total: 24, color: "#ef4444" },
+    { label: "Easy", value: solvedEasy, total: totalSolvedCount || 1, color: "#22c55e" },
+    { label: "Medium", value: solvedMedium, total: totalSolvedCount || 1, color: "#facc15" },
+    { label: "Hard", value: solvedHard, total: totalSolvedCount || 1, color: "#ef4444" },
   ];
-  const topicDistribution = [
-    { label: "Arrays", share: 78, color: "#60a5fa" },
-    { label: "DP", share: 56, color: "#8b5cf6" },
-    { label: "Graphs", share: 44, color: "#22d3ee" },
-    { label: "Strings", share: 64, color: "#38bdf8" },
-    { label: "Greedy", share: 39, color: "#818cf8" },
-  ];
-  const profileAchievements = [
-    { title: "Fast Finisher", detail: "Completed 5 problems inside one contest window.", color: "#22d3ee" },
-    { title: "Bug Hunter", detail: "Improved acceptance on three hard problems this week.", color: "#8b5cf6" },
-    { title: "Consistency", detail: "Active across 12 consecutive practice days.", color: "#60a5fa" },
-    { title: "Top 10 Push", detail: "Reached top 10 in a campus round.", color: "#a78bfa" },
-  ];
-  const profileSubmissionHistory = [
-    ...contestProblems.slice(0, 3).map((problem, index) => ({
-      problemId: problem.id,
-      problemName: problem.title,
-      status: solved.has(problem.id) ? "Accepted" : attemptedProblems.has(problem.id) ? "Wrong Answer" : "Pending",
-      language: lang.charAt(0).toUpperCase() + lang.slice(1),
-      time: index === 0 ? "12m ago" : index === 1 ? "1h ago" : "3h ago",
-    })),
-    ...problemCatalog.slice(0, 2).map((problem, index) => ({
-      problemId: problem.id,
-      problemName: problem.title,
-      status: index === 0 ? "Accepted" : "Time Limit",
-      language: index === 0 ? "Python" : "JavaScript",
-      time: index === 0 ? "Yesterday" : "2d ago",
-    })),
-  ].slice(0, 5);
-  const profileContestHistory = [
+  const profileSubmissionHistory = userSubmissions.slice(0, 6).map((submission) => ({
+    problemId: submission.problem?.number ?? submission.problem?.legacyId ?? submission.problemId,
+    problemDbId: submission.problem?.id ?? submission.problemId,
+    problemName: submission.problem?.title || "Unknown Problem",
+    status: submission.status === "ACCEPTED"
+      ? "Accepted"
+      : submission.status === "WRONG_ANSWER"
+        ? "Wrong Answer"
+        : submission.status === "TIME_LIMIT_EXCEEDED" || submission.status === "TLE"
+          ? "Time Limit"
+          : formatDisplayName(String(submission.status || "").toLowerCase()),
+    language: formatDisplayName(submission.language || "--"),
+    time: formatPortalDate(submission.createdAt),
+  }));
+  const profileContestHistory = profileEntry ? [
     {
-      name: contestDisplayName,
-      rank: `#${profileEntry.contest.rank}`,
-      score: profileEntry.contest.score,
-      ratingChange: `+${Math.max(18, Math.round(profileEntry.rating * 0.012))}`,
+      name: activeAssignment?.title || contestDisplayName || "Current Contest",
+      rank: profileEntry.contest?.rank ? `#${profileEntry.contest.rank}` : "--",
+      score: profileEntry.contest?.score ?? "--",
+      rating: profileEntry.rating ?? "--",
     },
-    ...previousTests.slice(0, 3).map((contest, index) => ({
-      name: contest.name,
-      rank: `#${index + 3}`,
-      score: contest.average,
-      ratingChange: index === 1 ? "-8" : `+${12 - (index * 3)}`,
-    })),
-  ];
-  const activityWeeks = Array.from({ length: 16 }, (_, weekIndex) =>
-    Array.from({ length: 7 }, (_, dayIndex) => {
-      const seed = (weekIndex * 5) + dayIndex + solved.size + (attemptedProblems.size * 2);
-      return seed % 5;
-    })
-  );
-  const activityColors = ["#1e293b", "#1d4ed8", "#2563eb", "#7c3aed", "#a855f7"];
+  ] : [];
   const liftCard = (e) => {
     e.currentTarget.style.transform = "translateY(-4px)";
     e.currentTarget.style.boxShadow = "0 22px 50px rgba(37, 99, 235, 0.16)";
@@ -4079,9 +4237,10 @@ function CodingPlatform() {
     input: { width:"100%", boxSizing:"border-box", background:"#0f1018", border:"1px solid #26263d", color:"#eef0ff", borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif" },
     adminFieldLabel: { display:"block", marginBottom:8, color:ADMIN_THEME.textSecondary, fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
     adminInput: { width:"100%", boxSizing:"border-box", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, color:ADMIN_THEME.text, borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif", boxShadow:ADMIN_THEME.shadowSoft },
+    adminTextarea: { width:"100%", boxSizing:"border-box", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, color:ADMIN_THEME.text, borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", resize:"vertical", minHeight:120, fontFamily:"'Outfit','Space Grotesk',sans-serif", lineHeight:1.6, boxShadow:ADMIN_THEME.shadowSoft },
     adminButton: (variant) => ({
       padding:"10px 18px",
-      borderRadius:10,
+      borderRadius:8,
       border:`1px solid ${ADMIN_THEME.divider}`,
       cursor:"pointer",
       fontWeight:700,
@@ -4097,6 +4256,56 @@ function CodingPlatform() {
           ? { background:ADMIN_THEME.primary, color:"#FFFFFF", border:`1px solid ${ADMIN_THEME.primary}` }
           : { background:ADMIN_THEME.buttonSecondary, color:ADMIN_THEME.textSecondary, border:`1px solid ${ADMIN_THEME.divider}` }),
     }),
+    adminTabBar: { display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", padding:"10px", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.divider}`, borderRadius:14, boxShadow:ADMIN_THEME.shadowSoft },
+    adminTabButton: (active) => ({
+      padding:"10px 14px",
+      borderRadius:8,
+      border:active ? `1px solid ${ADMIN_THEME.primary}` : `1px solid ${ADMIN_THEME.divider}`,
+      background:active ? ADMIN_THEME.primary : ADMIN_THEME.buttonSecondary,
+      color:active ? "#FFFFFF" : ADMIN_THEME.textSecondary,
+      cursor:"pointer",
+      fontWeight:700,
+      fontSize:12,
+      fontFamily:"'Space Grotesk',sans-serif",
+      letterSpacing:"0.04em",
+      textTransform:"uppercase",
+      transition:"all 0.15s ease",
+    }),
+    backButtonRow: { display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" },
+    backButton: {
+      display:"inline-flex",
+      alignItems:"center",
+      gap:8,
+      padding:"10px 14px",
+      borderRadius:999,
+      border:"1px solid #2a2a3e",
+      background:"#151526",
+      color:"#d9dcf7",
+      cursor:"pointer",
+      fontSize:12,
+      fontWeight:700,
+      fontFamily:"'Space Grotesk',sans-serif",
+      letterSpacing:"0.08em",
+      textTransform:"uppercase",
+      boxShadow:"0 10px 24px rgba(0,0,0,0.16)",
+    },
+    adminBackButton: {
+      display:"inline-flex",
+      alignItems:"center",
+      gap:8,
+      padding:"10px 14px",
+      borderRadius:999,
+      border:`1px solid ${ADMIN_THEME.divider}`,
+      background:ADMIN_THEME.card,
+      color:ADMIN_THEME.textSecondary,
+      cursor:"pointer",
+      fontSize:12,
+      fontWeight:700,
+      fontFamily:"'Space Grotesk',sans-serif",
+      letterSpacing:"0.08em",
+      textTransform:"uppercase",
+      boxShadow:ADMIN_THEME.shadowSoft,
+    },
     adminAlert: (tone) => ({
       borderRadius:14,
       padding:"12px 14px",
@@ -4184,7 +4393,446 @@ function CodingPlatform() {
     : adminCurrentStatus === "ENDED"
       ? ADMIN_THEME.error
       : ADMIN_THEME.info;
+  const loggedInRegisteredStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) > 0);
+  const neverLoggedInStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) === 0);
+  const departmentTotal = new Set(
+    registeredStudents
+      .map((student) => String(student.department || "").trim())
+      .filter(Boolean)
+  ).size;
+  const adminLoginEvents = loginEvents.filter((event) => (
+    event.role === "ADMIN" || event.email === currentUser.email
+  ));
+  const displayedProblemBank = problemBank.filter((problem) =>
+    questionCategoryFilter === "All" || getProblemCategory(problem) === questionCategoryFilter
+  );
   const latestUnreadNotification = studentNotifications.find((notification) => !notification.read) || studentNotifications[0] || null;
+
+  const renderAdminLeaderboard = () => (
+    <div style={{ display:"grid", gap:18 }}>
+      <div style={S.adminCard}>
+        <div style={{ display:"flex", justifyContent:"space-between", gap:16, alignItems:"flex-start", flexWrap:"wrap" }}>
+          <div>
+            <div style={S.adminSectionTitle}>Leaderboard</div>
+            <div style={{ fontSize:24, fontWeight:800, color:ADMIN_THEME.text, marginBottom:6 }}>Admin Ranking Board</div>
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14 }}>Contest, overall, and global scores are loaded from stored submissions.</div>
+          </div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            <input value={leaderboardSearch} onChange={(e)=>setLeaderboardSearch(e.target.value)} placeholder="Search username" style={{ ...S.adminInput, width:220 }} />
+            <select value={leaderboardScope} onChange={(e)=>setLeaderboardScope(e.target.value)} style={{ ...S.adminInput, width:170 }}>
+              {["All", "This Contest", "Global"].map((scope) => <option key={scope}>{scope}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style={S.adminTableWrap}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr>
+              {["Rank", "Username", "Score", "Solved", "Time Penalty"].map((heading) => (
+                <th key={heading} style={S.adminTableHead}>{heading}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleLeaderboardRows.length ? visibleLeaderboardRows.map((entry) => {
+              const stats = entry.stats || entry.contest || {};
+              const submissionLevel = stats.submissionLevel || "No Submission";
+              const levelMeta = getSubmissionLevelMeta(submissionLevel);
+              return (
+                <tr key={`${leaderboardMode}-${entry.userId || entry.username}`}>
+                  <td style={S.adminTableCell}>{stats.rank || "--"}</td>
+                  <td style={S.adminTableCell}>
+                    <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{entry.username}</div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{entry.email || entry.department || "Student"}</div>
+                    <div style={{ marginTop:6 }}>
+                      <span style={{ color:levelMeta.color, background:levelMeta.background, border:`1px solid ${levelMeta.border}`, borderRadius:999, padding:"3px 8px", fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase" }}>
+                        {submissionLevel}
+                      </span>
+                    </div>
+                  </td>
+                  <td style={{ ...S.adminTableCell, color:ADMIN_THEME.success, fontWeight:700 }}>{stats.score || 0}</td>
+                  <td style={S.adminTableCell}>{stats.problemsSolved || 0}</td>
+                  <td style={S.adminTableCell}>{stats.timePenalty || "--"}</td>
+                </tr>
+              );
+            }) : (
+              <tr>
+                <td colSpan="5" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>
+                  {leaderboardSearch.trim() ? "No leaderboard entries matched that username." : "No logged-in students have submitted yet."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {leaderboardPageCount > 1 && (
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Page {safeLeaderboardPage} of {leaderboardPageCount}</div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={() => setLeaderboardPage((prev) => Math.max(1, prev - 1))} disabled={safeLeaderboardPage === 1} style={{ ...S.adminButton("default"), opacity:safeLeaderboardPage === 1 ? 0.45 : 1 }}>Previous</button>
+            <button onClick={() => setLeaderboardPage((prev) => Math.min(leaderboardPageCount, prev + 1))} disabled={safeLeaderboardPage === leaderboardPageCount} style={{ ...S.adminButton("default"), opacity:safeLeaderboardPage === leaderboardPageCount ? 0.45 : 1 }}>Next</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderStudentList = () => (
+    <div style={{ display:"grid", gap:18 }}>
+      <div style={S.adminCardGrid}>
+        <div style={S.adminCard}>
+          <div style={S.adminSectionTitle}>Registered Students</div>
+          <div style={{ fontSize:34, fontWeight:800, color:ADMIN_THEME.primary }}>{registeredStudents.length}</div>
+        </div>
+        <div style={S.adminCard}>
+          <div style={S.adminSectionTitle}>Logged In</div>
+          <div style={{ fontSize:34, fontWeight:800, color:ADMIN_THEME.success }}>{loggedInRegisteredStudents.length}</div>
+        </div>
+        <div style={S.adminCard}>
+          <div style={S.adminSectionTitle}>Not Logged Yet</div>
+          <div style={{ fontSize:34, fontWeight:800, color:ADMIN_THEME.warning }}>{neverLoggedInStudents.length}</div>
+        </div>
+        <div style={S.adminCard}>
+          <div style={S.adminSectionTitle}>Departments</div>
+          <div style={{ fontSize:34, fontWeight:800, color:ADMIN_THEME.secondary }}>{departmentTotal}</div>
+        </div>
+      </div>
+
+      <div style={S.adminTableWrap}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr>
+              {["Student", "USN", "Department", "Status", "Last Login", "Logins"].map((heading) => (
+                <th key={heading} style={S.adminTableHead}>{heading}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {registeredStudents.length ? registeredStudents.map((student) => (
+              <tr key={`${student.email}-${student.usn}`}>
+                <td style={S.adminTableCell}>
+                  <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{student.name}</div>
+                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{student.email}</div>
+                </td>
+                <td style={S.adminTableCell}>{student.usn || "--"}</td>
+                <td style={S.adminTableCell}>{student.department || "--"}</td>
+                <td style={{ ...S.adminTableCell, color:student.status === "Logged In" ? ADMIN_THEME.success : ADMIN_THEME.warning, fontWeight:700 }}>{student.status}</td>
+                <td style={S.adminTableCell}>{formatPortalDate(student.lastLoginAt)}</td>
+                <td style={{ ...S.adminTableCell, color:ADMIN_THEME.primary, fontWeight:700 }}>{student.loginCount || 0}</td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan="6" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No registered students yet.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const renderAdminProfile = () => (
+    <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 0.75fr) minmax(0, 1.25fr)", gap:18, alignItems:"start" }}>
+      <div style={S.adminCard}>
+        <div style={S.adminSectionTitle}>Admin Profile</div>
+        <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18 }}>
+          <div style={{ width:54, height:54, borderRadius:"50%", background:ADMIN_THEME.primary, color:"#FFFFFF", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:20 }}>
+            {userBadge}
+          </div>
+          <div>
+            <div style={{ color:ADMIN_THEME.text, fontSize:22, fontWeight:800 }}>{profileName}</div>
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>{currentUser.email || "Admin email unavailable"}</div>
+          </div>
+        </div>
+        <div style={{ display:"grid", gap:10 }}>
+          <div style={S.adminSubCard}>
+            <div style={S.adminSectionTitle}>Role</div>
+            <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>Administrator</div>
+          </div>
+          <div style={S.adminSubCard}>
+            <div style={S.adminSectionTitle}>Department</div>
+            <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{currentUser.department || "Department pending"}</div>
+          </div>
+          <div style={S.adminSubCard}>
+            <div style={S.adminSectionTitle}>Last Login</div>
+            <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{formatPortalDate(currentUser.lastLoginAt)}</div>
+          </div>
+          <div style={S.adminSubCard}>
+            <div style={S.adminSectionTitle}>Login Count</div>
+            <div style={{ color:ADMIN_THEME.primary, fontWeight:800, fontSize:24 }}>{currentUser.loginCount || adminLoginEvents.length || 0}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={S.adminCard}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:12 }}>
+          <div>
+            <div style={S.adminSectionTitle}>Login Logs</div>
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>Recent admin authentication activity</div>
+          </div>
+          <div style={{ color:ADMIN_THEME.primary, fontSize:13, fontWeight:700 }}>{adminLoginEvents.length} records</div>
+        </div>
+        <div style={{ display:"grid", gap:10 }}>
+          {adminLoginEvents.slice(0, 12).map((event) => (
+            <div key={event.id} style={S.adminSubCard}>
+              <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:6 }}>
+                <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{event.email}</div>
+                <div style={{ color:ADMIN_THEME.primary, fontSize:12, fontWeight:700 }}>{event.eventType}</div>
+              </div>
+              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginBottom:6 }}>
+                {event.role} | {formatPortalDate(event.createdAt)}
+              </div>
+              <div style={{ color:ADMIN_THEME.textMuted, fontSize:12, wordBreak:"break-word" }}>
+                {event.ip || "IP unavailable"} | {event.userAgent || "Browser info unavailable"}
+              </div>
+            </div>
+          ))}
+
+          {!adminLoginEvents.length && (
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No admin login logs yet.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderQuestionBankPanel = () => (
+    <div style={S.adminCard}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:12 }}>
+        <div>
+          <div style={S.adminSectionTitle}>Question Bank</div>
+          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>{problemBank.length} database questions</div>
+        </div>
+        <select value={questionCategoryFilter} onChange={(e)=>setQuestionCategoryFilter(e.target.value)} style={{ ...S.adminInput, width:150 }}>
+          {["All", ...questionCategories].map((category) => <option key={category}>{category}</option>)}
+        </select>
+      </div>
+      <div style={{ display:"grid", gap:10, maxHeight:720, overflowY:"auto", paddingRight:4 }}>
+        {displayedProblemBank.length ? displayedProblemBank.map((problem) => (
+          <div key={problem.dbId || problem.id} style={S.adminSubCard}>
+            <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"flex-start" }}>
+              <div>
+                <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:6 }}>{problem.title}</div>
+                <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
+                  {getProblemCategory(problem)} | {problem.difficulty} | {problem.tags.slice(0, 4).join(", ") || "General"}
+                </div>
+              </div>
+              <button onClick={() => toggleCreateQuestion(problem.dbId)} style={S.adminButton("default")}>
+                {adminCreateForm.questions.includes(problem.dbId) ? "Selected" : "Add"}
+              </button>
+            </div>
+          </div>
+        )) : (
+          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
+            No questions found for this filter.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderQuestionUploads = () => (
+    <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(320px, 0.8fr)", gap:18, alignItems:"start" }}>
+      <div style={S.adminCard}>
+        <div style={S.adminSectionTitle}>Upload Question</div>
+        <div style={{ display:"grid", gap:14 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr", gap:12 }}>
+            <div>
+              <label style={S.adminFieldLabel}>Question Title</label>
+              <input value={questionUploadForm.title} onChange={(e)=>handleQuestionUploadInput("title", e.target.value)} style={S.adminInput} placeholder="Two Sum Variant" />
+            </div>
+            <div>
+              <label style={S.adminFieldLabel}>Type</label>
+              <select value={questionUploadForm.category} onChange={(e)=>handleQuestionUploadInput("category", e.target.value)} style={S.adminInput}>
+                {questionCategories.map((category) => <option key={category}>{category}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={S.adminFieldLabel}>Difficulty</label>
+              <select value={questionUploadForm.difficulty} onChange={(e)=>handleQuestionUploadInput("difficulty", e.target.value)} style={S.adminInput}>
+                <option>Easy</option>
+                <option>Medium</option>
+                <option>Hard</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div>
+              <label style={S.adminFieldLabel}>Function Name</label>
+              <input value={questionUploadForm.fnName} onChange={(e)=>handleQuestionUploadInput("fnName", e.target.value)} style={S.adminInput} placeholder="solve" />
+            </div>
+            <div>
+              <label style={S.adminFieldLabel}>Extra Tags</label>
+              <input value={questionUploadForm.tags} onChange={(e)=>handleQuestionUploadInput("tags", e.target.value)} style={S.adminInput} placeholder="arrays, hashing" />
+            </div>
+          </div>
+
+          <div>
+            <label style={S.adminFieldLabel}>Question Statement</label>
+            <textarea value={questionUploadForm.statement} onChange={(e)=>handleQuestionUploadInput("statement", e.target.value)} style={{ ...S.adminTextarea, minHeight:150 }} placeholder="Write the full question here." />
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div>
+              <label style={S.adminFieldLabel}>Examples</label>
+              <textarea value={questionUploadForm.examples} onChange={(e)=>handleQuestionUploadInput("examples", e.target.value)} style={S.adminTextarea} placeholder={"input => output\n[2,7,11,15], 9 => [0,1]"} />
+            </div>
+            <div>
+              <label style={S.adminFieldLabel}>Hidden Test Cases</label>
+              <textarea value={questionUploadForm.testCases} onChange={(e)=>handleQuestionUploadInput("testCases", e.target.value)} style={S.adminTextarea} placeholder={"input => expected\n[3,2,4], 6 => [1,2]"} />
+            </div>
+          </div>
+
+          <div>
+            <label style={S.adminFieldLabel}>Constraints</label>
+            <textarea value={questionUploadForm.constraints} onChange={(e)=>handleQuestionUploadInput("constraints", e.target.value)} style={{ ...S.adminTextarea, minHeight:86 }} placeholder={"One constraint per line\n1 <= n <= 10^5"} />
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:12 }}>
+            <div>
+              <label style={S.adminFieldLabel}>JavaScript Starter</label>
+              <textarea value={questionUploadForm.javascript} onChange={(e)=>handleQuestionUploadInput("javascript", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
+            </div>
+            <div>
+              <label style={S.adminFieldLabel}>Python Starter</label>
+              <textarea value={questionUploadForm.python} onChange={(e)=>handleQuestionUploadInput("python", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
+            </div>
+            <div>
+              <label style={S.adminFieldLabel}>Java Starter</label>
+              <textarea value={questionUploadForm.java} onChange={(e)=>handleQuestionUploadInput("java", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
+            </div>
+          </div>
+
+          <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+            <button
+              onClick={handleUploadQuestion}
+              disabled={questionUploading}
+              style={{ ...S.adminButton("submit"), opacity:questionUploading ? 0.65 : 1, cursor:questionUploading ? "not-allowed" : "pointer" }}
+            >
+              {questionUploading ? "Uploading..." : "Upload Question"}
+            </button>
+            <button
+              onClick={() => {
+                setQuestionUploadForm(createDefaultQuestionUploadForm());
+                setQuestionUploadError("");
+              }}
+              style={S.adminButton("default")}
+            >
+              Reset Form
+            </button>
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
+              Uploaded questions are stored in MongoDB and become available for tests and assignments.
+            </div>
+          </div>
+
+          {questionUploadError && (
+            <div style={S.adminAlert("error")}>
+              {questionUploadError}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {renderQuestionBankPanel()}
+    </div>
+  );
+
+  const renderQuestionUploadSuccessModal = () => questionUploadSuccess ? (
+    <div style={S.modalBackdrop}>
+      <style>{`
+        @keyframes uploadSuccessPop {
+          0% { opacity: 0; transform: scale(0.82) translateY(12px); }
+          100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes uploadSuccessRing {
+          0% { stroke-dashoffset: 166; }
+          100% { stroke-dashoffset: 0; }
+        }
+        @keyframes uploadSuccessTick {
+          0% { stroke-dashoffset: 36; }
+          100% { stroke-dashoffset: 0; }
+        }
+      `}</style>
+      <div
+        style={{
+          width:"min(420px, 100%)",
+          background:"linear-gradient(180deg, #ffffff 0%, #f6fbf8 100%)",
+          border:"1px solid rgba(34, 197, 94, 0.22)",
+          borderRadius:28,
+          padding:"30px 28px 26px",
+          boxShadow:"0 28px 80px rgba(15, 23, 42, 0.28)",
+          textAlign:"center",
+          animation:"uploadSuccessPop 0.3s ease-out",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            width:96,
+            height:96,
+            margin:"0 auto 18px",
+            borderRadius:"50%",
+            background:"radial-gradient(circle at 30% 30%, #dcfce7 0%, #bbf7d0 46%, #86efac 100%)",
+            display:"flex",
+            alignItems:"center",
+            justifyContent:"center",
+            boxShadow:"0 18px 40px rgba(34, 197, 94, 0.22)",
+          }}
+        >
+          <svg width="62" height="62" viewBox="0 0 62 62" fill="none" aria-hidden="true">
+            <circle
+              cx="31"
+              cy="31"
+              r="26.5"
+              stroke="#16A34A"
+              strokeWidth="5"
+              strokeLinecap="round"
+              strokeDasharray="166"
+              strokeDashoffset="166"
+              style={{ animation:"uploadSuccessRing 0.55s ease-out forwards" }}
+            />
+            <path
+              d="M19 31.5L27 39.5L43 22.5"
+              stroke="#15803D"
+              strokeWidth="5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray="36"
+              strokeDashoffset="36"
+              style={{ animation:"uploadSuccessTick 0.35s ease-out 0.4s forwards" }}
+            />
+          </svg>
+        </div>
+        <div style={{ color:"#14532d", fontSize:24, fontWeight:800, marginBottom:10 }}>
+          Question Uploaded Successfully
+        </div>
+        <div style={{ color:"#3f3f46", fontSize:15, lineHeight:1.6, marginBottom:22 }}>
+          {questionUploadSuccess}
+        </div>
+        <button
+          onClick={() => setQuestionUploadSuccess("")}
+          style={{
+            minWidth:120,
+            padding:"13px 24px",
+            border:"none",
+            borderRadius:999,
+            background:"linear-gradient(135deg, #16a34a, #22c55e)",
+            color:"#ffffff",
+            fontSize:14,
+            fontWeight:800,
+            cursor:"pointer",
+            boxShadow:"0 14px 30px rgba(34, 197, 94, 0.22)",
+          }}
+        >
+          OK
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   if (view === "home") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
@@ -4389,13 +5037,20 @@ function CodingPlatform() {
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.adminNav}>
           <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
-          <span style={S.adminNavTitle}>Test Assignment Leaderboard</span>
+          <span style={S.adminNavTitle}>Admin Portal</span>
           <div style={{ marginLeft:"auto" }}>
             <button onClick={signOut} style={S.adminButton("default")}>Sign Out</button>
           </div>
         </nav>
 
         <div style={S.adminShell}>
+          {renderQuestionUploadSuccessModal()}
+          <div style={S.backButtonRow}>
+            <button onClick={goBackFromAdmin} style={S.adminBackButton}>
+              <span aria-hidden="true">←</span>
+              <span>Back</span>
+            </button>
+          </div>
           {adminWarning && (
             <div style={S.adminAlert("warning")}>
               {adminWarning}
@@ -4420,6 +5075,16 @@ function CodingPlatform() {
             </div>
           )}
 
+          <div style={S.adminTabBar}>
+            {adminTabs.map((tab) => (
+              <button key={tab.id} onClick={() => setAdminTab(tab.id)} style={S.adminTabButton(adminTab === tab.id)}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {adminTab === "overview" && (
+            <>
           <div style={S.adminCardGrid}>
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Current Test</div>
@@ -4506,95 +5171,6 @@ function CodingPlatform() {
             </div>
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:18, alignItems:"start" }}>
-            <div style={S.adminTableWrap}>
-              <div style={{ padding:"18px 18px 10px" }}>
-                <div style={S.adminSectionTitle}>Leaderboard</div>
-              </div>
-              <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                <thead>
-                  <tr>
-                    {["Rank", "Username", "Score", "Solved", "Time Penalty"].map((heading) => (
-                      <th key={heading} style={S.adminTableHead}>{heading}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {leaderboard.length ? leaderboard.map((entry) => {
-                    const submissionLevel = entry.contest.submissionLevel || "No Submission";
-                    const levelMeta = getSubmissionLevelMeta(submissionLevel);
-                    return (
-                      <tr key={entry.userId || entry.username}>
-                        <td style={S.adminTableCell}>{entry.contest.rank}</td>
-                        <td style={S.adminTableCell}>
-                          <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{entry.username}</div>
-                          <div style={{ marginTop:6 }}>
-                            <span style={{ color:levelMeta.color, background:levelMeta.background, border:`1px solid ${levelMeta.border}`, borderRadius:999, padding:"3px 8px", fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase" }}>
-                              {submissionLevel}
-                            </span>
-                          </div>
-                        </td>
-                        <td style={{ ...S.adminTableCell, color:ADMIN_THEME.success, fontWeight:700 }}>{entry.contest.score}</td>
-                        <td style={S.adminTableCell}>{entry.contest.problemsSolved}</td>
-                        <td style={S.adminTableCell}>{entry.contest.timePenalty}</td>
-                      </tr>
-                    );
-                  }) : (
-                    <tr>
-                      <td colSpan="5" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>
-                        No logged-in students have submitted yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ display:"grid", gap:18 }}>
-              <div style={S.adminCard}>
-                <div style={S.adminSectionTitle}>Login Audit</div>
-                <div style={{ display:"grid", gap:10 }}>
-                  {loginEvents.slice(0, 4).map((event) => (
-                    <div key={event.id} style={S.adminSubCard}>
-                      <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:4 }}>{event.email}</div>
-                      <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginBottom:6 }}>
-                        {event.eventType} | {event.role} | {formatPortalDate(event.createdAt)}
-                      </div>
-                      <div style={{ color:ADMIN_THEME.primary, fontSize:12 }}>
-                        {event.ip || "IP unavailable"} | {event.userAgent || "Browser info unavailable"}
-                      </div>
-                    </div>
-                  ))}
-
-                  {!loginEvents.length && (
-                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No login audit rows yet.</div>
-                  )}
-                </div>
-              </div>
-
-              <div style={S.adminCard}>
-                <div style={S.adminSectionTitle}>Logged-In Students</div>
-                <div style={{ display:"grid", gap:10 }}>
-                  {activeUsers.length ? activeUsers.map((user) => (
-                    <div key={`${user.email}-${user.usn}`} style={{ ...S.adminSubCard, display:"flex", justifyContent:"space-between", alignItems:"center", gap:14 }}>
-                      <div>
-                        <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{user.name}</div>
-                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{user.department} | {user.usn || "--"}</div>
-                        <div style={{ color:ADMIN_THEME.textMuted, fontSize:12, marginTop:4 }}>Last login: {formatPortalDate(user.lastLoginAt)}</div>
-                      </div>
-                      <div style={{ textAlign:"right" }}>
-                        <div style={{ color:user.status==="Logged In" ? ADMIN_THEME.success : ADMIN_THEME.warning, fontSize:12, fontWeight:700 }}>{user.status}</div>
-                        <div style={{ color:ADMIN_THEME.primary, fontSize:12, marginTop:4 }}>{user.loginCount} logins</div>
-                      </div>
-                    </div>
-                  )) : (
-                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No logged-in students yet.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(340px, 1fr))", gap:18, alignItems:"start" }}>
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Code Submission</div>
@@ -4633,8 +5209,10 @@ function CodingPlatform() {
                     Write solution for {adminSelectedProblem?.title || "the selected problem"}
                   </div>
                   <textarea
+                    ref={adminTextareaRef}
                     value={adminSubmissionCode}
                     onChange={(e)=>setAdminSubmissionCode(e.target.value)}
+                    onKeyDown={(e) => handleEditorIndentation(e, adminSubmissionCode, setAdminSubmissionCode, adminTextareaRef)}
                     spellCheck={false}
                     style={{ width:"100%", minHeight:240, background:ADMIN_THEME.background, color:ADMIN_THEME.text, border:"none", outline:"none", resize:"vertical", padding:"14px", fontFamily:"'JetBrains Mono',monospace", fontSize:13, lineHeight:1.7, boxSizing:"border-box" }}
                   />
@@ -4725,13 +5303,13 @@ function CodingPlatform() {
                               />
                               <span style={{ display:"grid", gap:6 }}>
                                 <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{problem.title}</span>
-                                <span style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{problem.difficulty} | {problem.tags.slice(0, 3).join(", ") || "General"}</span>
+                                <span style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{getProblemCategory(problem)} | {problem.difficulty} | {problem.tags.slice(0, 3).join(", ") || "General"}</span>
                               </span>
                             </label>
                           );
                         })
                       ) : (
-                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No database problems yet. Use Sync Problems first.</div>
+                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No database problems yet. Use Sync Problems or upload a question.</div>
                       )}
                     </div>
                   </div>
@@ -4767,6 +5345,13 @@ function CodingPlatform() {
               )}
             </div>
           </div>
+            </>
+          )}
+
+          {adminTab === "questions" && renderQuestionUploads()}
+          {adminTab === "leaderboard" && renderAdminLeaderboard()}
+          {adminTab === "students" && renderStudentList()}
+          {adminTab === "profile" && renderAdminProfile()}
         </div>
       </div>
     </div>
@@ -4909,7 +5494,7 @@ function CodingPlatform() {
                 {notificationCount} new
               </span>
             )}
-            <div style={{ width:34, height:34, borderRadius:"50%", background:`linear-gradient(135deg, ${profileEntry.avatarGradient[0]}, ${profileEntry.avatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#081018", boxShadow:"0 0 18px rgba(96,165,250,0.28)" }}>{profileAvatarLabel}</div>
+            <div style={{ width:34, height:34, borderRadius:"50%", background:`linear-gradient(135deg, ${profileAvatarGradient[0]}, ${profileAvatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#081018", boxShadow:"0 0 18px rgba(96,165,250,0.28)" }}>{profileAvatarLabel}</div>
           </div>
         </nav>
 
@@ -4917,40 +5502,30 @@ function CodingPlatform() {
           <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.92))", border:"1px solid #1e293b", borderRadius:28, padding:"28px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
             <div style={{ display:"flex", justifyContent:"space-between", gap:20, alignItems:"flex-start", flexWrap:"wrap" }}>
               <div style={{ display:"flex", gap:18, alignItems:"center", flexWrap:"wrap" }}>
-                <div style={{ width:92, height:92, borderRadius:"50%", background:`linear-gradient(135deg, ${profileEntry.avatarGradient[0]}, ${profileEntry.avatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#081018", fontWeight:800, fontSize:28, boxShadow:"0 0 28px rgba(96,165,250,0.25)" }}>
+                <div style={{ width:92, height:92, borderRadius:"50%", background:`linear-gradient(135deg, ${profileAvatarGradient[0]}, ${profileAvatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#081018", fontWeight:800, fontSize:28, boxShadow:"0 0 28px rgba(96,165,250,0.25)" }}>
                   {profileAvatarLabel}
                 </div>
                 <div>
                   <div style={{ color:"#f8fafc", fontSize:32, fontWeight:700, lineHeight:1.1 }}>{profileName}</div>
-                  <div style={{ color:"#93c5fd", fontSize:15, fontWeight:600, marginTop:6 }}>{profileHandle}</div>
-                  <div style={{ color:"#94a3b8", fontSize:14, maxWidth:620, marginTop:10, lineHeight:1.7 }}>{profileDraft.bio}</div>
+                  <div style={{ color:"#93c5fd", fontSize:15, fontWeight:600, marginTop:6 }}>{currentUser.email || "--"}</div>
+                  <div style={{ color:"#94a3b8", fontSize:14, maxWidth:620, marginTop:10, lineHeight:1.7 }}>
+                    {[
+                      currentUser.department || null,
+                      currentUser.usn ? `USN: ${currentUser.usn}` : null,
+                      currentUser.role ? formatDisplayName(currentUser.role) : null,
+                    ].filter(Boolean).join(" | ") || "Personal details will appear here once your account data is available."}
+                  </div>
                   <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:14 }}>
-                    <span style={{ padding:"8px 12px", borderRadius:999, background:"#111c34", border:"1px solid #1d4ed8", color:"#93c5fd", fontSize:12, fontWeight:700 }}>Rating {profileEntry.rating}</span>
-                    <span style={{ padding:"8px 12px", borderRadius:999, background:"#18112e", border:"1px solid #7c3aed", color:"#c4b5fd", fontSize:12, fontWeight:700 }}>{profileBadgeLabel}</span>
+                    <span style={{ padding:"8px 12px", borderRadius:999, background:"#111c34", border:"1px solid #1d4ed8", color:"#93c5fd", fontSize:12, fontWeight:700 }}>
+                      {currentUser.verified ? "Verified Account" : "Unverified Account"}
+                    </span>
+                    <span style={{ padding:"8px 12px", borderRadius:999, background:"#18112e", border:"1px solid #7c3aed", color:"#c4b5fd", fontSize:12, fontWeight:700 }}>
+                      {currentUser.role ? formatDisplayName(currentUser.role) : "User"}
+                    </span>
                   </div>
                 </div>
               </div>
-
-              <button onClick={() => setProfileEditorOpen((prev) => !prev)} style={{ ...S.btn("submit"), minHeight:46, boxShadow:"0 14px 28px rgba(124,58,237,0.28)" }}>
-                {profileEditorOpen ? "Close Editor" : "Edit Profile"}
-              </button>
             </div>
-
-            {profileEditorOpen && (
-              <div style={{ marginTop:22, display:"grid", gap:12, gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", alignItems:"end" }}>
-                <div>
-                  <label style={{ ...S.fieldLabel, color:"#94a3b8" }}>Handle</label>
-                  <input value={profileDraft.handle} onChange={(e)=>setProfileDraft((prev) => ({ ...prev, handle: e.target.value }))} style={{ ...S.input, background:"#0b1220", border:"1px solid #22304a" }} />
-                </div>
-                <div>
-                  <label style={{ ...S.fieldLabel, color:"#94a3b8" }}>Bio</label>
-                  <input value={profileDraft.bio} onChange={(e)=>setProfileDraft((prev) => ({ ...prev, bio: e.target.value }))} style={{ ...S.input, background:"#0b1220", border:"1px solid #22304a" }} />
-                </div>
-                <button onClick={() => setProfileEditorOpen(false)} style={{ ...S.btn("default"), color:"#e2e8f0", minHeight:46 }}>
-                  Save
-                </button>
-              </div>
-            )}
           </div>
 
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:16 }}>
@@ -4965,36 +5540,16 @@ function CodingPlatform() {
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:20, alignItems:"start" }}>
             <div style={{ display:"grid", gap:20 }}>
               <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
-                <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"center", marginBottom:18, flexWrap:"wrap" }}>
-                  <div>
-                    <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase" }}>Rating Graph</div>
-                    <div style={{ color:"#f8fafc", fontSize:24, fontWeight:700, marginTop:6 }}>Rating over time</div>
-                  </div>
-                  <div style={{ color:"#22d3ee", fontSize:13, fontWeight:700 }}>+18 this month</div>
+                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Personal Details</div>
+                <div style={{ color:"#f8fafc", fontSize:24, fontWeight:700, marginBottom:18 }}>Account information</div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:14 }}>
+                  {profileDetails.map((item) => (
+                    <div key={item.label} style={{ background:"#111827", border:"1px solid #1f2937", borderRadius:16, padding:"14px 16px" }}>
+                      <div style={{ color:"#94a3b8", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:8 }}>{item.label}</div>
+                      <div style={{ color:"#f8fafc", fontSize:15, fontWeight:600, wordBreak:"break-word" }}>{item.value || "--"}</div>
+                    </div>
+                  ))}
                 </div>
-                <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} style={{ width:"100%", height:220 }}>
-                  <defs>
-                    <linearGradient id="profileRatingStroke" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stopColor="#38bdf8" />
-                      <stop offset="100%" stopColor="#8b5cf6" />
-                    </linearGradient>
-                  </defs>
-                  {[0, 1, 2, 3].map((step) => {
-                    const y = chartPadding + ((chartHeight - (chartPadding * 2)) * step) / 3;
-                    return <line key={step} x1={chartPadding} y1={y} x2={chartWidth - chartPadding} y2={y} stroke="#1e293b" strokeWidth="1" />;
-                  })}
-                  <polyline fill="none" stroke="url(#profileRatingStroke)" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" points={ratingPoints} />
-                  {profileRatingHistory.map((point, index) => {
-                    const x = chartPadding + ((chartWidth - (chartPadding * 2)) * index) / (profileRatingHistory.length - 1);
-                    const y = chartHeight - chartPadding - (((point.value - ratingMin) / (ratingMax - ratingMin || 1)) * (chartHeight - (chartPadding * 2)));
-                    return (
-                      <g key={point.label}>
-                        <circle cx={x} cy={y} r="5" fill="#0b1220" stroke="#60a5fa" strokeWidth="3" />
-                        <text x={x} y={chartHeight - 6} textAnchor="middle" fill="#94a3b8" fontSize="11">{point.label}</text>
-                      </g>
-                    );
-                  })}
-                </svg>
               </div>
 
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))", gap:20 }}>
@@ -5006,7 +5561,7 @@ function CodingPlatform() {
                       <div key={item.label}>
                         <div style={{ display:"flex", justifyContent:"space-between", color:"#cbd5e1", fontSize:14, marginBottom:8 }}>
                           <span>{item.label}</span>
-                          <span>{item.value}/{item.total}</span>
+                          <span>{item.value}</span>
                         </div>
                         <div style={{ height:10, borderRadius:999, background:"#111827", overflow:"hidden" }}>
                           <div style={{ width:`${(item.value / item.total) * 100}%`, height:"100%", borderRadius:999, background:item.color, boxShadow:`0 0 18px ${item.color}55`, transition:"width 0.35s ease" }} />
@@ -5017,64 +5572,34 @@ function CodingPlatform() {
                 </div>
 
                 <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
-                  <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Topic Distribution</div>
-                  <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Most practiced topics</div>
-                  <div style={{ display:"grid", gap:12 }}>
-                    {topicDistribution.map((topic) => (
-                      <div key={topic.label}>
-                        <div style={{ display:"flex", justifyContent:"space-between", color:"#cbd5e1", fontSize:14, marginBottom:7 }}>
-                          <span>{topic.label}</span>
-                          <span>{topic.share}%</span>
-                        </div>
-                        <div style={{ height:9, borderRadius:999, background:"#111827", overflow:"hidden" }}>
-                          <div style={{ width:`${topic.share}%`, height:"100%", borderRadius:999, background:topic.color, transition:"width 0.35s ease" }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
-                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Activity Heatmap</div>
-                <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Consistency grid</div>
-                <div style={{ display:"flex", gap:5, alignItems:"flex-end", flexWrap:"nowrap", overflowX:"auto", paddingBottom:6 }}>
-                  {activityWeeks.map((week, weekIndex) => (
-                    <div key={weekIndex} style={{ display:"grid", gap:5 }}>
-                      {week.map((level, dayIndex) => (
-                        <div key={`${weekIndex}-${dayIndex}`} style={{ width:14, height:14, borderRadius:4, background:activityColors[level], boxShadow:level ? `0 0 12px ${activityColors[level]}44` : "none" }} />
-                      ))}
+                  <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Leaderboard Snapshot</div>
+                  <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Live ranking data</div>
+                  {profileEntry ? (
+                    <div style={{ display:"grid", gap:12, color:"#cbd5e1", fontSize:14, lineHeight:1.7 }}>
+                      <div>Contest rank: <span style={{ color:"#93c5fd", fontWeight:700 }}>#{profileEntry.contest.rank}</span></div>
+                      <div>Contest score: <span style={{ color:"#67e8f9", fontWeight:700 }}>{profileEntry.contest.score}</span></div>
+                      <div>Overall solved: <span style={{ color:"#22c55e", fontWeight:700 }}>{profileEntry.overall.problemsSolved}</span></div>
+                      <div>Global rank: <span style={{ color:"#c4b5fd", fontWeight:700 }}>#{profileEntry.global.rank}</span></div>
                     </div>
-                  ))}
+                  ) : (
+                    <div style={{ color:"#94a3b8", fontSize:14, lineHeight:1.7 }}>
+                      No leaderboard data is available for your account yet.
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
             <div style={{ display:"grid", gap:20 }}>
               <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
-                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Achievements</div>
-                <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:18 }}>Badges unlocked</div>
-                <div style={{ display:"grid", gap:12 }}>
-                  {profileAchievements.map((achievement) => (
-                    <div key={achievement.title} style={{ background:"#111827", border:`1px solid ${achievement.color}55`, borderRadius:18, padding:"14px 14px 16px" }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
-                        <span style={{ width:12, height:12, borderRadius:"50%", background:achievement.color, boxShadow:`0 0 14px ${achievement.color}` }} />
-                        <span style={{ color:"#f8fafc", fontWeight:700 }}>{achievement.title}</span>
-                      </div>
-                      <div style={{ color:"#94a3b8", fontSize:13, lineHeight:1.6 }}>{achievement.detail}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
-                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Profile Pulse</div>
-                <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:14 }}>Current form</div>
+                <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Account Summary</div>
+                <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:14 }}>Personal overview</div>
                 <div style={{ display:"grid", gap:10, color:"#cbd5e1", fontSize:14, lineHeight:1.7 }}>
-                  <div>Best contest rank: <span style={{ color:"#93c5fd", fontWeight:700 }}>#{profileEntry.contest.rank}</span></div>
-                  <div>Global trend: <span style={{ color:getTrendMeta(profileEntry.global.trend).color, fontWeight:700 }}>{getTrendMeta(profileEntry.global.trend).label}</span></div>
-                  <div>Penalty discipline: <span style={{ color:"#c4b5fd", fontWeight:700 }}>{profileEntry.overall.timePenalty}</span></div>
-                  <div>Favorite lane: <span style={{ color:"#67e8f9", fontWeight:700 }}>{topicDistribution[0].label}</span></div>
+                  <div>Name: <span style={{ color:"#f8fafc", fontWeight:700 }}>{profileName}</span></div>
+                  <div>Email: <span style={{ color:"#93c5fd", fontWeight:700 }}>{currentUser.email || "--"}</span></div>
+                  <div>Department: <span style={{ color:"#67e8f9", fontWeight:700 }}>{currentUser.department || "--"}</span></div>
+                  <div>USN: <span style={{ color:"#c4b5fd", fontWeight:700 }}>{currentUser.usn || "--"}</span></div>
+                  <div>Verified: <span style={{ color:currentUser.verified ? "#22c55e" : "#fbbf24", fontWeight:700 }}>{currentUser.verified ? "Yes" : "No"}</span></div>
                 </div>
               </div>
             </div>
@@ -5093,10 +5618,10 @@ function CodingPlatform() {
                   </tr>
                 </thead>
                 <tbody>
-                  {profileSubmissionHistory.map((row) => (
+                  {profileSubmissionHistory.length ? profileSubmissionHistory.map((row) => (
                     <tr key={`${row.problemId}-${row.time}`} style={{ borderTop:"1px solid #172033" }}>
                       <td style={{ padding:"12px 0" }}>
-                        <button onClick={() => openProblem(problemCatalog.find((problem) => problem.id === row.problemId) || problemCatalog[0], "catalog")} style={{ background:"none", border:"none", padding:0, color:"#93c5fd", cursor:"pointer", fontWeight:600, textAlign:"left" }}>
+                        <button onClick={() => openProblem(problemCatalog.find((problem) => sameValue(problem.dbId, row.problemDbId) || sameValue(problem.id, row.problemId)) || problemCatalog[0], "catalog")} style={{ background:"none", border:"none", padding:0, color:"#93c5fd", cursor:"pointer", fontWeight:600, textAlign:"left" }}>
                           {row.problemName}
                         </button>
                       </td>
@@ -5104,7 +5629,11 @@ function CodingPlatform() {
                       <td style={{ padding:"12px 0", color:"#cbd5e1" }}>{row.language}</td>
                       <td style={{ padding:"12px 0", color:"#94a3b8" }}>{row.time}</td>
                     </tr>
-                  ))}
+                  )) : (
+                    <tr style={{ borderTop:"1px solid #172033" }}>
+                      <td colSpan="4" style={{ padding:"14px 0", color:"#94a3b8" }}>No submission history available yet.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -5115,20 +5644,24 @@ function CodingPlatform() {
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr>
-                    {["Contest Name", "Rank", "Score", "Rating Change"].map((heading) => (
+                    {["Contest Name", "Rank", "Score", "Rating"].map((heading) => (
                       <th key={heading} style={{ textAlign:"left", padding:"0 0 12px", color:"#64748b", fontSize:11, textTransform:"uppercase", letterSpacing:"0.1em" }}>{heading}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {profileContestHistory.map((row) => (
+                  {profileContestHistory.length ? profileContestHistory.map((row) => (
                     <tr key={row.name} style={{ borderTop:"1px solid #172033" }}>
                       <td style={{ padding:"12px 0", color:"#e2e8f0", fontWeight:600 }}>{row.name}</td>
                       <td style={{ padding:"12px 0", color:"#93c5fd" }}>{row.rank}</td>
                       <td style={{ padding:"12px 0", color:"#cbd5e1" }}>{row.score}</td>
-                      <td style={{ padding:"12px 0", color:String(row.ratingChange).startsWith("-") ? "#f87171" : "#22c55e", fontWeight:700 }}>{row.ratingChange}</td>
+                      <td style={{ padding:"12px 0", color:"#22c55e", fontWeight:700 }}>{row.rating}</td>
                     </tr>
-                  ))}
+                  )) : (
+                    <tr style={{ borderTop:"1px solid #172033" }}>
+                      <td colSpan="4" style={{ padding:"14px 0", color:"#94a3b8" }}>No contest history available for your account yet.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -5597,7 +6130,16 @@ function CodingPlatform() {
         </div>}
       </nav>
 
-      <div style={{ display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 72px)" }}>
+      <div style={{ padding:"16px 24px 0", maxWidth:"100%" }}>
+        <div style={S.backButtonRow}>
+          <button onClick={goBackFromProblem} style={S.backButton}>
+            <span aria-hidden="true">←</span>
+            <span>Back</span>
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 128px)" }}>
 
         
         <div style={{ width:"42%", display:"flex", flexDirection:"column", borderRight:"1px solid #1e1e2e", overflow:"hidden" }}>
@@ -5693,7 +6235,7 @@ function CodingPlatform() {
             <div style={{ position:"absolute", left:0, top:0, bottom:0, width:44, background:"#0a0a12", borderRight:"1px solid #1a1a2a", paddingTop:16, textAlign:"right", paddingRight:8, userSelect:"none", overflowY:"hidden", zIndex:1 }}>
               {code.split("\n").map((_,i)=><div key={i} style={{ color:"#333", fontSize:13, lineHeight:"21px" }}>{i+1}</div>)}
             </div>
-            <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onKeyDown={handleTab} spellCheck={false}
+            <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef)} spellCheck={false}
               style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"#0c0c14", color:"#c8c8e8", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }} />
           </div>
 
