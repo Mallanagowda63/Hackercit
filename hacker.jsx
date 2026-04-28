@@ -20,6 +20,7 @@ const BACKEND_API_TARGET = USES_SAME_ORIGIN_BACKEND
   ? `${window.location.origin}/api/...`
   : (BACKEND_API_BASE || "backend API (not configured)");
 const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
+const AUTH_SESSION_STORAGE_KEY = "codearena.authSession";
 const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, createdAt: null, lastLoginAt: null, loginCount: 0 };
 
 async function readJsonSafely(response) {
@@ -2822,6 +2823,26 @@ function CodingPlatform() {
     }
   };
 
+  const saveAuthSession = (token, user, role) => {
+    try {
+      window.localStorage?.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify({
+        token,
+        user,
+        role,
+      }));
+    } catch {
+      // Storage can be blocked in private browsing; login should still work for this tab.
+    }
+  };
+
+  const clearAuthSession = () => {
+    try {
+      window.localStorage?.removeItem(AUTH_SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore storage cleanup failures.
+    }
+  };
+
   const performApiRequest = async (path, options = {}) => {
     const hasBody = Boolean(options.body);
     const response = await fetch(buildBackendApiUrl(path), {
@@ -3058,6 +3079,39 @@ function CodingPlatform() {
       setPortalError(error.message || "Unable to update notification.");
     }
   };
+
+  useEffect(() => {
+    try {
+      const rawSession = window.localStorage?.getItem(AUTH_SESSION_STORAGE_KEY);
+      if (!rawSession) return;
+
+      const session = JSON.parse(rawSession);
+      const savedUser = session?.user;
+      const savedToken = String(session?.token || "");
+      const savedRole = savedUser?.role || session?.role || "";
+
+      if (!savedToken || !savedUser?.id || !savedRole) {
+        clearAuthSession();
+        return;
+      }
+
+      setCurrentUser({
+        ...EMPTY_CURRENT_USER,
+        ...savedUser,
+        role: savedRole,
+      });
+      setAuthToken(savedToken);
+      setUserRole(savedRole);
+      setAuthModalOpen(false);
+      setAuthError("");
+      setView(savedRole === "admin" ? "admin" : "list");
+      if (savedRole === "admin") {
+        setAdminTab("overview");
+      }
+    } catch {
+      clearAuthSession();
+    }
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -3554,7 +3608,7 @@ function CodingPlatform() {
       };
 
       const resolvedRole = user.role || authRole;
-      setCurrentUser({
+      const authenticatedUser = {
         id: user.id || "",
         role: resolvedRole,
         email: user.email || email,
@@ -3565,9 +3619,12 @@ function CodingPlatform() {
         createdAt: user.createdAt || null,
         lastLoginAt: user.lastLoginAt || null,
         loginCount: Number(user.loginCount || 0),
-      });
+      };
+
+      setCurrentUser(authenticatedUser);
       setAuthToken(data.token || "");
       setUserRole(resolvedRole);
+      saveAuthSession(data.token || "", authenticatedUser, resolvedRole);
       setPortalMessage("");
       setPortalError("");
       if (resolvedRole === "admin") {
@@ -3589,6 +3646,7 @@ function CodingPlatform() {
   };
 
   const signOut = () => {
+    clearAuthSession();
     setUserRole(null);
     setCurrentUser(EMPTY_CURRENT_USER);
     setAuthToken("");
