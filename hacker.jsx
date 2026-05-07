@@ -21,6 +21,7 @@ const BACKEND_API_TARGET = USES_SAME_ORIGIN_BACKEND
   : (BACKEND_API_BASE || "backend API (not configured)");
 const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
 const AUTH_SESSION_STORAGE_KEY = "codearena.authSession";
+const LOCAL_APP_STORAGE_KEY = "codearena.localAppData";
 const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, createdAt: null, lastLoginAt: null, loginCount: 0 };
 
 async function readJsonSafely(response) {
@@ -947,6 +948,38 @@ function TreeNode(val, left = null, right = null) {
 // ─────────────────────────────────────────────────────────────────────────────
 // PROBLEMS DATABASE
 // ─────────────────────────────────────────────────────────────────────────────
+function createLocalRunResult({ language, sourceCode, fnName, testCases, problem }) {
+  const runtime = `${Math.floor(60 + Math.random() * 60)} ms`;
+  const memory = `${(Math.random() * 5 + 40).toFixed(1)} MB`;
+  const beats = `${Math.floor(50 + Math.random() * 45)}%`;
+  const problemKey = problem?.number ?? problem?.id;
+
+  if (language !== "javascript") {
+    return {
+      tests: (testCases || []).map((tc) => ({
+        ...tc,
+        actual: null,
+        status: "unsupported",
+        error: "Python and Java execution need the backend runner. JavaScript works fully in this browser-only mode.",
+      })),
+      runtime,
+      memory,
+      beats,
+      status: "unsupported",
+    };
+  }
+
+  const refCode = REFERENCE_SOLUTIONS[problemKey]?.javascript || "";
+  const tests = runJavaScript(sourceCode, refCode, testCases || [], fnName);
+  return {
+    tests,
+    runtime,
+    memory,
+    beats,
+    status: tests.every((test) => test.status === "pass") ? "passed" : "failed",
+  };
+}
+
 const PROBLEMS = [
   {
     id: 1,
@@ -2824,6 +2857,153 @@ function CodingPlatform() {
     }
   };
 
+  const readLocalAppData = () => {
+    const starterAssignment = {
+      id: "local-current-test",
+      title: defaultAdminTest.title,
+      difficulty: defaultAdminTest.difficulty,
+      durationMinutes: defaultAdminTest.duration,
+      status: "LIVE",
+      startsAt: new Date().toISOString(),
+      endsAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      problems: defaultAdminProblems,
+    };
+
+    const fallback = {
+      users: [],
+      problems: PROBLEMS,
+      assignments: [starterAssignment],
+      submissions: [],
+      notifications: [],
+      loginEvents: [],
+    };
+
+    try {
+      const parsed = JSON.parse(window.localStorage?.getItem(LOCAL_APP_STORAGE_KEY) || "null");
+      return {
+        ...fallback,
+        ...(parsed && typeof parsed === "object" ? parsed : {}),
+        problems: Array.isArray(parsed?.problems) && parsed.problems.length ? parsed.problems : fallback.problems,
+        assignments: Array.isArray(parsed?.assignments) && parsed.assignments.length ? parsed.assignments : fallback.assignments,
+        users: Array.isArray(parsed?.users) ? parsed.users : [],
+        submissions: Array.isArray(parsed?.submissions) ? parsed.submissions : [],
+        notifications: Array.isArray(parsed?.notifications) ? parsed.notifications : [],
+        loginEvents: Array.isArray(parsed?.loginEvents) ? parsed.loginEvents : [],
+      };
+    } catch {
+      return fallback;
+    }
+  };
+
+  const writeLocalAppData = (data) => {
+    try {
+      window.localStorage?.setItem(LOCAL_APP_STORAGE_KEY, JSON.stringify(data));
+    } catch {
+      // Keep the app usable even when storage is blocked.
+    }
+  };
+
+  const makeLocalLeaderboard = (submissions = [], users = []) => {
+    const rowsByUser = new Map();
+
+    submissions.forEach((submission) => {
+      const key = submission.userId || submission.user?.id || "guest";
+      const user = users.find((candidate) => candidate.id === key) || submission.user || {};
+      const row = rowsByUser.get(key) || {
+        userId: key,
+        username: user.name || user.email || "Student",
+        rating: 1400,
+        avatarGradient: ["#7c6af7", "#4fd1c5"],
+        solved: new Set(),
+        attempts: 0,
+      };
+
+      row.attempts += 1;
+      if (submission.status === "ACCEPTED") {
+        row.solved.add(String(submission.problemId));
+      }
+      rowsByUser.set(key, row);
+    });
+
+    const rows = [...rowsByUser.values()]
+      .map((row) => {
+        const solvedCount = row.solved.size;
+        const score = solvedCount * 100 - Math.max(0, row.attempts - solvedCount) * 10;
+        return {
+          userId: row.userId,
+          username: row.username,
+          rating: row.rating + solvedCount * 35,
+          avatarGradient: row.avatarGradient,
+          overall: { rank: 0, score, problemsSolved: solvedCount, timePenalty: `${row.attempts * 3}m`, trend: 1 },
+          contest: { rank: 0, score, problemsSolved: solvedCount, timePenalty: `${row.attempts * 3}m`, trend: 1, timeTaken: `${Math.max(1, row.attempts * 7)}m` },
+          global: { rank: 0, score, problemsSolved: solvedCount, timePenalty: `${row.attempts * 3}m`, trend: 1 },
+        };
+      })
+      .sort((left, right) => right.overall.score - left.overall.score)
+      .map((row, index) => ({
+        ...row,
+        overall: { ...row.overall, rank: index + 1 },
+        contest: { ...row.contest, rank: index + 1 },
+        global: { ...row.global, rank: index + 1 },
+      }));
+
+    return rows.length ? rows : defaultLeaderboard;
+  };
+
+  const runLocalAuth = ({ mode, role, email, password, name, usn, department }) => {
+    const store = readLocalAppData();
+    const now = new Date().toISOString();
+    const normalizedEmail = email.toLowerCase();
+    let user = store.users.find((candidate) => candidate.email?.toLowerCase() === normalizedEmail && candidate.role === role);
+
+    if (mode === "signup") {
+      if (user) throw new Error("An account already exists for this email and role. Log in instead.");
+      user = {
+        id: `local-user-${Date.now()}`,
+        role,
+        email: normalizedEmail,
+        password,
+        name: name || normalizedEmail.split("@")[0],
+        usn,
+        department,
+        verified: true,
+        createdAt: now,
+        lastLoginAt: now,
+        loginCount: 1,
+      };
+      store.users.push(user);
+    } else {
+      if (!user) {
+        user = {
+          id: `local-user-${Date.now()}`,
+          role,
+          email: normalizedEmail,
+          password,
+          name: normalizedEmail.split("@")[0],
+          usn: "",
+          department: role === "admin" ? "Administration" : "Department pending",
+          verified: true,
+          createdAt: now,
+          lastLoginAt: now,
+          loginCount: 1,
+        };
+        store.users.push(user);
+      } else if (user.password && user.password !== password) {
+        throw new Error("Incorrect password for this local account.");
+      } else {
+        user.lastLoginAt = now;
+        user.loginCount = Number(user.loginCount || 0) + 1;
+      }
+    }
+
+    store.loginEvents.unshift({ id: `login-${Date.now()}`, userId: user.id, email: user.email, role: user.role, createdAt: now });
+    writeLocalAppData(store);
+    const { password: _hiddenPassword, ...safeUser } = user;
+    return { token: `local-token-${user.id}`, user: safeUser };
+  };
+
   const saveAuthSession = (token, user, role) => {
     try {
       window.localStorage?.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify({
@@ -2845,21 +3025,168 @@ function CodingPlatform() {
   };
 
   const performApiRequest = async (path, options = {}) => {
-    const hasBody = Boolean(options.body);
-    const response = await fetch(buildBackendApiUrl(path), {
-      ...options,
-      headers: {
-        ...createAuthHeaders(authToken, hasBody),
-        ...(options.headers || {}),
-      },
-    });
+    const method = String(options.method || "GET").toUpperCase();
+    const body = options.body ? JSON.parse(options.body) : {};
+    const store = readLocalAppData();
+    const now = new Date().toISOString();
+    const activeUserId = currentUser.id || "";
 
-    const data = await readJsonSafely(response);
-    if (!response.ok) {
-      throw new Error(data.error || "Request failed.");
+    if (path.startsWith("/api/problems")) {
+      if (method === "POST" && path === "/api/problems") {
+        const nextNumber = Math.max(0, ...store.problems.map((problem) => Number(problem.number ?? problem.id) || 0)) + 1;
+        const problem = {
+          id: `local-problem-${Date.now()}`,
+          legacyId: nextNumber,
+          number: nextNumber,
+          slug: body.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
+          title: body.title,
+          fnName: body.fnName || "solve",
+          difficulty: body.difficulty || "Medium",
+          tags: body.tags || [],
+          acceptance: body.acceptance || "Admin Upload",
+          description: body.statement || body.description || "",
+          examples: body.examples || [],
+          testCases: body.testCases || [],
+          constraints: body.constraints || [],
+          samples: body.samples || body.examples || [],
+          starterCode: body.starterCode || {},
+          createdAt: now,
+          updatedAt: now,
+        };
+        store.problems.push(problem);
+        writeLocalAppData(store);
+        return { problem };
+      }
+
+      if (method === "POST" && path === "/api/problems/import") {
+        writeLocalAppData({ ...store, problems: store.problems.length ? store.problems : PROBLEMS });
+        return { imported: store.problems.length || PROBLEMS.length };
+      }
+
+      return { problems: store.problems };
     }
 
-    return data;
+    if (path === "/api/tests" && method === "GET") {
+      return { assignments: store.assignments };
+    }
+
+    if (path === "/api/tests" && method === "POST") {
+      const selectedProblems = store.problems.filter((problem) =>
+        (body.problemIds || []).some((id) => sameValue(id, problem.id) || sameValue(id, problem.number) || sameValue(id, problem.legacyId))
+      );
+      const assignment = {
+        id: `local-test-${Date.now()}`,
+        title: body.title || "Fresh Challenge",
+        difficulty: body.difficulty || "Mixed",
+        durationMinutes: Number(body.durationMinutes || 60),
+        status: "DRAFT",
+        startsAt: null,
+        endsAt: null,
+        createdAt: now,
+        updatedAt: now,
+        problems: selectedProblems,
+      };
+      store.assignments.unshift(assignment);
+      writeLocalAppData(store);
+      return { assignment };
+    }
+
+    const testActionMatch = path.match(/^\/api\/tests\/([^/]+)\/(start|stop)$/);
+    if (testActionMatch && method === "POST") {
+      const [, assignmentId, action] = testActionMatch;
+      const assignment = store.assignments.find((item) => sameValue(item.id, assignmentId));
+      if (!assignment) throw new Error("Test not found.");
+      assignment.status = action === "start" ? "LIVE" : "ENDED";
+      assignment.startsAt = action === "start" ? now : assignment.startsAt;
+      assignment.endsAt = action === "stop" ? now : assignment.endsAt;
+      assignment.updatedAt = now;
+
+      if (action === "start") {
+        store.notifications.unshift({
+          id: `notification-${Date.now()}`,
+          title: "Test started",
+          message: `${assignment.title} is now live.`,
+          readBy: [],
+          createdAt: now,
+        });
+      }
+
+      writeLocalAppData(store);
+      return { assignment, notifiedStudents: store.users.filter((user) => user.role === "student").length };
+    }
+
+    if (path === "/api/tests/active") {
+      const assignments = store.assignments.filter((assignment) => assignment.status === "LIVE");
+      return { assignments, assignment: assignments[0] || null };
+    }
+
+    if (path === "/api/auth/students") {
+      return { students: store.users.filter((user) => user.role === "student").map(({ password, ...user }) => user) };
+    }
+
+    if (path === "/api/auth/login-events") {
+      return { events: store.loginEvents };
+    }
+
+    if (path === "/api/notifications") {
+      const notifications = store.notifications.map((notification) => ({
+        ...notification,
+        read: Array.isArray(notification.readBy) && notification.readBy.includes(activeUserId),
+      }));
+      return { notifications, unreadCount: notifications.filter((notification) => !notification.read).length };
+    }
+
+    const notificationReadMatch = path.match(/^\/api\/notifications\/([^/]+)\/read$/);
+    if (notificationReadMatch && method === "POST") {
+      const notification = store.notifications.find((item) => sameValue(item.id, notificationReadMatch[1]));
+      if (notification) {
+        notification.readBy = Array.from(new Set([...(notification.readBy || []), activeUserId]));
+        writeLocalAppData(store);
+      }
+      return { ok: true };
+    }
+
+    if (path === "/api/submissions/leaderboard") {
+      return { leaderboard: makeLocalLeaderboard(store.submissions, store.users) };
+    }
+
+    const userSubmissionMatch = path.match(/^\/api\/submissions\/user\/([^/]+)$/);
+    if (userSubmissionMatch) {
+      return { submissions: store.submissions.filter((submission) => sameValue(submission.userId, userSubmissionMatch[1])) };
+    }
+
+    if (path === "/api/submissions/submit" && method === "POST") {
+      const problem = store.problems.find((candidate) => sameValue(candidate.id, body.problemId) || sameValue(candidate.number, body.problemId) || sameValue(candidate.legacyId, body.problemId))
+        || selectedProblem;
+      const run = createLocalRunResult({
+        language: body.language,
+        sourceCode: body.code,
+        fnName: problem.fnName,
+        testCases: problem.testCases,
+        problem,
+      });
+      const accepted = run.tests.length > 0 && run.tests.every((test) => test.status === "pass");
+      const submission = {
+        id: `local-submission-${Date.now()}`,
+        userId: activeUserId,
+        user: currentUser,
+        problemId: String(problem.id),
+        problem,
+        language: body.language,
+        code: body.code,
+        status: accepted ? "ACCEPTED" : "FAILED",
+        tests: run.tests,
+        runtime: run.runtime,
+        memory: run.memory,
+        beats: run.beats,
+        createdAt: now,
+      };
+      store.submissions.unshift(submission);
+      writeLocalAppData(store);
+      return { ...run, status: run.status, submission };
+    }
+
+    throw new Error("This action is not available in browser-only mode yet.");
   };
 
   const loadProblemBank = async () => {
@@ -3580,21 +3907,7 @@ function CodingPlatform() {
     setAuthSubmitting(true);
 
     try {
-      const endpoint = authMode === "signup" ? "/api/auth/register" : "/api/auth/login";
-      const payload = authMode === "signup"
-        ? { email, password, name, usn, department, role: authRole }
-        : { email, password, role: authRole };
-
-      const response = await fetch(buildBackendApiUrl(endpoint), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await readJsonSafely(response);
-      if (!response.ok) {
-        throw new Error(data.error || "Authentication failed.");
-      }
+      const data = runLocalAuth({ mode: authMode, role: authRole, email, password, name, usn, department });
 
       const user = data.user || {
         id: "",
@@ -3635,12 +3948,7 @@ function CodingPlatform() {
       setAuthError("");
       setView(resolvedRole === "admin" ? "admin" : "list");
     } catch (error) {
-      const message = String(error?.message || "");
-      setAuthError(
-        message.includes("Failed to fetch")
-          ? `Cannot reach backend API at ${BACKEND_API_TARGET}. Make sure the backend is running and reachable, then try again.`
-          : message || "Unable to complete authentication right now."
-      );
+      setAuthError(error?.message || "Unable to complete authentication right now.");
     } finally {
       setAuthSubmitting(false);
     }
@@ -3849,30 +4157,13 @@ function CodingPlatform() {
       }));
 
     try {
-      const response = await fetch(buildBackendApiUrl("/api/run"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language: adminSubmissionLang,
-          sourceCode: adminSubmissionCode,
-          fnName: selected.fnName,
-          testCases: selected.testCases,
-        }),
+      const data = createLocalRunResult({
+        language: adminSubmissionLang,
+        sourceCode: adminSubmissionCode,
+        fnName: selected.fnName,
+        testCases: selected.testCases,
+        problem: selected,
       });
-
-      const responseText = await response.text();
-      let data = null;
-
-      try {
-        data = responseText ? JSON.parse(responseText) : {};
-      } catch {
-        const snippet = responseText.slice(0, 160).replace(/\s+/g, " ").trim();
-        throw new Error(snippet || "Execution API returned invalid JSON.");
-      }
-
-      if (!response.ok) {
-        throw new Error(data.error || "Execution failed.");
-      }
 
       setAdminExecution({
         tests: data.tests || [],
@@ -4027,33 +4318,13 @@ function CodingPlatform() {
         beats   = data.beats || beats;
         status  = data.status || status;
       } else {
-        const response = await fetch(buildBackendApiUrl("/api/run"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            language: lang,
-            sourceCode: code,
-            fnName: p.fnName,
-            testCases: p.testCases,
-          }),
+        const data = createLocalRunResult({
+          language: lang,
+          sourceCode: code,
+          fnName: p.fnName,
+          testCases: p.testCases,
+          problem: p,
         });
-        const responseText = await response.text();
-        let data = null;
-
-        try {
-          data = responseText ? JSON.parse(responseText) : {};
-        } catch {
-          const snippet = responseText.slice(0, 160).replace(/\s+/g, " ").trim();
-          throw new Error(
-            snippet.startsWith("<")
-              ? "Deployment returned HTML instead of JSON. Make sure the frontend points to the correct backend API and that /api/run returns JSON."
-              : `Execution API returned invalid JSON. Response started with: ${snippet || "empty response"}`
-          );
-        }
-
-        if (!response.ok) {
-          throw new Error(data.error || "Execution failed.");
-        }
 
         results = data.tests || [];
         runtime = data.runtime || runtime;
