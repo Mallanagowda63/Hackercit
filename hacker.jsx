@@ -21,7 +21,6 @@ const BACKEND_API_TARGET = USES_SAME_ORIGIN_BACKEND
   : (BACKEND_API_BASE || "backend API (not configured)");
 const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
 const AUTH_SESSION_STORAGE_KEY = "codearena.authSession";
-const LOCAL_APP_STORAGE_KEY = "codearena.localAppData";
 const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, createdAt: null, lastLoginAt: null, loginCount: 0 };
 
 async function readJsonSafely(response) {
@@ -2841,6 +2840,12 @@ function CodingPlatform() {
   const textareaRef = useRef(null);
   const adminTextareaRef = useRef(null);
   const shieldTimerRef = useRef(null);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 1024);
+  useEffect(() => {
+    const handleResize = () => setViewportWidth(window.innerWidth || 1024);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
   const triggerShield = (message, duration = 1800) => {
     setShieldMessage(message);
     setScreenShield(true);
@@ -2849,153 +2854,6 @@ function CodingPlatform() {
     if (duration > 0) {
       shieldTimerRef.current = setTimeout(() => setScreenShield(false), duration);
     }
-  };
-
-  const readLocalAppData = () => {
-    const starterAssignment = {
-      id: "local-current-test",
-      title: defaultAdminTest.title,
-      difficulty: defaultAdminTest.difficulty,
-      durationMinutes: defaultAdminTest.duration,
-      status: "LIVE",
-      startsAt: new Date().toISOString(),
-      endsAt: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      problems: defaultAdminProblems,
-    };
-
-    const fallback = {
-      users: [],
-      problems: PROBLEMS,
-      assignments: [starterAssignment],
-      submissions: [],
-      notifications: [],
-      loginEvents: [],
-    };
-
-    try {
-      const parsed = JSON.parse(window.localStorage?.getItem(LOCAL_APP_STORAGE_KEY) || "null");
-      return {
-        ...fallback,
-        ...(parsed && typeof parsed === "object" ? parsed : {}),
-        problems: Array.isArray(parsed?.problems) && parsed.problems.length ? parsed.problems : fallback.problems,
-        assignments: Array.isArray(parsed?.assignments) && parsed.assignments.length ? parsed.assignments : fallback.assignments,
-        users: Array.isArray(parsed?.users) ? parsed.users : [],
-        submissions: Array.isArray(parsed?.submissions) ? parsed.submissions : [],
-        notifications: Array.isArray(parsed?.notifications) ? parsed.notifications : [],
-        loginEvents: Array.isArray(parsed?.loginEvents) ? parsed.loginEvents : [],
-      };
-    } catch {
-      return fallback;
-    }
-  };
-
-  const writeLocalAppData = (data) => {
-    try {
-      window.localStorage?.setItem(LOCAL_APP_STORAGE_KEY, JSON.stringify(data));
-    } catch {
-      // Keep the app usable even when storage is blocked.
-    }
-  };
-
-  const makeLocalLeaderboard = (submissions = [], users = []) => {
-    const rowsByUser = new Map();
-
-    submissions.forEach((submission) => {
-      const key = submission.userId || submission.user?.id || "guest";
-      const user = users.find((candidate) => candidate.id === key) || submission.user || {};
-      const row = rowsByUser.get(key) || {
-        userId: key,
-        username: user.name || user.email || "Student",
-        rating: 1400,
-        avatarGradient: ["#7c6af7", "#4fd1c5"],
-        solved: new Set(),
-        attempts: 0,
-      };
-
-      row.attempts += 1;
-      if (submission.status === "ACCEPTED") {
-        row.solved.add(String(submission.problemId));
-      }
-      rowsByUser.set(key, row);
-    });
-
-    const rows = [...rowsByUser.values()]
-      .map((row) => {
-        const solvedCount = row.solved.size;
-        const score = solvedCount * 100 - Math.max(0, row.attempts - solvedCount) * 10;
-        return {
-          userId: row.userId,
-          username: row.username,
-          rating: row.rating + solvedCount * 35,
-          avatarGradient: row.avatarGradient,
-          overall: { rank: 0, score, problemsSolved: solvedCount, timePenalty: `${row.attempts * 3}m`, trend: 1 },
-          contest: { rank: 0, score, problemsSolved: solvedCount, timePenalty: `${row.attempts * 3}m`, trend: 1, timeTaken: `${Math.max(1, row.attempts * 7)}m` },
-          global: { rank: 0, score, problemsSolved: solvedCount, timePenalty: `${row.attempts * 3}m`, trend: 1 },
-        };
-      })
-      .sort((left, right) => right.overall.score - left.overall.score)
-      .map((row, index) => ({
-        ...row,
-        overall: { ...row.overall, rank: index + 1 },
-        contest: { ...row.contest, rank: index + 1 },
-        global: { ...row.global, rank: index + 1 },
-      }));
-
-    return rows.length ? rows : defaultLeaderboard;
-  };
-
-  const runLocalAuth = ({ mode, role, email, password, name, usn, department }) => {
-    const store = readLocalAppData();
-    const now = new Date().toISOString();
-    const normalizedEmail = email.toLowerCase();
-    let user = store.users.find((candidate) => candidate.email?.toLowerCase() === normalizedEmail && candidate.role === role);
-
-    if (mode === "signup") {
-      if (user) throw new Error("An account already exists for this email and role. Log in instead.");
-      user = {
-        id: `local-user-${Date.now()}`,
-        role,
-        email: normalizedEmail,
-        password,
-        name: name || normalizedEmail.split("@")[0],
-        usn,
-        department,
-        verified: true,
-        createdAt: now,
-        lastLoginAt: now,
-        loginCount: 1,
-      };
-      store.users.push(user);
-    } else {
-      if (!user) {
-        user = {
-          id: `local-user-${Date.now()}`,
-          role,
-          email: normalizedEmail,
-          password,
-          name: normalizedEmail.split("@")[0],
-          usn: "",
-          department: role === "admin" ? "Administration" : "Department pending",
-          verified: true,
-          createdAt: now,
-          lastLoginAt: now,
-          loginCount: 1,
-        };
-        store.users.push(user);
-      } else if (user.password && user.password !== password) {
-        throw new Error("Incorrect password for this local account.");
-      } else {
-        user.lastLoginAt = now;
-        user.loginCount = Number(user.loginCount || 0) + 1;
-      }
-    }
-
-    store.loginEvents.unshift({ id: `login-${Date.now()}`, userId: user.id, email: user.email, role: user.role, createdAt: now });
-    writeLocalAppData(store);
-    const { password: _hiddenPassword, ...safeUser } = user;
-    return { token: `local-token-${user.id}`, user: safeUser };
   };
 
   const saveAuthSession = (token, user, role) => {
@@ -3019,167 +2877,21 @@ function CodingPlatform() {
   };
 
   const performApiRequest = async (path, options = {}) => {
-    const method = String(options.method || "GET").toUpperCase();
-    const body = options.body ? JSON.parse(options.body) : {};
-    const store = readLocalAppData();
-    const now = new Date().toISOString();
-    const activeUserId = currentUser.id || "";
+    const hasBody = Boolean(options.body);
+    const response = await fetch(buildBackendApiUrl(path), {
+      ...options,
+      headers: {
+        ...createAuthHeaders(authToken, hasBody),
+        ...(options.headers || {}),
+      },
+    });
 
-    if (path.startsWith("/api/problems")) {
-      if (method === "POST" && path === "/api/problems") {
-        const nextNumber = Math.max(0, ...store.problems.map((problem) => Number(problem.number ?? problem.id) || 0)) + 1;
-        const problem = {
-          id: `local-problem-${Date.now()}`,
-          legacyId: nextNumber,
-          number: nextNumber,
-          slug: body.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
-          title: body.title,
-          fnName: body.fnName || "solve",
-          difficulty: body.difficulty || "Medium",
-          tags: body.tags || [],
-          acceptance: body.acceptance || "Admin Upload",
-          description: body.statement || body.description || "",
-          examples: body.examples || [],
-          testCases: body.testCases || [],
-          constraints: body.constraints || [],
-          samples: body.samples || body.examples || [],
-          starterCode: body.starterCode || {},
-          createdAt: now,
-          updatedAt: now,
-        };
-        store.problems.push(problem);
-        writeLocalAppData(store);
-        return { problem };
-      }
-
-      if (method === "POST" && path === "/api/problems/import") {
-        writeLocalAppData({ ...store, problems: store.problems.length ? store.problems : PROBLEMS });
-        return { imported: store.problems.length || PROBLEMS.length };
-      }
-
-      return { problems: store.problems };
+    const data = await readJsonSafely(response);
+    if (!response.ok) {
+      throw new Error(data.error || "Request failed.");
     }
 
-    if (path === "/api/tests" && method === "GET") {
-      return { assignments: store.assignments };
-    }
-
-    if (path === "/api/tests" && method === "POST") {
-      const selectedProblems = store.problems.filter((problem) =>
-        (body.problemIds || []).some((id) => sameValue(id, problem.id) || sameValue(id, problem.number) || sameValue(id, problem.legacyId))
-      );
-      const assignment = {
-        id: `local-test-${Date.now()}`,
-        title: body.title || "Fresh Challenge",
-        difficulty: body.difficulty || "Mixed",
-        durationMinutes: Number(body.durationMinutes || 60),
-        status: "DRAFT",
-        startsAt: null,
-        endsAt: null,
-        createdAt: now,
-        updatedAt: now,
-        problems: selectedProblems,
-      };
-      store.assignments.unshift(assignment);
-      writeLocalAppData(store);
-      return { assignment };
-    }
-
-    const testActionMatch = path.match(/^\/api\/tests\/([^/]+)\/(start|stop)$/);
-    if (testActionMatch && method === "POST") {
-      const [, assignmentId, action] = testActionMatch;
-      const assignment = store.assignments.find((item) => sameValue(item.id, assignmentId));
-      if (!assignment) throw new Error("Test not found.");
-      assignment.status = action === "start" ? "LIVE" : "ENDED";
-      assignment.startsAt = action === "start" ? now : assignment.startsAt;
-      assignment.endsAt = action === "stop" ? now : assignment.endsAt;
-      assignment.updatedAt = now;
-
-      if (action === "start") {
-        store.notifications.unshift({
-          id: `notification-${Date.now()}`,
-          title: "Test started",
-          message: `${assignment.title} is now live.`,
-          readBy: [],
-          createdAt: now,
-        });
-      }
-
-      writeLocalAppData(store);
-      return { assignment, notifiedStudents: store.users.filter((user) => user.role === "student").length };
-    }
-
-    if (path === "/api/tests/active") {
-      const assignments = store.assignments.filter((assignment) => assignment.status === "LIVE");
-      return { assignments, assignment: assignments[0] || null };
-    }
-
-    if (path === "/api/auth/students") {
-      return { students: store.users.filter((user) => user.role === "student").map(({ password, ...user }) => user) };
-    }
-
-    if (path === "/api/auth/login-events") {
-      return { events: store.loginEvents };
-    }
-
-    if (path === "/api/notifications") {
-      const notifications = store.notifications.map((notification) => ({
-        ...notification,
-        read: Array.isArray(notification.readBy) && notification.readBy.includes(activeUserId),
-      }));
-      return { notifications, unreadCount: notifications.filter((notification) => !notification.read).length };
-    }
-
-    const notificationReadMatch = path.match(/^\/api\/notifications\/([^/]+)\/read$/);
-    if (notificationReadMatch && method === "POST") {
-      const notification = store.notifications.find((item) => sameValue(item.id, notificationReadMatch[1]));
-      if (notification) {
-        notification.readBy = Array.from(new Set([...(notification.readBy || []), activeUserId]));
-        writeLocalAppData(store);
-      }
-      return { ok: true };
-    }
-
-    if (path === "/api/submissions/leaderboard") {
-      return { leaderboard: makeLocalLeaderboard(store.submissions, store.users) };
-    }
-
-    const userSubmissionMatch = path.match(/^\/api\/submissions\/user\/([^/]+)$/);
-    if (userSubmissionMatch) {
-      return { submissions: store.submissions.filter((submission) => sameValue(submission.userId, userSubmissionMatch[1])) };
-    }
-
-    if (path === "/api/submissions/submit" && method === "POST") {
-      const problem = store.problems.find((candidate) => sameValue(candidate.id, body.problemId) || sameValue(candidate.number, body.problemId) || sameValue(candidate.legacyId, body.problemId))
-        || selectedProblem;
-      const run = await requestExecutionResult({
-        language: body.language,
-        sourceCode: body.code,
-        fnName: problem.fnName,
-        testCases: problem.testCases,
-      });
-      const accepted = run.tests.length > 0 && run.tests.every((test) => test.status === "pass");
-      const submission = {
-        id: `local-submission-${Date.now()}`,
-        userId: activeUserId,
-        user: currentUser,
-        problemId: String(problem.id),
-        problem,
-        language: body.language,
-        code: body.code,
-        status: accepted ? "ACCEPTED" : "FAILED",
-        tests: run.tests,
-        runtime: run.runtime,
-        memory: run.memory,
-        beats: run.beats,
-        createdAt: now,
-      };
-      store.submissions.unshift(submission);
-      writeLocalAppData(store);
-      return { ...run, status: run.status, submission };
-    }
-
-    throw new Error("This action is not available in browser-only mode yet.");
+    return data;
   };
 
   const loadProblemBank = async () => {
@@ -3900,7 +3612,21 @@ function CodingPlatform() {
     setAuthSubmitting(true);
 
     try {
-      const data = runLocalAuth({ mode: authMode, role: authRole, email, password, name, usn, department });
+      const endpoint = authMode === "signup" ? "/api/auth/register" : "/api/auth/login";
+      const payload = authMode === "signup"
+        ? { email, password, name, usn, department, role: authRole }
+        : { email, password, role: authRole };
+
+      const response = await fetch(buildBackendApiUrl(endpoint), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await readJsonSafely(response);
+      if (!response.ok) {
+        throw new Error(data.error || "Authentication failed.");
+      }
 
       const user = data.user || {
         id: "",
@@ -3941,7 +3667,12 @@ function CodingPlatform() {
       setAuthError("");
       setView(resolvedRole === "admin" ? "admin" : "list");
     } catch (error) {
-      setAuthError(error?.message || "Unable to complete authentication right now.");
+      const message = String(error?.message || "");
+      setAuthError(
+        message.includes("Failed to fetch")
+          ? `Cannot reach backend API at ${BACKEND_API_TARGET}. Start the backend with "npm start --prefix backend" and try again.`
+          : message || "Unable to complete authentication right now."
+      );
     } finally {
       setAuthSubmitting(false);
     }
@@ -4734,11 +4465,16 @@ function CodingPlatform() {
     e.currentTarget.style.transform = "translateY(0)";
     e.currentTarget.style.boxShadow = "0 14px 34px rgba(15, 23, 42, 0.32)";
   };
+  const isPhone = viewportWidth < 640;
+  const isTablet = viewportWidth >= 640 && viewportWidth < 1024;
+  const isCompact = viewportWidth < 900;
+  const pageGutter = isPhone ? 14 : isTablet ? 20 : 24;
+  const compactGrid = "minmax(0, 1fr)";
   const S = {
-    app:  { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:"#0a0a0f", color:"#e0e0e0", minHeight:"100vh", display:"flex", flexDirection:"column" },
-    adminApp: { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:ADMIN_THEME.background, color:ADMIN_THEME.text, minHeight:"100vh", display:"flex", flexDirection:"column" },
-    nav:  { background:"#111118", borderBottom:"1px solid #1e1e2e", padding:"10px 24px", display:"flex", alignItems:"center", minHeight:72, gap:24, position:"sticky", top:0, zIndex:100 },
-    adminNav: { background:ADMIN_THEME.sidebarBackground, borderBottom:`1px solid ${ADMIN_THEME.divider}`, boxShadow:ADMIN_THEME.shadowSoft, padding:"10px 24px", display:"flex", alignItems:"center", minHeight:72, gap:24, position:"sticky", top:0, zIndex:100 },
+    app:  { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:"#0a0a0f", color:"#e0e0e0", minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
+    adminApp: { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:ADMIN_THEME.background, color:ADMIN_THEME.text, minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
+    nav:  { background:"#111118", borderBottom:"1px solid #1e1e2e", padding:`10px ${pageGutter}px`, display:"flex", alignItems:"center", minHeight:isPhone ? 60 : 72, gap:isPhone ? 10 : 24, position:"sticky", top:0, zIndex:100, flexWrap:"wrap" },
+    adminNav: { background:ADMIN_THEME.sidebarBackground, borderBottom:`1px solid ${ADMIN_THEME.divider}`, boxShadow:ADMIN_THEME.shadowSoft, padding:`10px ${pageGutter}px`, display:"flex", alignItems:"center", minHeight:isPhone ? 60 : 72, gap:isPhone ? 10 : 24, position:"sticky", top:0, zIndex:100, flexWrap:"wrap" },
     adminNavTitle: { color:ADMIN_THEME.text, fontSize:15, fontWeight:700, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.03em" },
     logo: { fontFamily:"'Space Grotesk',sans-serif", fontWeight:800, fontSize:20, background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", cursor:"pointer", letterSpacing:"-0.5px" },
     navBtn: (a) => ({ background:"none", border:"none", color:a?"#fff":"#666", cursor:"pointer", padding:"6px 0", borderBottom:a?"2px solid #7c6af7":"2px solid transparent", fontFamily:"'Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.03em", display:"flex", flexDirection:"column", alignItems:"flex-start", gap:2 }),
@@ -4752,19 +4488,19 @@ function CodingPlatform() {
         :                { background:"#1e1e2e", color:"#aaa", border:"1px solid #2a2a3e" }) }),
     tableHead: { padding:"12px 16px", textAlign:"left", fontSize:11, color:"#636782", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:"'Space Grotesk',sans-serif" },
     tableTitle: { color:"#ecedff", fontWeight:600, fontSize:15.5, fontFamily:"'Outfit','Space Grotesk',sans-serif", letterSpacing:"-0.01em" },
-    problemTitle: { fontFamily:"'Fraunces',serif", fontSize:30, fontWeight:700, color:"#fff", margin:0, lineHeight:1.05, letterSpacing:"-0.03em" },
-    problemBody: { fontFamily:"'Outfit','Space Grotesk',sans-serif", lineHeight:1.9, color:"#c9cbe2", fontSize:15.5, marginBottom:28, letterSpacing:"0.01em" },
+    problemTitle: { fontFamily:"'Fraunces',serif", fontSize:isPhone ? 24 : 30, fontWeight:700, color:"#fff", margin:0, lineHeight:1.08, letterSpacing:"-0.03em" },
+    problemBody: { fontFamily:"'Outfit','Space Grotesk',sans-serif", lineHeight:1.8, color:"#c9cbe2", fontSize:isPhone ? 14.5 : 15.5, marginBottom:24, letterSpacing:"0.01em" },
     sectionLabel: { fontFamily:"'Space Grotesk',sans-serif", fontSize:11, fontWeight:700, color:"#7a7f9e", letterSpacing:"0.14em", textTransform:"uppercase", marginBottom:10 },
     exampleCard: { background:"linear-gradient(180deg,#12121d,#0d0d15)", border:"1px solid #25253b", borderRadius:12, padding:"16px 18px", fontSize:13.5, boxShadow:"inset 0 1px 0 #ffffff08" },
     exampleFieldLabel: { color:"#6f7396", fontFamily:"'Space Grotesk',sans-serif", fontSize:10.5, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase" },
     exampleFieldValue: { color:"#e6e8fb", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:1.8 },
     constraintItem: { color:"#8f93b4", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, lineHeight:1.85, letterSpacing:"0.01em" },
-    heroShell: { maxWidth:1100, margin:"0 auto", width:"100%", padding:"56px 24px 72px" },
-    homeGrid: { display:"grid", gridTemplateColumns:"1.15fr 0.85fr", gap:24, alignItems:"stretch" },
-    heroPanel: { background:"radial-gradient(circle at top left,#1f1d3d,#0f1018 58%)", border:"1px solid #2a2a3e", borderRadius:24, padding:"36px 34px", boxShadow:"0 20px 60px #00000045" },
+    heroShell: { maxWidth:1100, margin:"0 auto", width:"100%", boxSizing:"border-box", padding:isPhone ? "28px 14px 46px" : `56px ${pageGutter}px 72px` },
+    homeGrid: { display:"grid", gridTemplateColumns:isCompact ? compactGrid : "1.15fr 0.85fr", gap:isPhone ? 14 : 24, alignItems:"stretch" },
+    heroPanel: { background:"radial-gradient(circle at top left,#1f1d3d,#0f1018 58%)", border:"1px solid #2a2a3e", borderRadius:isPhone ? 18 : 24, padding:isPhone ? "24px 18px" : "36px 34px", boxShadow:"0 20px 60px #00000045" },
     roleCard: { background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #26263d", borderRadius:20, padding:"22px 20px", display:"flex", flexDirection:"column", gap:12, boxShadow:"inset 0 1px 0 #ffffff08" },
-    homeTitle: { fontFamily:"'Fraunces',serif", fontSize:52, lineHeight:1, margin:"0 0 18px", color:"#fff", letterSpacing:"-0.04em" },
-    formWrap: { maxWidth:560, width:"100%", margin:"42px auto 0", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:24, padding:"28px 26px 30px", boxShadow:"0 18px 50px #00000045" },
+    homeTitle: { fontFamily:"'Fraunces',serif", fontSize:isPhone ? 34 : isTablet ? 44 : 52, lineHeight:1.04, margin:"0 0 18px", color:"#fff", letterSpacing:"-0.04em" },
+    formWrap: { maxWidth:560, width:"100%", boxSizing:"border-box", margin:isPhone ? "24px auto 0" : "42px auto 0", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:isPhone ? 18 : 24, padding:isPhone ? "22px 16px 24px" : "28px 26px 30px", boxShadow:"0 18px 50px #00000045" },
     fieldLabel: { display:"block", marginBottom:8, color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
     input: { width:"100%", boxSizing:"border-box", background:"#0f1018", border:"1px solid #26263d", color:"#eef0ff", borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif" },
     adminFieldLabel: { display:"block", marginBottom:8, color:ADMIN_THEME.textSecondary, fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
@@ -4865,11 +4601,11 @@ function CodingPlatform() {
             : ADMIN_THEME.info,
     }),
     adminBlank: { flex:1, background:ADMIN_THEME.background },
-    modalBackdrop: { position:"fixed", inset:0, background:"#05050bcc", backdropFilter:"blur(8px)", display:"flex", alignItems:"center", justifyContent:"center", padding:"24px", zIndex:1200 },
-    modalCard: { width:"min(720px, 100%)", maxHeight:"calc(100vh - 48px)", overflowY:"auto", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:24, padding:"28px 26px 30px", boxShadow:"0 24px 70px #00000065" },
-    startHero: { position:"relative", overflow:"hidden", background:"radial-gradient(circle at 15% 20%, #1c2350 0%, #10111b 42%, #09090f 100%)", border:"1px solid #24263a", borderRadius:30, padding:"52px 48px", boxShadow:"0 26px 70px #0000004f" },
+    modalBackdrop: { position:"fixed", inset:0, background:"#05050bcc", backdropFilter:"blur(8px)", display:"flex", alignItems:"center", justifyContent:"center", padding:isPhone ? "12px" : "24px", zIndex:1200 },
+    modalCard: { width:"min(720px, 100%)", boxSizing:"border-box", maxHeight:isPhone ? "calc(100vh - 24px)" : "calc(100vh - 48px)", overflowY:"auto", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:isPhone ? 18 : 24, padding:isPhone ? "22px 16px 24px" : "28px 26px 30px", boxShadow:"0 24px 70px #00000065" },
+    startHero: { position:"relative", overflow:"hidden", background:"radial-gradient(circle at 15% 20%, #1c2350 0%, #10111b 42%, #09090f 100%)", border:"1px solid #24263a", borderRadius:isPhone ? 20 : 30, padding:isPhone ? "30px 18px" : "52px 48px", boxShadow:"0 26px 70px #0000004f" },
     startButton: { padding:"14px 24px", borderRadius:16, border:"none", cursor:"pointer", fontWeight:800, fontSize:15, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.08em", textTransform:"uppercase", color:"#fff", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", boxShadow:"0 16px 30px #7c6af733" },
-    authChoiceGrid: { display:"grid", gridTemplateColumns:"repeat(2, minmax(0, 1fr))", gap:12 },
+    authChoiceGrid: { display:"grid", gridTemplateColumns:isPhone ? compactGrid : "repeat(2, minmax(0, 1fr))", gap:12 },
     authChoiceButton: (active, tone) => ({
       background: active ? (tone==="student" ? "#101f1b" : tone==="admin" ? "#1d1508" : "#18192a") : "#0f1018",
       border: active ? (tone==="student" ? "1px solid #2e8f76" : tone==="admin" ? "1px solid #7d5d16" : "1px solid #7c6af7") : "1px solid #202233",
@@ -4879,7 +4615,7 @@ function CodingPlatform() {
       textAlign:"left",
       color:"#eef0ff"
     }),
-    startInfoGrid: { display:"grid", gridTemplateColumns:"repeat(3, minmax(0, 1fr))", gap:14, marginTop:28 },
+    startInfoGrid: { display:"grid", gridTemplateColumns:isCompact ? compactGrid : "repeat(3, minmax(0, 1fr))", gap:14, marginTop:28 },
     startInfoCard: { background:"#0f1018cc", border:"1px solid #222538", borderRadius:18, padding:"16px 16px 18px", boxShadow:"inset 0 1px 0 #ffffff08" },
     startPillRow: { display:"flex", gap:10, flexWrap:"wrap", marginTop:20 },
     startPill: { padding:"8px 12px", borderRadius:999, background:"#ffffff08", border:"1px solid #ffffff12", color:"#d9dcf7", fontSize:12, fontWeight:600, letterSpacing:"0.02em" },
@@ -4896,12 +4632,12 @@ function CodingPlatform() {
       textTransform:"uppercase",
       fontFamily:"'Space Grotesk',sans-serif"
     }),
-    adminShell: { maxWidth:1240, margin:"0 auto", width:"100%", padding:"28px 24px 40px", display:"grid", gap:22 },
-    adminCardGrid: { display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:16 },
+    adminShell: { maxWidth:1240, margin:"0 auto", width:"100%", boxSizing:"border-box", padding:isPhone ? "18px 14px 32px" : `28px ${pageGutter}px 40px`, display:"grid", gap:isPhone ? 16 : 22 },
+    adminCardGrid: { display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 150 : 220}px, 1fr))`, gap:isPhone ? 12 : 16 },
     adminCard: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, padding:"18px 18px 20px", boxShadow:ADMIN_THEME.shadowSoft },
     adminSectionTitle: { fontFamily:"'Space Grotesk',sans-serif", fontSize:12, fontWeight:700, color:ADMIN_THEME.textSecondary, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 },
-    adminGridTwo: { display:"grid", gridTemplateColumns:"1.35fr 0.95fr", gap:18, alignItems:"start" },
-    adminTableWrap: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, overflow:"hidden", boxShadow:ADMIN_THEME.shadowSoft },
+    adminGridTwo: { display:"grid", gridTemplateColumns:isCompact ? compactGrid : "1.35fr 0.95fr", gap:18, alignItems:"start" },
+    adminTableWrap: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, overflowX:"auto", boxShadow:ADMIN_THEME.shadowSoft },
     adminTableHead: { padding:"14px 16px", textAlign:"left", fontSize:11, color:ADMIN_THEME.textSecondary, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"'Space Grotesk',sans-serif", background:ADMIN_THEME.hoverBackground },
     adminTableCell: { padding:"14px 16px", borderTop:`1px solid ${ADMIN_THEME.divider}`, fontSize:14, color:ADMIN_THEME.text },
     adminSubCard: { background:ADMIN_THEME.hoverBackground, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:14, padding:"14px" },
@@ -5069,7 +4805,7 @@ function CodingPlatform() {
   );
 
   const renderAdminProfile = () => (
-    <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 0.75fr) minmax(0, 1.25fr)", gap:18, alignItems:"start" }}>
+    <div style={{ display:"grid", gridTemplateColumns:isCompact ? compactGrid : "minmax(280px, 0.75fr) minmax(0, 1.25fr)", gap:18, alignItems:"start" }}>
       <div style={S.adminCard}>
         <div style={S.adminSectionTitle}>Admin Profile</div>
         <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18 }}>
@@ -5169,11 +4905,11 @@ function CodingPlatform() {
   );
 
   const renderQuestionUploads = () => (
-    <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(320px, 0.8fr)", gap:18, alignItems:"start" }}>
+    <div style={{ display:"grid", gridTemplateColumns:isCompact ? compactGrid : "minmax(0, 1fr) minmax(320px, 0.8fr)", gap:18, alignItems:"start" }}>
       <div style={S.adminCard}>
         <div style={S.adminSectionTitle}>Upload Question</div>
         <div style={{ display:"grid", gap:14 }}>
-          <div style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr", gap:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "1.2fr 0.8fr 0.8fr", gap:12 }}>
             <div>
               <label style={S.adminFieldLabel}>Question Title</label>
               <input value={questionUploadForm.title} onChange={(e)=>handleQuestionUploadInput("title", e.target.value)} style={S.adminInput} placeholder="Two Sum Variant" />
@@ -5194,7 +4930,7 @@ function CodingPlatform() {
             </div>
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "1fr 1fr", gap:12 }}>
             <div>
               <label style={S.adminFieldLabel}>Function Name</label>
               <input value={questionUploadForm.fnName} onChange={(e)=>handleQuestionUploadInput("fnName", e.target.value)} style={S.adminInput} placeholder="solve" />
@@ -5210,7 +4946,7 @@ function CodingPlatform() {
             <textarea value={questionUploadForm.statement} onChange={(e)=>handleQuestionUploadInput("statement", e.target.value)} style={{ ...S.adminTextarea, minHeight:150 }} placeholder="Write the full question here." />
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "1fr 1fr", gap:12 }}>
             <div>
               <label style={S.adminFieldLabel}>Examples</label>
               <textarea value={questionUploadForm.examples} onChange={(e)=>handleQuestionUploadInput("examples", e.target.value)} style={S.adminTextarea} placeholder={"input => output\n[2,7,11,15], 9 => [0,1]"} />
@@ -5384,7 +5120,7 @@ function CodingPlatform() {
           <div style={S.startHero}>
             <div style={{ position:"absolute", width:220, height:220, borderRadius:"50%", background:"#4fd1c51c", filter:"blur(10px)", right:-40, top:-60 }} />
             <div style={{ position:"absolute", width:180, height:180, borderRadius:"50%", background:"#7c6af71f", filter:"blur(10px)", left:-30, bottom:-70 }} />
-            <div style={{ position:"relative", display:"grid", gridTemplateColumns:"1.1fr 0.9fr", gap:24, alignItems:"center" }}>
+            <div style={{ position:"relative", display:"grid", gridTemplateColumns:isCompact ? compactGrid : "1.1fr 0.9fr", gap:isPhone ? 16 : 24, alignItems:"center" }}>
               <div>
                 <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 12px", borderRadius:999, background:"#ffffff0a", border:"1px solid #ffffff14", color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:18 }}>
                   Cambridge Coding Arena
@@ -5748,11 +5484,11 @@ function CodingPlatform() {
             </div>
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(340px, 1fr))", gap:18, alignItems:"start" }}>
+          <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 240 : 340}px, 1fr))`, gap:18, alignItems:"start" }}>
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Code Submission</div>
               <div style={{ display:"grid", gap:14 }}>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "1fr 1fr", gap:12 }}>
                   <div>
                     <label style={S.adminFieldLabel}>Question</label>
                     <select
@@ -5848,7 +5584,7 @@ function CodingPlatform() {
                     <label style={S.adminFieldLabel}>Test Title</label>
                     <input value={adminCreateForm.title} onChange={(e)=>handleAdminCreateInput("title", e.target.value)} style={S.adminInput} />
                   </div>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "1fr 1fr", gap:12 }}>
                     <div>
                       <label style={S.adminFieldLabel}>Difficulty</label>
                       <select value={adminCreateForm.level} onChange={(e)=>handleAdminCreateInput("level", e.target.value)} style={S.adminInput}>
@@ -5965,7 +5701,7 @@ function CodingPlatform() {
         </div>
       </nav>
 
-      <div style={{ maxWidth:1100, margin:"32px auto", padding:"0 24px", width:"100%" }}>
+      <div style={{ maxWidth:1100, margin:isPhone ? "20px auto" : "32px auto", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box" }}>
         {latestUnreadNotification && (
           <div style={{ background:"#101926", border:"1px solid #243c5a", borderRadius:16, padding:"16px 18px", marginBottom:18, display:"flex", justifyContent:"space-between", gap:16, alignItems:"center", flexWrap:"wrap" }}>
             <div>
@@ -5990,7 +5726,7 @@ function CodingPlatform() {
         )}
 
         {/* Stats */}
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:32 }}>
+        <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 150 : 220}px, 1fr))`, gap:16, marginBottom:32 }}>
           {[{label:"Easy",color:"#00b8a3"},{label:"Medium",color:"#ffc01e"},{label:"Hard",color:"#ff375f"}].map(s=>(
             <div key={s.label} style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:12 }}>
               <div style={{ width:8, height:32, borderRadius:4, background:s.color }} />
@@ -6012,8 +5748,8 @@ function CodingPlatform() {
         </div>
 
         {/* Table */}
-        <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:12, overflow:"hidden" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:12, overflowX:"auto" }}>
+          <table style={{ width:"100%", minWidth:isPhone ? 720 : "100%", borderCollapse:"collapse" }}>
             <thead>
               <tr style={{ borderBottom:"1px solid #1e1e2e" }}>
                 {["Status","#","Title","Tags","Difficulty","Acceptance"].map(h=>(
@@ -6075,7 +5811,7 @@ function CodingPlatform() {
           </div>
         </nav>
 
-        <div style={{ maxWidth:1260, margin:"28px auto 40px", padding:"0 24px", width:"100%", display:"grid", gap:20 }}>
+        <div style={{ maxWidth:1260, margin:"28px auto 40px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
           <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.92))", border:"1px solid #1e293b", borderRadius:28, padding:"28px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
             <div style={{ display:"flex", justifyContent:"space-between", gap:20, alignItems:"flex-start", flexWrap:"wrap" }}>
               <div style={{ display:"flex", gap:18, alignItems:"center", flexWrap:"wrap" }}>
@@ -6114,7 +5850,7 @@ function CodingPlatform() {
             ))}
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:20, alignItems:"start" }}>
+          <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 240 : 320}px, 1fr))`, gap:20, alignItems:"start" }}>
             <div style={{ display:"grid", gap:20 }}>
               <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
                 <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Personal Details</div>
@@ -6182,7 +5918,7 @@ function CodingPlatform() {
             </div>
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(360px, 1fr))", gap:20 }}>
+          <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 240 : 360}px, 1fr))`, gap:20 }}>
             <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
               <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Submission History</div>
               <div style={{ color:"#f8fafc", fontSize:22, fontWeight:700, marginBottom:16 }}>Recent runs</div>
@@ -6304,7 +6040,7 @@ function CodingPlatform() {
           </div>
         </nav>
 
-        <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:"0 24px", width:"100%", display:"grid", gap:20 }}>
+        <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
           {latestUnreadNotification && (
             <div style={{ background:"#101926", border:"1px solid #243c5a", borderRadius:16, padding:"16px 18px", display:"flex", justifyContent:"space-between", gap:16, alignItems:"center", flexWrap:"wrap" }}>
               <div>
@@ -6406,7 +6142,7 @@ function CodingPlatform() {
             </div>
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:20, alignItems:"start" }}>
+          <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 240 : 320}px, 1fr))`, gap:20, alignItems:"start" }}>
             <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:22, overflow:"hidden", boxShadow:"0 18px 40px rgba(0,0,0,0.22)" }}>
               <div style={{ padding:"20px 22px 16px", borderBottom:"1px solid #1c1d2a" }}>
                 <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:8 }}>Problem List</div>
@@ -6530,7 +6266,7 @@ function CodingPlatform() {
           </button>
         </nav>
 
-        <div style={{ maxWidth:1100, margin:"34px auto 44px", padding:"0 24px", width:"100%", display:"grid", gap:20 }}>
+        <div style={{ maxWidth:1100, margin:"34px auto 44px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
           <div style={{ background:"radial-gradient(circle at top left, rgba(79,209,197,0.18), rgba(10,10,15,0.98) 50%)", border:"1px solid #25253b", borderRadius:24, padding:"28px", boxShadow:"0 24px 70px rgba(0,0,0,0.32)" }}>
             <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", marginBottom:10 }}>Test Result</div>
             <div style={{ display:"flex", justifyContent:"space-between", gap:20, flexWrap:"wrap", alignItems:"flex-end" }}>
@@ -6616,7 +6352,7 @@ function CodingPlatform() {
           </div>
         </nav>
 
-        <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:"0 24px", width:"100%" }}>
+        <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box" }}>
           <div
             style={{
               background:"radial-gradient(circle at top left, rgba(124,106,247,0.22), rgba(10,10,15,0.98) 52%)",
@@ -6637,7 +6373,7 @@ function CodingPlatform() {
                   Track contest momentum, compare ratings, and see who is climbing in real time across the current round and the broader arena.
                 </div>
               </div>
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(2, minmax(160px, 1fr))", gap:12, minWidth:"min(100%, 360px)" }}>
+              <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "repeat(2, minmax(160px, 1fr))", gap:12, minWidth:"min(100%, 360px)" }}>
                 <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px" }}>
                   <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Current Scope</div>
                   <div style={{ color:"#eef0ff", fontSize:20, fontWeight:700 }}>{leaderboardScope}</div>
@@ -6807,7 +6543,16 @@ function CodingPlatform() {
 
   
   const p = selectedProblem;
-  const consoleHeight = consoleOpen ? 260 : 42;
+  const consoleHeight = consoleOpen ? (isPhone ? 320 : 260) : 42;
+  const problemWorkspaceStyle = isCompact
+    ? { display:"grid", gridTemplateColumns:"minmax(0, 1fr)", overflow:"visible", minHeight:"calc(100vh - 116px)" }
+    : { display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 128px)" };
+  const problemPanelStyle = isCompact
+    ? { display:"flex", flexDirection:"column", borderBottom:"1px solid #1e1e2e", overflow:"hidden", minHeight:isPhone ? 360 : 420 }
+    : { width:"42%", display:"flex", flexDirection:"column", borderRight:"1px solid #1e1e2e", overflow:"hidden" };
+  const editorPanelStyle = isCompact
+    ? { display:"flex", flexDirection:"column", overflow:"hidden", minHeight:isPhone ? 620 : 680 }
+    : { flex:1, display:"flex", flexDirection:"column", overflow:"hidden" };
 
   return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
@@ -6879,7 +6624,7 @@ function CodingPlatform() {
         </div>}
       </nav>
 
-      <div style={{ padding:"16px 24px 0", maxWidth:"100%" }}>
+      <div style={{ padding:`16px ${pageGutter}px 0`, maxWidth:"100%", boxSizing:"border-box" }}>
         <div style={S.backButtonRow}>
           <button onClick={goBackFromProblem} style={S.backButton}>
             <span aria-hidden="true">←</span>
@@ -6888,20 +6633,20 @@ function CodingPlatform() {
         </div>
       </div>
 
-      <div style={{ display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 128px)" }}>
+      <div style={problemWorkspaceStyle}>
 
         
-        <div style={{ width:"42%", display:"flex", flexDirection:"column", borderRight:"1px solid #1e1e2e", overflow:"hidden" }}>
-          <div style={{ display:"flex", borderBottom:"1px solid #1e1e2e", background:"#0d0d15" }}>
+        <div style={problemPanelStyle}>
+          <div style={{ display:"flex", borderBottom:"1px solid #1e1e2e", background:"#0d0d15", overflowX:"auto" }}>
             {["description","solution","submissions"].map(t=>(
               <button key={t} onClick={()=>setActiveTab(t)} style={{ background:"none", border:"none", padding:"12px 18px", color:activeTab===t?"#fff":"#555", fontSize:12.5, cursor:"pointer", fontFamily:"'Space Grotesk',sans-serif", borderBottom:activeTab===t?"2px solid #7c6af7":"2px solid transparent", textTransform:"uppercase", letterSpacing:"0.08em", fontWeight:activeTab===t?700:500 }}>{t}</button>
             ))}
           </div>
 
-          <div style={{ flex:1, overflowY:"auto", padding:24, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
+          <div style={{ flex:1, overflowY:"auto", padding:isPhone ? 16 : 24, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
             {activeTab === "description" && (
               <>
-                <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap" }}>
                   <h1 style={S.problemTitle}>{p.id}. {p.title}</h1>
                   <span style={S.badge(p.difficulty)}>{p.difficulty}</span>
                 </div>
@@ -6962,9 +6707,9 @@ function CodingPlatform() {
         </div>
 
         
-        <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <div style={editorPanelStyle}>
           {/* Toolbar */}
-          <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:"8px 16px", display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:`8px ${isPhone ? 12 : 16}px`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
             <select value={lang} onChange={e=>handleLangChange(e.target.value)}
               style={{ background:"#1a1a2e", border:"1px solid #2a2a3e", color:"#c8c8e8", padding:"4px 10px", borderRadius:6, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>
               <option value="javascript">JavaScript</option>
@@ -6972,15 +6717,15 @@ function CodingPlatform() {
               <option value="java">Java</option>
             </select>
             <span style={{ fontSize:11, color: lang==="javascript"?"#4ade8077":"#ffc01e77" }}>
-              {lang==="javascript"?"Judge0 + Browser Fallback":"Judge0 Execution"}
+              Judge0 Execution
             </span>
-            <div style={{ marginLeft:"auto" }}>
+            <div style={{ marginLeft:isPhone ? 0 : "auto" }}>
               <button onClick={()=>setCode(p.starterCode[lang])} style={{ background:"none", border:"1px solid #2a2a3e", color:"#555", padding:"4px 12px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Reset</button>
             </div>
           </div>
 
           {/* Editor */}
-          <div style={{ flex:1, position:"relative", overflow:"hidden", background:"linear-gradient(180deg,#0d1020,#090b14)" }}>
+          <div style={{ flex:1, minHeight:isCompact ? (isPhone ? 360 : 420) : 0, position:"relative", overflow:"hidden", background:"linear-gradient(180deg,#0d1020,#090b14)" }}>
             <div style={{ position:"absolute", left:0, top:0, bottom:0, width:44, background:"#0a0a12", borderRight:"1px solid #1a1a2a", paddingTop:16, textAlign:"right", paddingRight:8, userSelect:"none", overflowY:"hidden", zIndex:1 }}>
               <div style={{ transform:`translateY(-${editorScrollTop}px)` }}>
                 {code.split("\n").map((_,i)=><div key={i} style={{ color:"#56607a", fontSize:13, lineHeight:"21px" }}>{i+1}</div>)}
