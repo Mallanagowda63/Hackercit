@@ -948,36 +948,30 @@ function TreeNode(val, left = null, right = null) {
 // ─────────────────────────────────────────────────────────────────────────────
 // PROBLEMS DATABASE
 // ─────────────────────────────────────────────────────────────────────────────
-function createLocalRunResult({ language, sourceCode, fnName, testCases, problem }) {
-  const runtime = `${Math.floor(60 + Math.random() * 60)} ms`;
-  const memory = `${(Math.random() * 5 + 40).toFixed(1)} MB`;
-  const beats = `${Math.floor(50 + Math.random() * 45)}%`;
-  const problemKey = problem?.number ?? problem?.id;
+async function requestExecutionResult({ language, sourceCode, fnName, testCases }) {
+  try {
+    const response = await fetch(buildBackendApiUrl("/api/run"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        language,
+        sourceCode,
+        fnName,
+        testCases,
+      }),
+    });
 
-  if (language !== "javascript") {
-    return {
-      tests: (testCases || []).map((tc) => ({
-        ...tc,
-        actual: null,
-        status: "unsupported",
-        error: "Python and Java execution need the backend runner. JavaScript works fully in this browser-only mode.",
-      })),
-      runtime,
-      memory,
-      beats,
-      status: "unsupported",
-    };
+    const data = await readJsonSafely(response);
+    if (!response.ok) {
+      throw new Error(data.error || "Execution failed.");
+    }
+
+    return data;
+  } catch (error) {
+    throw new Error(
+      `${error.message || "Execution failed."} Judge0 execution needs the local server running with "node hacker.js" and internet access.`
+    );
   }
-
-  const refCode = REFERENCE_SOLUTIONS[problemKey]?.javascript || "";
-  const tests = runJavaScript(sourceCode, refCode, testCases || [], fnName);
-  return {
-    tests,
-    runtime,
-    memory,
-    beats,
-    status: tests.every((test) => test.status === "pass") ? "passed" : "failed",
-  };
 }
 
 const PROBLEMS = [
@@ -3158,12 +3152,11 @@ function CodingPlatform() {
     if (path === "/api/submissions/submit" && method === "POST") {
       const problem = store.problems.find((candidate) => sameValue(candidate.id, body.problemId) || sameValue(candidate.number, body.problemId) || sameValue(candidate.legacyId, body.problemId))
         || selectedProblem;
-      const run = createLocalRunResult({
+      const run = await requestExecutionResult({
         language: body.language,
         sourceCode: body.code,
         fnName: problem.fnName,
         testCases: problem.testCases,
-        problem,
       });
       const accepted = run.tests.length > 0 && run.tests.every((test) => test.status === "pass");
       const submission = {
@@ -4157,12 +4150,11 @@ function CodingPlatform() {
       }));
 
     try {
-      const data = createLocalRunResult({
+      const data = await requestExecutionResult({
         language: adminSubmissionLang,
         sourceCode: adminSubmissionCode,
         fnName: selected.fnName,
         testCases: selected.testCases,
-        problem: selected,
       });
 
       setAdminExecution({
@@ -4294,7 +4286,6 @@ function CodingPlatform() {
     await new Promise((r) => setTimeout(r, 700));
 
     const p        = selectedProblem;
-    const refSol   = REFERENCE_SOLUTIONS[p.number ?? p.id];
     let   results  = [];
     let   runtime  = Math.floor(60 + Math.random() * 60) + " ms";
     let   memory   = (Math.random() * 5 + 40).toFixed(1) + " MB";
@@ -4318,12 +4309,11 @@ function CodingPlatform() {
         beats   = data.beats || beats;
         status  = data.status || status;
       } else {
-        const data = createLocalRunResult({
+        const data = await requestExecutionResult({
           language: lang,
           sourceCode: code,
           fnName: p.fnName,
           testCases: p.testCases,
-          problem: p,
         });
 
         results = data.tests || [];
@@ -4333,22 +4323,16 @@ function CodingPlatform() {
         status  = data.status || status;
       }
     } catch (error) {
-      if (!isSubmit && lang === "javascript") {
-        const refCode = refSol?.javascript || "";
-        results = runJavaScript(code, refCode, p.testCases, p.fnName);
-        status = results.every(r => r.status === "pass") ? "passed" : "failed";
-      } else {
-          const deploymentHint = !isSubmit && error.message.includes("returned HTML instead of JSON")
-          ? " This usually means the frontend is not reaching the configured backend API correctly."
-          : "";
-        results = p.testCases.map((tc, i) => ({
-          ...tc,
-          actual: null,
-          status: "error",
-          error: `Case ${i+1}: ${error.message}${deploymentHint}${isSubmit ? " Submission was not saved." : ""}`
-        }));
-        status = "failed";
-      }
+      const deploymentHint = !isSubmit && error.message.includes("returned HTML instead of JSON")
+        ? " This usually means the frontend is not reaching the configured backend API correctly."
+        : "";
+      results = p.testCases.map((tc, i) => ({
+        ...tc,
+        actual: null,
+        status: "error",
+        error: `Case ${i+1}: ${error.message}${deploymentHint}${isSubmit ? " Submission was not saved." : ""}`
+      }));
+      status = "failed";
     }
 
     // Collect errors for the banner

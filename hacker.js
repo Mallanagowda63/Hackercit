@@ -306,21 +306,39 @@ async function handleLocalApi(req, res, pathname) {
 
   if (pathname === "/api/submissions/submit" && method === "POST") {
     const body = await readJsonBody(req);
+    const problem = localStore.problems.find((candidate) =>
+      String(candidate.id) === String(body.problemId)
+      || String(candidate.number) === String(body.problemId)
+      || String(candidate.legacyId) === String(body.problemId)
+    );
+
+    if (!problem) {
+      sendJson(res, 404, { error: "Problem not found for Judge0 submission." });
+      return true;
+    }
+
+    const execution = await runSubmission({
+      language: body.language || "javascript",
+      sourceCode: body.code || "",
+      fnName: problem.fnName,
+      testCases: problem.testCases || [],
+    });
+    const accepted = Array.isArray(execution.tests) && execution.tests.every((test) => test.status === "pass");
     const submission = {
       id: `local-submission-${Date.now()}`,
       userId: "",
       problemId: String(body.problemId || ""),
       language: body.language || "javascript",
       code: body.code || "",
-      status: "SAVED",
-      tests: [],
-      runtime: "N/A",
-      memory: "N/A",
-      beats: "0%",
+      status: accepted ? "ACCEPTED" : "FAILED",
+      tests: execution.tests || [],
+      runtime: execution.runtime || "N/A",
+      memory: execution.memory || "N/A",
+      beats: execution.beats || "N/A",
       createdAt: now,
     };
     localStore.submissions.unshift(submission);
-    sendJson(res, 200, { submission, tests: [], runtime: "N/A", memory: "N/A", beats: "0%", status: "saved" });
+    sendJson(res, 200, { ...execution, submission });
     return true;
   }
 
