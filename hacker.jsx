@@ -2804,6 +2804,7 @@ function CodingPlatform() {
   const [contestSessionEndsAt, setContestSessionEndsAt] = useState(null);
   const [contestSessionProgress, setContestSessionProgress] = useState({});
   const [contestResult, setContestResult] = useState(null);
+  const [finalSubmitConfirmOpen, setFinalSubmitConfirmOpen] = useState(false);
   const [userSubmissions, setUserSubmissions] = useState([]);
   const [consoleOpen, setConsoleOpen]         = useState(false);
   const [editorScrollTop, setEditorScrollTop] = useState(0);
@@ -4293,9 +4294,13 @@ function CodingPlatform() {
   };
   const handleSubmitClick = () => {
     if (isFinalContestProblem) {
-      const confirmed = window.confirm("Are you sure you want to submit the final answer and finish the test?");
-      if (!confirmed) return;
+      setFinalSubmitConfirmOpen(true);
+      return;
     }
+    simulateRun(true);
+  };
+  const confirmFinalSubmit = () => {
+    setFinalSubmitConfirmOpen(false);
     simulateRun(true);
   };
   const leaderboardMode = leaderboardScope === "This Contest"
@@ -6554,6 +6559,31 @@ function CodingPlatform() {
       <ScreenShield active={screenShield} message={shieldMessage} />
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+
+      {finalSubmitConfirmOpen && (
+        <div style={S.modalBackdrop} onClick={() => !submitting && setFinalSubmitConfirmOpen(false)}>
+          <div style={{ ...S.modalCard, width:"min(560px, 100%)" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>
+              Final Submission
+            </div>
+            <h2 style={{ margin:"0 0 12px", color:"#f5f6ff", fontSize:30, lineHeight:1.1 }}>Finish and submit your test?</h2>
+            <div style={{ color:"#a9aed0", fontSize:14, lineHeight:1.8, marginBottom:18 }}>
+              This will submit your answer for the last problem and end the test immediately. After that, your result screen will open.
+            </div>
+            <div style={{ display:"grid", gap:10, background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 16px", color:"#d9dcf7", fontSize:14, lineHeight:1.7, marginBottom:20 }}>
+              <div>Problem: <strong>{p.title}</strong></div>
+              <div>Time left: <strong>{formatCountdown(contestTimerSeconds)}</strong></div>
+              <div>This action cannot be resumed from the contest screen.</div>
+            </div>
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
+              <button onClick={() => setFinalSubmitConfirmOpen(false)} disabled={submitting} style={S.btn("default")}>Cancel</button>
+              <button onClick={confirmFinalSubmit} disabled={submitting} style={{ ...S.btn("submit"), opacity:submitting ? 0.65 : 1 }}>
+                {submitting ? "Submitting..." : "Submit and Finish"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       
       <ErrorBanner errors={errorBanner} onClose={() => setErrorBanner(null)} />
