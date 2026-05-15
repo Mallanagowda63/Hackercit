@@ -321,7 +321,7 @@ function AdminPortal({
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
 
       <nav style={S.nav}>
-        <span style={S.logo} onClick={onGoHome}>{"</> CodeArena"}</span>
+        <span style={S.logo} onClick={onGoHome}>{"◉ DevOrbit"}</span>
         <span style={{ color: "var(--text)", fontSize: 15, fontWeight: 700, fontFamily: "'Space Grotesk',sans-serif", letterSpacing: "0.03em" }}>Test Assignment Leaderboard</span>
         <div style={{ marginLeft: "auto" }}>
           <button onClick={onSignOut} style={S.btn("default")}>Sign Out</button>

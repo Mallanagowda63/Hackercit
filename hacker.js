@@ -153,7 +153,7 @@ createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/api/health") {
     sendJson(res, 200, {
       ok: true,
-      service: "codearena",
+      service: "devorbit",
       executionProvider: "Judge0",
       judge0Url: (process.env.JUDGE0_URL || "https://ce.judge0.com").replace(/\/+$/, ""),
       host,
@@ -208,5 +208,5 @@ createServer(async (req, res) => {
   createReadStream(filePath).pipe(res);
 }).listen(port, host, () => {
   const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
-  console.log(`CodeArena is running at http://${displayHost}:${port}`);
+  console.log(`DevOrbit is running at http://${displayHost}:${port}`);
 });

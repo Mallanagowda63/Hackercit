@@ -21,7 +21,128 @@ const BACKEND_API_TARGET = USES_SAME_ORIGIN_BACKEND
   : (BACKEND_API_BASE || "backend API (not configured)");
 const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
 const AUTH_SESSION_STORAGE_KEY = "codearena.authSession";
-const EMPTY_CURRENT_USER = { id: "", role: "", email: "", name: "", usn: "", department: "", verified: false, createdAt: null, lastLoginAt: null, loginCount: 0 };
+const EMPTY_CURRENT_USER = {
+  id: "",
+  role: "",
+  email: "",
+  name: "",
+  usn: "",
+  department: "",
+  verified: false,
+  createdAt: null,
+  lastLoginAt: null,
+  loginCount: 0,
+  badgeTier: null,
+  badgeLabel: null,
+  badgeIds: [],
+  solvedProblemCount: 0,
+  badgeUpdatedAt: null,
+};
+const ACHIEVEMENT_BADGES = Object.freeze({
+  SILVER: {
+    label: "Silver Solver",
+    shortLabel: "Silver",
+    icon: "◇",
+    color: "#e2e8f0",
+    border: "#94a3b8",
+    background: "linear-gradient(135deg, rgba(226,232,240,0.22), rgba(148,163,184,0.10))",
+  },
+  GOLD: {
+    label: "Gold Solver",
+    shortLabel: "Gold",
+    icon: "✦",
+    color: "#fde68a",
+    border: "#f59e0b",
+    background: "linear-gradient(135deg, rgba(250,204,21,0.24), rgba(245,158,11,0.10))",
+  },
+});
+
+function getAchievementBadgeMeta(tier) {
+  return ACHIEVEMENT_BADGES[String(tier || "").toUpperCase()] || null;
+}
+
+function normalizeAuthenticatedUser(user = {}, fallback = {}) {
+  return {
+    ...EMPTY_CURRENT_USER,
+    ...fallback,
+    id: user.id || fallback.id || "",
+    role: user.role || fallback.role || "",
+    email: user.email || fallback.email || "",
+    name: user.name || "",
+    usn: user.usn || "",
+    department: user.department || "",
+    verified: Boolean(user.verified),
+    createdAt: user.createdAt || fallback.createdAt || null,
+    lastLoginAt: user.lastLoginAt || fallback.lastLoginAt || null,
+    loginCount: Number(user.loginCount || 0),
+    badgeTier: user.badgeTier || null,
+    badgeLabel: user.badgeLabel || null,
+    badgeIds: Array.isArray(user.badgeIds) ? user.badgeIds : [],
+    solvedProblemCount: Number(user.solvedProblemCount || 0),
+    badgeUpdatedAt: user.badgeUpdatedAt || null,
+  };
+}
+
+function DevOrbitLogo({ onClick, lightSurface = false }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display:"inline-flex",
+        alignItems:"center",
+        gap:10,
+        cursor:onClick ? "pointer" : "default",
+        userSelect:"none",
+      }}
+    >
+      <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
+        <circle cx="15" cy="15" r="13" fill={lightSurface ? "#EEF2FF" : "#111827"} />
+        <ellipse cx="15" cy="15" rx="11" ry="5.8" transform="rotate(-18 15 15)" stroke="#7C6AF7" strokeWidth="2" />
+        <ellipse cx="15" cy="15" rx="7.4" ry="11.2" transform="rotate(28 15 15)" stroke="#4FD1C5" strokeWidth="1.6" strokeDasharray="4 4" />
+        <circle cx="15" cy="15" r="4.2" fill="#4FD1C5" />
+        <circle cx="24" cy="10" r="2.3" fill="#FFC01E" />
+      </svg>
+      <span
+        style={{
+          fontFamily:"'Space Grotesk',sans-serif",
+          fontWeight:800,
+          fontSize:20,
+          color:lightSurface ? "#111827" : "#F4F5FF",
+          letterSpacing:"-0.5px",
+        }}
+      >
+        DevOrbit
+      </span>
+    </div>
+  );
+}
+
+function AchievementBadge({ tier, compact = false }) {
+  const badge = getAchievementBadgeMeta(tier);
+  if (!badge) return null;
+
+  return (
+    <span
+      style={{
+        display:"inline-flex",
+        alignItems:"center",
+        gap:compact ? 5 : 7,
+        padding:compact ? "4px 8px" : "8px 12px",
+        borderRadius:999,
+        border:`1px solid ${badge.border}`,
+        background:badge.background,
+        color:badge.color,
+        fontSize:compact ? 11 : 12,
+        fontWeight:700,
+        letterSpacing:"0.06em",
+        textTransform:"uppercase",
+      }}
+    >
+      <span aria-hidden="true">{badge.icon}</span>
+      {compact ? badge.shortLabel : badge.label}
+    </span>
+  );
+}
 
 async function readJsonSafely(response) {
   const text = await response.text();
@@ -2827,6 +2948,9 @@ function CodingPlatform() {
   const [contestSecurityLocked, setContestSecurityLocked] = useState(false);
   const [contestInstructionsOpen, setContestInstructionsOpen] = useState(false);
   const [contestInstructionsAccepted, setContestInstructionsAccepted] = useState(false);
+  const [contestCameraStatus, setContestCameraStatus] = useState("idle");
+  const [contestCameraError, setContestCameraError] = useState("");
+  const [contestCameraStream, setContestCameraStream] = useState(null);
   const [contestSessionEndsAt, setContestSessionEndsAt] = useState(null);
   const [contestSessionProgress, setContestSessionProgress] = useState({});
   const [contestResult, setContestResult] = useState(null);
@@ -3001,6 +3125,9 @@ function CodingPlatform() {
         loginCount: student.loginCount || 0,
         lastLoginAt: student.lastLoginAt || null,
         createdAt: student.createdAt || null,
+        badgeTier: student.badgeTier || null,
+        badgeLabel: student.badgeLabel || null,
+        solvedProblemCount: Number(student.solvedProblemCount || 0),
       }));
       const mappedStudents = mappedRegisteredStudents.filter((student) => Number(student.loginCount || 0) > 0);
       const nextLeaderboard = Array.isArray(leaderboardData.leaderboard)
@@ -3042,11 +3169,12 @@ function CodingPlatform() {
 
   const loadStudentPortalData = async (availableProblems = problemBank.length ? problemBank : PROBLEMS) => {
     try {
-      const [assignmentData, notificationData, leaderboardData, submissionData] = await Promise.all([
+      const [assignmentData, notificationData, leaderboardData, submissionData, profileData] = await Promise.all([
         performApiRequest("/api/tests/active"),
         performApiRequest("/api/notifications"),
         performApiRequest("/api/submissions/leaderboard"),
         performApiRequest(`/api/submissions/user/${currentUser.id}`),
+        performApiRequest("/api/auth/me"),
       ]);
 
       const liveAssignments = Array.isArray(assignmentData.assignments)
@@ -3089,6 +3217,12 @@ function CodingPlatform() {
       setUserSubmissions(submissions);
       setStudentNotifications(notifications);
       setNotificationCount(Number(notificationData.unreadCount || 0));
+
+      if (profileData.user) {
+        const refreshedUser = normalizeAuthenticatedUser(profileData.user, currentUser);
+        setCurrentUser(refreshedUser);
+        saveAuthSession(authToken, refreshedUser, refreshedUser.role);
+      }
     } catch (error) {
       setLeaderboard([]);
       setUserSubmissions([]);
@@ -3128,11 +3262,7 @@ function CodingPlatform() {
         return;
       }
 
-      setCurrentUser({
-        ...EMPTY_CURRENT_USER,
-        ...savedUser,
-        role: savedRole,
-      });
+      setCurrentUser(normalizeAuthenticatedUser({ ...savedUser, role: savedRole }));
       setAuthToken(savedToken);
       setUserRole(savedRole);
       setAuthModalOpen(false);
@@ -3447,6 +3577,12 @@ function CodingPlatform() {
     setContestEntered(false);
     setContestSecurityLocked(false);
     setContestInstructionsOpen(false);
+    setContestCameraStatus("idle");
+    setContestCameraError("");
+    if (contestCameraStream) {
+      contestCameraStream.getTracks().forEach((track) => track.stop());
+      setContestCameraStream(null);
+    }
     setScreenShield(false);
     if (document.fullscreenElement && document.exitFullscreen) {
       document.exitFullscreen().catch(() => {});
@@ -3480,6 +3616,43 @@ function CodingPlatform() {
     }
   };
 
+  const requestContestCameraPermission = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setContestCameraStatus("unavailable");
+      setContestCameraError("Camera access is not supported in this browser.");
+      return false;
+    }
+
+    setContestCameraStatus("requesting");
+    setContestCameraError("");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+
+      if (contestCameraStream) {
+        contestCameraStream.getTracks().forEach((track) => track.stop());
+      }
+
+      setContestCameraStream(stream);
+      setContestCameraStatus("granted");
+      return true;
+    } catch (error) {
+      const reason = String(error?.name || "");
+      const message = reason === "NotAllowedError"
+        ? "Camera permission was denied. Allow camera access to start the test."
+        : reason === "NotFoundError"
+          ? "No camera was found on this device."
+          : "Unable to access the camera. Check browser permission and try again.";
+
+      setContestCameraStatus("denied");
+      setContestCameraError(message);
+      return false;
+    }
+  };
+
   const handleEnterContest = (problemToOpen = contestProblems[0]) => {
     if (contestStatus === "Ended" || contestStatus === "Awaiting Start") {
       setPortalError(contestStatus === "Awaiting Start" ? "No live test has been started for students yet." : "");
@@ -3489,12 +3662,20 @@ function CodingPlatform() {
     setPortalError("");
     setSelectedProblem(problemToOpen || contestProblems[0] || null);
     setContestInstructionsAccepted(false);
+    setContestCameraStatus("idle");
+    setContestCameraError("");
     setContestInstructionsOpen(true);
   };
 
   const startContestAfterInstructions = async () => {
     const problemToOpen = selectedProblem || contestProblems[0];
     if (!contestInstructionsAccepted || !problemToOpen) return;
+
+    const cameraGranted = await requestContestCameraPermission();
+    if (!cameraGranted) {
+      triggerShield("Camera permission is required to start the contest.", 2200);
+      return;
+    }
 
     const fullscreenGranted = await requestContestFullscreen();
     if (!fullscreenGranted) {
@@ -3509,6 +3690,18 @@ function CodingPlatform() {
     setContestResult(null);
     setContestInstructionsOpen(false);
     if (problemToOpen) openProblem(problemToOpen, "contest");
+  };
+
+  const closeContestInstructions = () => {
+    setContestInstructionsOpen(false);
+    setContestInstructionsAccepted(false);
+    setContestCameraStatus("idle");
+    setContestCameraError("");
+
+    if (contestCameraStream) {
+      contestCameraStream.getTracks().forEach((track) => track.stop());
+      setContestCameraStream(null);
+    }
   };
 
   const openProfile = () => {
@@ -3641,18 +3834,13 @@ function CodingPlatform() {
       };
 
       const resolvedRole = user.role || authRole;
-      const authenticatedUser = {
-        id: user.id || "",
+      const authenticatedUser = normalizeAuthenticatedUser(user, {
         role: resolvedRole,
-        email: user.email || email,
-        name: user.name || "",
-        usn: user.usn || "",
-        department: user.department || "",
-        verified: Boolean(user.verified),
-        createdAt: user.createdAt || null,
-        lastLoginAt: user.lastLoginAt || null,
-        loginCount: Number(user.loginCount || 0),
-      };
+        email,
+        name,
+        usn,
+        department,
+      });
 
       setCurrentUser(authenticatedUser);
       setAuthToken(data.token || "");
@@ -3707,6 +3895,8 @@ function CodingPlatform() {
     setContestSecurityLocked(false);
     setContestInstructionsOpen(false);
     setContestInstructionsAccepted(false);
+    setContestCameraStatus("idle");
+    setContestCameraError("");
     setContestSessionEndsAt(null);
     setContestSessionProgress({});
     setContestResult(null);
@@ -3715,6 +3905,10 @@ function CodingPlatform() {
     setSolved(new Set());
     setContestTimerSeconds(adminCurrentTest.duration * 60);
     setConsoleOpen(false);
+    if (contestCameraStream) {
+      contestCameraStream.getTracks().forEach((track) => track.stop());
+      setContestCameraStream(null);
+    }
     setScreenShield(false);
     closeAuthFlow();
     setView("home");
@@ -4413,6 +4607,7 @@ function CodingPlatform() {
   );
   const profileEntry = matchedLeaderboardProfile || null;
   const profileAvatarGradient = profileEntry?.avatarGradient || ["#60a5fa", "#8b5cf6"];
+  const currentAchievement = getAchievementBadgeMeta(currentUser.badgeTier);
   const acceptedSubmissionCount = userSubmissions.filter((submission) => submission.status === "ACCEPTED").length;
   const submissionAccuracy = userSubmissions.length
     ? `${Math.round((acceptedSubmissionCount / userSubmissions.length) * 100)}%`
@@ -4431,6 +4626,7 @@ function CodingPlatform() {
     { label: "Joined", value: formatPortalDate(currentUser.createdAt) },
     { label: "Last Login", value: formatPortalDate(currentUser.lastLoginAt) },
     { label: "Login Count", value: String(currentUser.loginCount || 0) },
+    { label: "Achievement Badge", value: currentUser.badgeLabel || "Not earned yet" },
     { label: "Verified", value: currentUser.verified ? "Yes" : "No" },
   ];
   const solvedEasy = Array.from(solved).filter((id) => problemCatalog.find((problem) => problem.id === id)?.difficulty === "Easy").length;
@@ -4707,7 +4903,7 @@ function CodingPlatform() {
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr>
-              {["Rank", "Username", "Score", "Solved", "Time Penalty"].map((heading) => (
+              {["Rank", "Username", "Badge", "Score", "Solved", "Time Penalty"].map((heading) => (
                 <th key={heading} style={S.adminTableHead}>{heading}</th>
               ))}
             </tr>
@@ -4729,6 +4925,9 @@ function CodingPlatform() {
                       </span>
                     </div>
                   </td>
+                  <td style={S.adminTableCell}>
+                    {entry.badgeTier ? <AchievementBadge tier={entry.badgeTier} compact /> : <span style={{ color:ADMIN_THEME.textMuted }}>--</span>}
+                  </td>
                   <td style={{ ...S.adminTableCell, color:ADMIN_THEME.success, fontWeight:700 }}>{stats.score || 0}</td>
                   <td style={S.adminTableCell}>{stats.problemsSolved || 0}</td>
                   <td style={S.adminTableCell}>{stats.timePenalty || "--"}</td>
@@ -4736,7 +4935,7 @@ function CodingPlatform() {
               );
             }) : (
               <tr>
-                <td colSpan="5" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>
+                <td colSpan="6" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>
                   {leaderboardSearch.trim() ? "No leaderboard entries matched that username." : "No logged-in students have submitted yet."}
                 </td>
               </tr>
@@ -4782,7 +4981,7 @@ function CodingPlatform() {
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr>
-              {["Student", "USN", "Department", "Status", "Last Login", "Logins"].map((heading) => (
+              {["Student", "USN", "Department", "Badge", "Status", "Last Login", "Logins"].map((heading) => (
                 <th key={heading} style={S.adminTableHead}>{heading}</th>
               ))}
             </tr>
@@ -4796,13 +4995,23 @@ function CodingPlatform() {
                 </td>
                 <td style={S.adminTableCell}>{student.usn || "--"}</td>
                 <td style={S.adminTableCell}>{student.department || "--"}</td>
+                <td style={S.adminTableCell}>
+                  {student.badgeTier ? (
+                    <div style={{ display:"grid", gap:5 }}>
+                      <AchievementBadge tier={student.badgeTier} compact />
+                      <span style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{student.solvedProblemCount} solved</span>
+                    </div>
+                  ) : (
+                    <span style={{ color:ADMIN_THEME.textMuted }}>--</span>
+                  )}
+                </td>
                 <td style={{ ...S.adminTableCell, color:student.status === "Logged In" ? ADMIN_THEME.success : ADMIN_THEME.warning, fontWeight:700 }}>{student.status}</td>
                 <td style={S.adminTableCell}>{formatPortalDate(student.lastLoginAt)}</td>
                 <td style={{ ...S.adminTableCell, color:ADMIN_THEME.primary, fontWeight:700 }}>{student.loginCount || 0}</td>
               </tr>
             )) : (
               <tr>
-                <td colSpan="6" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No registered students yet.</td>
+                <td colSpan="7" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No registered students yet.</td>
               </tr>
             )}
           </tbody>
@@ -5117,7 +5326,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <span style={S.logo}>{"</> CodeArena"}</span>
+          <DevOrbitLogo />
           <div style={{ marginLeft:"auto", color:"#676b89", fontSize:12, letterSpacing:"0.1em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
             Cambridge Access Portal
           </div>
@@ -5130,7 +5339,7 @@ function CodingPlatform() {
             <div style={{ position:"relative", display:"grid", gridTemplateColumns:isCompact ? compactGrid : "1.1fr 0.9fr", gap:isPhone ? 16 : 24, alignItems:"center" }}>
               <div>
                 <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 12px", borderRadius:999, background:"#ffffff0a", border:"1px solid #ffffff14", color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:18 }}>
-                  Cambridge Coding Arena
+                  DevOrbit Learning Hub
                 </div>
                 <h1 style={{ ...S.homeTitle, maxWidth:720 }}>Build, compete, and track every test from one sleek portal.</h1>
                 <p style={{ ...S.problemBody, maxWidth:620, marginBottom:24 }}>
@@ -5313,7 +5522,7 @@ function CodingPlatform() {
       <div style={{ ...S.adminApp, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.adminNav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <DevOrbitLogo onClick={()=>setView("home")} lightSurface />
           <span style={S.adminNavTitle}>Admin Portal</span>
           <div style={{ marginLeft:"auto" }}>
             <button onClick={signOut} style={S.adminButton("default")}>Sign Out</button>
@@ -5684,7 +5893,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <nav style={S.nav}>
-        <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+        <DevOrbitLogo onClick={()=>setView("home")} />
         <button onClick={()=>setView("list")} style={S.navBtn(true)}>
           <span style={S.navBtnLabel(true)}>Problems</span>
           <span style={S.navBtnHint(true)}>Daily coding practice</span>
@@ -5704,6 +5913,7 @@ function CodingPlatform() {
             </span>
           )}
           <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
+          {currentAchievement && <AchievementBadge tier={currentUser.badgeTier} compact />}
           <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
         </div>
       </nav>
@@ -5791,7 +6001,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
         <nav style={{ ...S.nav, background:"#0b1220", borderBottom:"1px solid #1e293b" }}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <DevOrbitLogo onClick={()=>setView("home")} />
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Practice arena</span>
@@ -5842,6 +6052,13 @@ function CodingPlatform() {
                     <span style={{ padding:"8px 12px", borderRadius:999, background:"#18112e", border:"1px solid #7c3aed", color:"#c4b5fd", fontSize:12, fontWeight:700 }}>
                       {currentUser.role ? formatDisplayName(currentUser.role) : "User"}
                     </span>
+                    {currentAchievement ? (
+                      <AchievementBadge tier={currentUser.badgeTier} />
+                    ) : (
+                      <span style={{ padding:"8px 12px", borderRadius:999, background:"#111827", border:"1px solid #334155", color:"#cbd5e1", fontSize:12, fontWeight:700 }}>
+                        Next badge at 51 solved
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -5919,6 +6136,7 @@ function CodingPlatform() {
                   <div>Email: <span style={{ color:"#93c5fd", fontWeight:700 }}>{currentUser.email || "--"}</span></div>
                   <div>Department: <span style={{ color:"#67e8f9", fontWeight:700 }}>{currentUser.department || "--"}</span></div>
                   <div>USN: <span style={{ color:"#c4b5fd", fontWeight:700 }}>{currentUser.usn || "--"}</span></div>
+                  <div>Badge: <span style={{ color:currentAchievement?.color || "#cbd5e1", fontWeight:700 }}>{currentUser.badgeLabel || "Not earned yet"}</span></div>
                   <div>Verified: <span style={{ color:currentUser.verified ? "#22c55e" : "#fbbf24", fontWeight:700 }}>{currentUser.verified ? "Yes" : "No"}</span></div>
                 </div>
               </div>
@@ -6027,28 +6245,45 @@ function CodingPlatform() {
               <div style={{ display:"grid", gap:10, background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 16px", color:"#d9dcf7", fontSize:14, lineHeight:1.7, marginBottom:16 }}>
                 <div>Problems: <strong>{contestProblems.length}</strong></div>
                 <div>Duration: <strong>{activeContestAssignment?.duration || adminCurrentTest.duration} minutes</strong></div>
+                <div>Camera: <strong>required before the test starts</strong></div>
                 <div>Final question: use <strong>Final Submit</strong> and confirm before ending the test.</div>
                 <div>Result: accepted, rejected, and not-attempted problems will be shown with your score.</div>
+              </div>
+              <div style={{
+                background:contestCameraStatus === "granted" ? "#0d1813" : contestCameraError ? "#190d10" : "#10131d",
+                border:contestCameraStatus === "granted" ? "1px solid #1f6f45" : contestCameraError ? "1px solid #6b1f2a" : "1px solid #24283a",
+                color:contestCameraStatus === "granted" ? "#86efac" : contestCameraError ? "#fda4af" : "#a9aed0",
+                borderRadius:14,
+                padding:"12px 14px",
+                fontSize:13,
+                lineHeight:1.6,
+                marginBottom:16,
+              }}>
+                {contestCameraStatus === "granted"
+                  ? "Camera permission granted. The camera will stay active during the test."
+                  : contestCameraStatus === "requesting"
+                    ? "Requesting camera permission..."
+                    : contestCameraError || "When you click Start Test, the browser will ask for camera permission."}
               </div>
               <label style={{ display:"flex", gap:10, alignItems:"flex-start", color:"#cdd2ef", fontSize:14, lineHeight:1.6, marginBottom:20, cursor:"pointer" }}>
                 <input type="checkbox" checked={contestInstructionsAccepted} onChange={(e)=>setContestInstructionsAccepted(e.target.checked)} style={{ marginTop:4 }} />
                 <span>I have read the instructions and understand that leaving the test window will end my test.</span>
               </label>
               <div style={{ display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
-                <button onClick={()=>setContestInstructionsOpen(false)} style={S.btn("default")}>Cancel</button>
+                <button onClick={closeContestInstructions} style={S.btn("default")}>Cancel</button>
                 <button
                   onClick={startContestAfterInstructions}
-                  disabled={!contestInstructionsAccepted}
-                  style={{ ...S.btn("submit"), opacity:contestInstructionsAccepted ? 1 : 0.5, cursor:contestInstructionsAccepted ? "pointer" : "not-allowed" }}
+                  disabled={!contestInstructionsAccepted || contestCameraStatus === "requesting"}
+                  style={{ ...S.btn("submit"), opacity:contestInstructionsAccepted && contestCameraStatus !== "requesting" ? 1 : 0.5, cursor:contestInstructionsAccepted && contestCameraStatus !== "requesting" ? "pointer" : "not-allowed" }}
                 >
-                  Start Test
+                  {contestCameraStatus === "requesting" ? "Requesting Camera..." : "Start Test"}
                 </button>
               </div>
             </div>
           </div>
         )}
         <nav style={S.nav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <DevOrbitLogo onClick={()=>setView("home")} />
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Daily coding practice</span>
@@ -6063,6 +6298,7 @@ function CodingPlatform() {
           </button>
           <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
             <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
+            {currentAchievement && <AchievementBadge tier={currentUser.badgeTier} compact />}
             <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
           </div>
         </nav>
@@ -6282,7 +6518,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, minHeight:"100vh" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <DevOrbitLogo onClick={()=>setView("home")} />
           <button onClick={openContest} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Contest</span>
             <span style={S.navBtnHint(false)}>Back to contest hub</span>
@@ -6357,7 +6593,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <DevOrbitLogo onClick={()=>setView("home")} />
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Daily coding practice</span>
@@ -6508,6 +6744,7 @@ function CodingPlatform() {
                                 <div style={{ color:"#f5f6ff", fontSize:15, fontWeight:700 }}>{entry.username}</div>
                                 <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginTop:4 }}>
                                   <span style={{ color:"#8f93b4", fontSize:12 }}>Rating {entry.rating}</span>
+                                  {entry.badgeTier && <AchievementBadge tier={entry.badgeTier} compact />}
                                   <span style={{ color:levelMeta.color, fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", border:`1px solid ${levelMeta.border}`, background:levelMeta.background, borderRadius:999, padding:"3px 8px" }}>
                                     {submissionLevel}
                                   </span>
@@ -6616,7 +6853,7 @@ function CodingPlatform() {
       <ErrorBanner errors={errorBanner} onClose={() => setErrorBanner(null)} />
 
       <nav style={S.nav}>
-        <span style={S.logo} onClick={()=>setView("list")}>{"</> CodeArena"}</span>
+        <DevOrbitLogo onClick={()=>setView("list")} />
         <span style={{ color:"#444", fontSize:14 }}>/</span>
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
         {problemNavigationSource === "contest" && contestEntered && (
@@ -6861,3 +7098,4 @@ function CodingPlatform() {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<CodingPlatform />);
+

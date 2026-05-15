@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
+const { getBadgePresentation, syncUserBadge } = require('../lib/badgeService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
 
@@ -21,6 +22,8 @@ function toClientRole(role) {
 }
 
 function serializeUser(user) {
+  const badge = getBadgePresentation(user);
+
   return {
     id: user.id,
     email: user.email,
@@ -33,6 +36,11 @@ function serializeUser(user) {
     createdAt: user.createdAt,
     lastLoginAt: user.lastLoginAt,
     loginCount: user.loginCount || 0,
+    badgeTier: badge.badgeTier,
+    badgeLabel: badge.badgeLabel,
+    badgeIds: badge.badgeIds,
+    solvedProblemCount: badge.solvedProblemCount,
+    badgeUpdatedAt: user.badgeUpdatedAt || null,
   };
 }
 
@@ -280,8 +288,9 @@ exports.login = async (req, res) => {
     });
     await recordAuthEvent(req, updatedUser, 'LOGIN');
 
-    const token = signToken(updatedUser);
-    return res.json({ token, user: serializeUser(updatedUser) });
+    const userWithBadge = await syncUserBadge(updatedUser.id);
+    const token = signToken(userWithBadge || updatedUser);
+    return res.json({ token, user: serializeUser(userWithBadge || updatedUser) });
   } catch (err) {
     console.error(err);
     if (isDatabaseConnectionError(err)) {
@@ -297,7 +306,7 @@ exports.me = async (req, res) => {
   const token = auth.replace('Bearer ', '');
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    const user = await syncUserBadge(payload.sub);
     if (!user) return res.status(404).json({ error: 'not found' });
     return res.json({ user: serializeUser(user) });
   } catch (err) {
@@ -335,9 +344,12 @@ exports.listStudents = async (req, res) => {
       where: { role: 'USER' },
       orderBy: [{ lastLoginAt: 'desc' }, { createdAt: 'desc' }],
     });
+    const studentsWithBadges = await Promise.all(
+      students.map(async (student) => await syncUserBadge(student.id) || student),
+    );
 
     return res.json({
-      students: students.map((student) => ({
+      students: studentsWithBadges.map((student) => ({
         ...serializeUser(student),
         status: student.lastLoginAt ? 'Logged In' : 'Registered',
       })),

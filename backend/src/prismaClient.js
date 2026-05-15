@@ -179,6 +179,8 @@ function applyDefaults(modelName, data) {
     user: {
       role: 'USER',
       badgeIds: [],
+      badgeTier: null,
+      solvedProblemCount: 0,
       verified: false,
       loginCount: 0,
       createdAt: now,

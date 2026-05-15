@@ -1,4 +1,4 @@
-# CodeArena
+# DevOrbit
 
 This app serves a static frontend and an Express backend API. Code execution is handled through Judge0.
 
@@ -79,6 +79,12 @@ GET /api/health
 GET /api/run/health
 GET /health
 ```
+
+## Achievement Badges
+
+- `Silver Solver` is awarded after more than 50 unique accepted problems.
+- `Gold Solver` is awarded at 100 or more unique accepted problems.
+- Badge tier and solved-problem count are persisted on the user record and refreshed from stored submissions.
 
 ## Notes
 
