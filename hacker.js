@@ -162,6 +162,16 @@ createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/run/health") {
+    sendJson(res, 200, {
+      ok: true,
+      service: "runner",
+      executionProvider: "Judge0",
+      judge0Url: (process.env.JUDGE0_URL || "https://ce.judge0.com").replace(/\/+$/, ""),
+    });
+    return;
+  }
+
   if (req.method === "POST" && (pathname === "/api/run" || pathname === "/run")) {
     try {
       const payload = await readJsonBody(req);

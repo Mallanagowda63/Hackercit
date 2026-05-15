@@ -3705,9 +3705,16 @@ function CodingPlatform() {
     setUserSubmissions([]);
     setContestEntered(false);
     setContestSecurityLocked(false);
+    setContestInstructionsOpen(false);
+    setContestInstructionsAccepted(false);
+    setContestSessionEndsAt(null);
+    setContestSessionProgress({});
+    setContestResult(null);
+    setFinalSubmitConfirmOpen(false);
     setAttemptedProblems(new Set());
     setSolved(new Set());
     setContestTimerSeconds(adminCurrentTest.duration * 60);
+    setConsoleOpen(false);
     setScreenShield(false);
     closeAuthFlow();
     setView("home");
@@ -5978,6 +5985,26 @@ function CodingPlatform() {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div style={{ display:"flex", justifyContent:"flex-end", marginTop:4 }}>
+            <button
+              onClick={signOut}
+              style={{
+                background:"linear-gradient(135deg, #ef4444, #dc2626)",
+                border:"1px solid #f87171",
+                color:"#fff",
+                padding:"12px 20px",
+                borderRadius:14,
+                fontSize:14,
+                fontWeight:700,
+                cursor:"pointer",
+                boxShadow:"0 14px 28px rgba(220,38,38,0.24)",
+                fontFamily:"inherit",
+              }}
+            >
+              Logout
+            </button>
           </div>
         </div>
       </div>
