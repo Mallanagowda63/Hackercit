@@ -2,7 +2,7 @@ const prisma = require('../prismaClient');
 const { normalizeDifficulty, serializeProblem, toClientDifficulty } = require('../lib/problemHelpers');
 const { buildAssignmentReport } = require('../lib/testReportService');
 
-function serializeAssignment(assignment, problems = []) {
+function serializeAssignment(assignment, problems = [], attempt = null) {
   return {
     id: assignment.id,
     title: assignment.title,
@@ -18,6 +18,7 @@ function serializeAssignment(assignment, problems = []) {
     createdAt: assignment.createdAt,
     updatedAt: assignment.updatedAt,
     problems,
+    attempt,
   };
 }
 
@@ -34,7 +35,7 @@ async function closeExpiredAssignments() {
   });
 }
 
-async function loadAssignmentsWithProblems(where = {}) {
+async function loadAssignmentsWithProblems(where = {}, options = {}) {
   const assignments = await prisma.testAssignment.findMany({
     where,
     orderBy: [{ createdAt: 'desc' }],
@@ -45,6 +46,21 @@ async function loadAssignmentsWithProblems(where = {}) {
     ? await prisma.problem.findMany({ where: { id: { in: uniqueProblemIds } } })
     : [];
   const problemsById = new Map(problems.map((problem) => [problem.id, problem]));
+  const attempts = options.userId && assignments.length
+    ? await prisma.testAttempt.findMany({
+      where: {
+        userId: options.userId,
+        assignmentId: { in: assignments.map((assignment) => assignment.id) },
+      },
+      orderBy: [{ startedAt: 'desc' }],
+    })
+    : [];
+  const attemptByAssignmentId = new Map();
+  attempts.forEach((attempt) => {
+    if (!attemptByAssignmentId.has(attempt.assignmentId)) {
+      attemptByAssignmentId.set(attempt.assignmentId, attempt);
+    }
+  });
 
   return assignments.map((assignment) => {
     const orderedProblems = (assignment.problemIds || [])
@@ -52,7 +68,7 @@ async function loadAssignmentsWithProblems(where = {}) {
       .filter(Boolean)
       .map((problem) => serializeProblem(problem, { includeContent: true }));
 
-    return serializeAssignment(assignment, orderedProblems);
+    return serializeAssignment(assignment, orderedProblems, attemptByAssignmentId.get(assignment.id) || null);
   });
 }
 
@@ -70,7 +86,10 @@ exports.list = async (req, res) => {
 exports.active = async (req, res) => {
   try {
     await closeExpiredAssignments();
-    const assignments = await loadAssignmentsWithProblems({ status: 'LIVE' });
+    const assignments = await loadAssignmentsWithProblems(
+      { status: 'LIVE' },
+      req.user.role === 'USER' ? { userId: req.user.id } : {},
+    );
     return res.json({ assignment: assignments[0] || null, assignments });
   } catch (err) {
     console.error(err);
@@ -243,8 +262,14 @@ exports.startAttempt = async (req, res) => {
     if (!assignment) return res.status(404).json({ error: 'assignment not found' });
 
     const existing = await getAttemptOrNull(id, req.user.id);
-    if (existing && existing.status === 'IN_PROGRESS') {
-      return res.json({ attempt: existing });
+    if (existing) {
+      if (existing.status === 'IN_PROGRESS') {
+        return res.json({ attempt: existing });
+      }
+      return res.status(409).json({
+        error: 'test already attempted by this user',
+        attempt: existing,
+      });
     }
 
     const attempt = await prisma.testAttempt.create({

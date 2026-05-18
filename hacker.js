@@ -17,6 +17,7 @@ const contentTypes = {
   ".jsx": "text/babel; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".pdf": "application/pdf",
 };
 
 function sendJson(res, statusCode, payload) {

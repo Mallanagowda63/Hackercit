@@ -287,6 +287,7 @@ function mapAssignmentRecord(assignment) {
     endsAt: assignment.endsAt || null,
     createdAt: assignment.createdAt || null,
     updatedAt: assignment.updatedAt || null,
+    attempt: assignment.attempt || null,
     date: formatPortalDate(assignment.startsAt || assignment.createdAt),
     questions: problems.map((problem) => problem.id),
     questionIds: problems.map((problem) => problem.id),
@@ -3714,6 +3715,11 @@ function CodingPlatform() {
   };
 
   const handleEnterContest = (problemToOpen = contestProblems[0]) => {
+    if (activeContestAssignment?.attempt && activeContestAssignment.attempt.status !== "IN_PROGRESS" && !contestEntered) {
+      setPortalError("You have already used your one attempt for this test.");
+      return;
+    }
+
     if (contestStatus === "Ended" || contestStatus === "Awaiting Start") {
       setPortalError(contestStatus === "Awaiting Start" ? "No live test has been started for students yet." : "");
       return;
@@ -3748,7 +3754,13 @@ function CodingPlatform() {
         await performApiRequest(`/api/tests/${activeContestAssignment.id}/attempts/start`, {
           method: "POST",
         });
-      } catch {}
+      } catch (error) {
+        setPortalError(error.message || "You have already used your one attempt for this test.");
+        if (document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+        return;
+      }
     }
 
     setContestEntered(true);
@@ -4544,6 +4556,11 @@ function CodingPlatform() {
     })
     .filter(Boolean);
   const contestProblemSet = contestProblems.filter(Boolean);
+  const hasUsedContestAttempt = Boolean(
+    activeContestAssignment?.attempt
+    && activeContestAssignment.attempt.status !== "IN_PROGRESS"
+    && !contestEntered
+  );
   const catalogProblemSet = problemCatalog.filter(Boolean);
   const problemNavigation = problemNavigationSource === "contest" && contestProblemSet.length
     ? contestProblemSet
@@ -6550,18 +6567,26 @@ function CodingPlatform() {
               <div style={{ display:"grid", gap:12, minWidth:"min(100%, 280px)" }}>
                 <button
                   onClick={() => handleEnterContest(contestProblems[0])}
-                  disabled={contestStatus === "Ended" || contestStatus === "Awaiting Start"}
+                  disabled={contestStatus === "Ended" || contestStatus === "Awaiting Start" || hasUsedContestAttempt}
                   style={{
                     ...S.btn("submit"),
                     minHeight:52,
                     minWidth:220,
                     fontSize:13,
-                    opacity:contestStatus === "Ended" || contestStatus === "Awaiting Start" ? 0.55 : 1,
-                    cursor:contestStatus === "Ended" || contestStatus === "Awaiting Start" ? "not-allowed" : "pointer",
+                    opacity:contestStatus === "Ended" || contestStatus === "Awaiting Start" || hasUsedContestAttempt ? 0.55 : 1,
+                    cursor:contestStatus === "Ended" || contestStatus === "Awaiting Start" || hasUsedContestAttempt ? "not-allowed" : "pointer",
                     boxShadow:"0 16px 30px rgba(124,106,247,0.28)",
                   }}
                 >
-                  {contestStatus === "Awaiting Start" ? "Awaiting Admin Start" : contestStatus === "Ended" ? "Contest Ended" : contestEntered ? "Resume Test" : "Start Test"}
+                  {contestStatus === "Awaiting Start"
+                    ? "Awaiting Admin Start"
+                    : contestStatus === "Ended"
+                      ? "Contest Ended"
+                      : hasUsedContestAttempt
+                        ? "Attempt Already Used"
+                        : contestEntered
+                          ? "Resume Test"
+                          : "Start Test"}
                 </button>
                 <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px", color:"#a9aed0", fontSize:14, lineHeight:1.7 }}>
                   <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>Contest Snapshot</div>
