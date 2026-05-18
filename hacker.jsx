@@ -2964,6 +2964,7 @@ function CodingPlatform() {
   const [shieldMessage, setShieldMessage]     = useState("Screen capture is disabled in this demo.");
   const textareaRef = useRef(null);
   const adminTextareaRef = useRef(null);
+  const contestCameraPreviewRef = useRef(null);
   const shieldTimerRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 1024);
   useEffect(() => {
@@ -2971,6 +2972,15 @@ function CodingPlatform() {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    const video = contestCameraPreviewRef.current;
+    if (!video) return;
+    video.srcObject = contestCameraStream || null;
+    if (contestCameraStream) {
+      video.play().catch(() => {});
+    }
+  }, [contestCameraStream, view, contestEntered]);
   const triggerShield = (message, duration = 1800) => {
     setShieldMessage(message);
     setScreenShield(true);
@@ -5609,7 +5619,7 @@ function CodingPlatform() {
       <div style={{ ...S.adminApp, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.adminNav}>
-          <DevOrbitLogo onClick={()=>setView("home")} lightSurface />
+          <DevOrbitLogo lightSurface />
           <span style={S.adminNavTitle}>Admin Portal</span>
           <div style={{ marginLeft:"auto" }}>
             <button onClick={signOut} style={S.adminButton("default")}>Sign Out</button>
@@ -6051,7 +6061,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <nav style={S.nav}>
-        <DevOrbitLogo onClick={()=>setView("home")} />
+        <DevOrbitLogo />
         <button onClick={()=>setView("list")} style={S.navBtn(true)}>
           <span style={S.navBtnLabel(true)}>Problems</span>
           <span style={S.navBtnHint(true)}>Daily coding practice</span>
@@ -6159,7 +6169,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
         <nav style={{ ...S.nav, background:"#0b1220", borderBottom:"1px solid #1e293b" }}>
-          <DevOrbitLogo onClick={()=>setView("home")} />
+          <DevOrbitLogo />
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Practice arena</span>
@@ -6441,7 +6451,7 @@ function CodingPlatform() {
           </div>
         )}
         <nav style={S.nav}>
-          <DevOrbitLogo onClick={()=>setView("home")} />
+          <DevOrbitLogo />
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Daily coding practice</span>
@@ -6676,7 +6686,11 @@ function CodingPlatform() {
       <div style={{ ...S.app, minHeight:"100vh" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <DevOrbitLogo onClick={()=>setView("home")} />
+          <DevOrbitLogo />
+          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
+            <span style={S.navBtnLabel(false)}>Problems</span>
+            <span style={S.navBtnHint(false)}>Daily coding practice</span>
+          </button>
           <button onClick={openContest} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Contest</span>
             <span style={S.navBtnHint(false)}>Back to contest hub</span>
@@ -6685,6 +6699,9 @@ function CodingPlatform() {
             <span style={S.navBtnLabel(false)}>Leaderboard</span>
             <span style={S.navBtnHint(false)}>Compare scores</span>
           </button>
+          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+            <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
+          </div>
         </nav>
 
         <div style={{ maxWidth:1100, margin:"34px auto 44px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
@@ -6751,7 +6768,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <DevOrbitLogo onClick={()=>setView("home")} />
+          <DevOrbitLogo />
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Daily coding practice</span>
@@ -7011,7 +7028,7 @@ function CodingPlatform() {
       <ErrorBanner errors={errorBanner} onClose={() => setErrorBanner(null)} />
 
       <nav style={S.nav}>
-        <DevOrbitLogo onClick={()=>setView("list")} />
+        <DevOrbitLogo />
         <span style={{ color:"#444", fontSize:14 }}>/</span>
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
         {problemNavigationSource === "contest" && contestEntered && (
@@ -7248,12 +7265,49 @@ function CodingPlatform() {
             )}
           </div>
         </div>
+        </div>
       </div>
-      </div>
+
+      {problemNavigationSource === "contest" && contestEntered && contestCameraStream && (
+        <div
+          style={{
+            position:"fixed",
+            right:isPhone ? 12 : 18,
+            bottom:isPhone ? 12 : 18,
+            width:isPhone ? 150 : 190,
+            background:"#090b14",
+            border:"1px solid #2a3550",
+            borderRadius:16,
+            overflow:"hidden",
+            boxShadow:"0 18px 40px rgba(0,0,0,0.42)",
+            zIndex:40,
+          }}
+        >
+          <div style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", background:"#0f1727", borderBottom:"1px solid #22304a", color:"#cbd5e1", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase" }}>
+            <span style={{ width:8, height:8, borderRadius:"50%", background:"#22c55e", boxShadow:"0 0 0 4px rgba(34,197,94,0.14)" }} />
+            Camera On
+          </div>
+          <video
+            ref={contestCameraPreviewRef}
+            autoPlay
+            muted
+            playsInline
+            style={{
+              display:"block",
+              width:"100%",
+              height:isPhone ? 110 : 140,
+              objectFit:"cover",
+              transform:"scaleX(-1)",
+              background:"#020617",
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<CodingPlatform />);
+
 
