@@ -3511,14 +3511,31 @@ function CodingPlatform() {
 
     const handleContestKeyDown = (e) => {
       const key = e.key || "";
+      const lowerKey = key.toLowerCase();
+      const isClipboardShortcut = (e.ctrlKey || e.metaKey) && ["c", "v", "x"].includes(lowerKey);
+
+      if (isClipboardShortcut) {
+        e.preventDefault();
+        triggerShield("Copy, cut, and paste are disabled during the test.", 1400);
+        return;
+      }
+
       if (key === "Escape" || key === "F11" || key === "Meta" || key === "OS") {
         e.preventDefault();
         endForSecurity(`Ended because restricted key "${key}" was pressed.`);
       }
     };
 
+    const blockClipboardAction = (e) => {
+      e.preventDefault();
+      triggerShield("Copy, cut, and paste are disabled during the test.", 1400);
+    };
+
     document.addEventListener("visibilitychange", ensureContestFocus);
     document.addEventListener("fullscreenchange", ensureContestFocus);
+    document.addEventListener("copy", blockClipboardAction, true);
+    document.addEventListener("cut", blockClipboardAction, true);
+    document.addEventListener("paste", blockClipboardAction, true);
     window.addEventListener("keydown", handleContestKeyDown, true);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", ensureContestFocus);
@@ -3528,6 +3545,9 @@ function CodingPlatform() {
     return () => {
       document.removeEventListener("visibilitychange", ensureContestFocus);
       document.removeEventListener("fullscreenchange", ensureContestFocus);
+      document.removeEventListener("copy", blockClipboardAction, true);
+      document.removeEventListener("cut", blockClipboardAction, true);
+      document.removeEventListener("paste", blockClipboardAction, true);
       window.removeEventListener("keydown", handleContestKeyDown, true);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", ensureContestFocus);
