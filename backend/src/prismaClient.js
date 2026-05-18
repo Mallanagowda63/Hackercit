@@ -210,6 +210,15 @@ function applyDefaults(modelName, data) {
       createdAt: now,
       updatedAt: now,
     },
+    testAttempt: {
+      finishedAt: null,
+      status: 'IN_PROGRESS',
+      finishReason: null,
+      interruptionCount: 0,
+      interruptions: [],
+      createdAt: now,
+      updatedAt: now,
+    },
     notification: {
       type: 'TEST_ASSIGNED',
       read: false,
@@ -454,6 +463,7 @@ prisma = {
   problem: new MongoModel('problem', 'Problem'),
   submission: new MongoModel('submission', 'Submission'),
   testAssignment: new MongoModel('testAssignment', 'TestAssignment'),
+  testAttempt: new MongoModel('testAttempt', 'TestAttempt'),
   notification: new MongoModel('notification', 'Notification'),
   loginEvent: new MongoModel('loginEvent', 'LoginEvent'),
   async $transaction(operations) {

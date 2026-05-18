@@ -2907,6 +2907,7 @@ function CodingPlatform() {
   const [adminTimerSeconds, setAdminTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [adminWarning, setAdminWarning]       = useState("");
   const [solutionsVisible, setSolutionsVisible] = useState(false);
+  const [adminTestReport, setAdminTestReport] = useState(null);
   const [questionUploadForm, setQuestionUploadForm] = useState(createDefaultQuestionUploadForm);
   const [questionUploading, setQuestionUploading] = useState(false);
   const [questionUploadError, setQuestionUploadError] = useState("");
@@ -3152,6 +3153,12 @@ function CodingPlatform() {
       setActiveUsers(mappedStudents);
       setParticipantsCount(mappedStudents.length);
       setLoginEvents(Array.isArray(loginEventData.events) ? loginEventData.events : []);
+      if (currentAssignment?.id && currentAssignment.status === "ENDED") {
+        const reportData = await performApiRequest(`/api/tests/${currentAssignment.id}/report`);
+        setAdminTestReport(reportData.report || null);
+      } else {
+        setAdminTestReport(null);
+      }
 
       if (currentAssignment?.problems?.length) {
         setAdminSubmissionProblemId((prev) => {
@@ -3358,6 +3365,32 @@ function CodingPlatform() {
   }, [adminCurrentTest]);
 
   useEffect(() => {
+    if (view !== "admin" || !authToken || !adminCurrentTest?.id || adminCurrentTest.status !== "ENDED") {
+      setAdminTestReport(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadReport = async () => {
+      try {
+        const data = await performApiRequest(`/api/tests/${adminCurrentTest.id}/report`);
+        if (!cancelled) {
+          setAdminTestReport(data.report || null);
+        }
+      } catch {
+        if (!cancelled) {
+          setAdminTestReport(null);
+        }
+      }
+    };
+
+    loadReport();
+    return () => {
+      cancelled = true;
+    };
+  }, [view, authToken, adminCurrentTest?.id, adminCurrentTest?.status]);
+
+  useEffect(() => {
     if (view !== "admin") return;
     if (adminTimerSeconds !== 0) return;
     if (!adminSubmissionCode.trim() || adminExecuting || adminExecution?.autoSubmitted) return;
@@ -3431,9 +3464,17 @@ function CodingPlatform() {
     }
 
     let ending = false;
-    const endForSecurity = (reason) => {
+    const endForSecurity = async (reason) => {
       if (ending) return;
       ending = true;
+      if (authToken && currentUser.id && activeContestAssignment?.id) {
+        try {
+          await performApiRequest(`/api/tests/${activeContestAssignment.id}/attempts/interrupt`, {
+            method: "POST",
+            body: JSON.stringify({ reason }),
+          });
+        } catch {}
+      }
       finishContest(reason);
     };
 
@@ -3572,7 +3613,16 @@ function CodingPlatform() {
     };
   };
 
-  const finishContest = (reason = "Submitted", sessionProgress = contestSessionProgress) => {
+  const finishContest = async (reason = "Submitted", sessionProgress = contestSessionProgress) => {
+    const interrupted = /ended because|restricted key|switched away|fullscreen/i.test(reason);
+    if (authToken && currentUser.id && activeContestAssignment?.id) {
+      try {
+        await performApiRequest(`/api/tests/${activeContestAssignment.id}/attempts/finish`, {
+          method: "POST",
+          body: JSON.stringify({ reason, interrupted }),
+        });
+      } catch {}
+    }
     setContestResult(buildContestResult(reason, sessionProgress));
     setContestEntered(false);
     setContestSecurityLocked(false);
@@ -3681,6 +3731,14 @@ function CodingPlatform() {
     if (!fullscreenGranted) {
       triggerShield("Fullscreen permission is required to start the contest.", 2200);
       return;
+    }
+
+    if (authToken && currentUser.id && activeContestAssignment?.id) {
+      try {
+        await performApiRequest(`/api/tests/${activeContestAssignment.id}/attempts/start`, {
+          method: "POST",
+        });
+      } catch {}
     }
 
     setContestEntered(true);
@@ -4325,7 +4383,7 @@ function CodingPlatform() {
     }
   };
   const indentUnit = "  ";
-  const handleEditorIndentation = (e, value, setter, ref) => {
+  const handleEditorIndentation = (e, value, setter, ref, language = lang) => {
     const ta = ref.current;
     if (!ta) return;
 
@@ -4388,14 +4446,34 @@ function CodingPlatform() {
       const line = value.slice(lineStart, start);
       const currentIndent = (line.match(/^\s*/) || [""])[0];
       const trimmedLine = line.trimEnd();
-      const shouldIncreaseIndent = /[\{\[\(]\s*$/.test(trimmedLine);
+      const shouldIncreaseIndent = /[\{\[\(]\s*$/.test(trimmedLine)
+        || (language === "python" && /:\s*$/.test(trimmedLine));
+      const nextChar = value.slice(end).charAt(0);
+      const shouldCreateInnerLine = shouldIncreaseIndent && /[\}\]\)]/.test(nextChar);
       const nextIndent = `${currentIndent}${shouldIncreaseIndent ? indentUnit : ""}`;
-      const nextValue = `${value.slice(0, start)}\n${nextIndent}${value.slice(end)}`;
+      const nextValue = shouldCreateInnerLine
+        ? `${value.slice(0, start)}\n${nextIndent}\n${currentIndent}${value.slice(end)}`
+        : `${value.slice(0, start)}\n${nextIndent}${value.slice(end)}`;
       setter(nextValue);
       setTimeout(() => {
         const cursor = start + 1 + nextIndent.length;
         ta.selectionStart = ta.selectionEnd = cursor;
       }, 0);
+      return;
+    }
+
+    if (/^[\}\]\)]$/.test(e.key) && start === end) {
+      const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+      const beforeCursor = value.slice(lineStart, start);
+      if (/^\s+$/.test(beforeCursor)) {
+        const removableIndent = beforeCursor.endsWith(indentUnit) ? indentUnit.length : 1;
+        e.preventDefault();
+        const nextValue = `${value.slice(0, start - removableIndent)}${e.key}${value.slice(end)}`;
+        setter(nextValue);
+        setTimeout(() => {
+          ta.selectionStart = ta.selectionEnd = start - removableIndent + 1;
+        }, 0);
+      }
     }
   };
 
@@ -4880,6 +4958,15 @@ function CodingPlatform() {
     questionCategoryFilter === "All" || getProblemCategory(problem) === questionCategoryFilter
   );
   const latestUnreadNotification = studentNotifications.find((notification) => !notification.read) || studentNotifications[0] || null;
+  const formatDurationFromMs = (ms = 0) => {
+    const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return hours > 0
+      ? `${hours}h ${String(minutes).padStart(2, "0")}m`
+      : `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  };
 
   const renderAdminLeaderboard = () => (
     <div style={{ display:"grid", gap:18 }}>
@@ -5700,6 +5787,77 @@ function CodingPlatform() {
             </div>
           </div>
 
+          {currentTestEnded && adminTestReport && (
+            <div style={{ display:"grid", gap:18 }}>
+              <div style={S.adminCard}>
+                <div style={S.adminSectionTitle}>Post-Test Report</div>
+                <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 140 : 180}px, 1fr))`, gap:12 }}>
+                  <div style={S.adminSubCard}>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Attendance</div>
+                    <div style={{ color:ADMIN_THEME.text, fontSize:24, fontWeight:800 }}>{adminTestReport.attendedCount}/{adminTestReport.totalStudents}</div>
+                  </div>
+                  <div style={S.adminSubCard}>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Best Student</div>
+                    <div style={{ color:ADMIN_THEME.text, fontSize:18, fontWeight:800 }}>{adminTestReport.bestStudent?.name || "--"}</div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{adminTestReport.bestStudent?.score || 0} points</div>
+                  </div>
+                  <div style={S.adminSubCard}>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Average Score</div>
+                    <div style={{ color:ADMIN_THEME.text, fontSize:24, fontWeight:800 }}>{adminTestReport.averageScore}</div>
+                  </div>
+                  <div style={S.adminSubCard}>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Average Time</div>
+                    <div style={{ color:ADMIN_THEME.text, fontSize:24, fontWeight:800 }}>{formatDurationFromMs(adminTestReport.averageTimeSpentMs)}</div>
+                  </div>
+                  <div style={S.adminSubCard}>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Interrupted</div>
+                    <div style={{ color:ADMIN_THEME.error, fontSize:24, fontWeight:800 }}>{adminTestReport.interruptedCount}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={S.adminTableWrap}>
+                <div style={{ padding:"18px 18px 8px" }}>
+                  <div style={S.adminSectionTitle}>Student Attendance & Activity</div>
+                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14 }}>Each student’s attendance, score, time usage, submissions, and interruption details.</div>
+                </div>
+                <table style={{ width:"100%", borderCollapse:"collapse", minWidth:860 }}>
+                  <thead>
+                    <tr>
+                      {["Student", "Attendance", "Score", "Solved", "Time Used", "Submissions", "Interruptions", "Result"].map((heading) => (
+                        <th key={heading} style={S.adminTableHead}>{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminTestReport.students.map((student) => (
+                      <tr key={student.userId}>
+                        <td style={S.adminTableCell}>
+                          <div style={{ fontWeight:700 }}>{student.name}</div>
+                          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{student.usn || student.email}</div>
+                        </td>
+                        <td style={S.adminTableCell}>{student.attendance}</td>
+                        <td style={S.adminTableCell}>{student.score}</td>
+                        <td style={S.adminTableCell}>{student.solved}</td>
+                        <td style={S.adminTableCell}>{formatDurationFromMs(student.timeSpentMs)}</td>
+                        <td style={S.adminTableCell}>{student.submissionCount}</td>
+                        <td style={{ ...S.adminTableCell, color:student.interruptionCount ? ADMIN_THEME.error : ADMIN_THEME.success }}>
+                          {student.interruptionCount}
+                        </td>
+                        <td style={S.adminTableCell}>
+                          <div>{student.attemptStatus}</div>
+                          {student.finishReason && (
+                            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{student.finishReason}</div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 240 : 340}px, 1fr))`, gap:18, alignItems:"start" }}>
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Code Submission</div>
@@ -5741,7 +5899,7 @@ function CodingPlatform() {
                     ref={adminTextareaRef}
                     value={adminSubmissionCode}
                     onChange={(e)=>setAdminSubmissionCode(e.target.value)}
-                    onKeyDown={(e) => handleEditorIndentation(e, adminSubmissionCode, setAdminSubmissionCode, adminTextareaRef)}
+                    onKeyDown={(e) => handleEditorIndentation(e, adminSubmissionCode, setAdminSubmissionCode, adminTextareaRef, adminSubmissionLang)}
                     spellCheck={false}
                     style={{ width:"100%", minHeight:240, background:ADMIN_THEME.background, color:ADMIN_THEME.text, border:"none", outline:"none", resize:"vertical", padding:"14px", fontFamily:"'JetBrains Mono',monospace", fontSize:13, lineHeight:1.7, boxSizing:"border-box" }}
                   />
@@ -6996,7 +7154,7 @@ function CodingPlatform() {
               </div>
             </div>
             <CodeHighlightLayer code={code} language={lang} scrollTop={editorScrollTop} />
-            <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onScroll={(e)=>setEditorScrollTop(e.currentTarget.scrollTop)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef)} spellCheck={false}
+            <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onScroll={(e)=>setEditorScrollTop(e.currentTarget.scrollTop)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef, lang)} spellCheck={false}
               style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"transparent", color:"transparent", caretColor:"#67e8f9", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f", whiteSpace:"pre-wrap", wordBreak:"break-word" }} />
           </div>
 

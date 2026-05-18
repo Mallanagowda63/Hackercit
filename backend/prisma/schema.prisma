@@ -20,6 +20,7 @@ model User {
   lastLoginAt        DateTime?
   loginCount         Int                 @default(0)
   submissions        Submission[]
+  testAttempts       TestAttempt[]
   loginEvents        LoginEvent[]
   notifications      Notification[]
   verificationTokens VerificationToken[]
@@ -100,6 +101,23 @@ model TestAssignment {
   endsAt          DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+  attempts        TestAttempt[]
+}
+
+model TestAttempt {
+  id                String           @id @default(auto()) @map("_id") @db.ObjectId
+  assignment        TestAssignment   @relation(fields: [assignmentId], references: [id])
+  assignmentId      String           @db.ObjectId
+  user              User             @relation(fields: [userId], references: [id])
+  userId            String           @db.ObjectId
+  startedAt         DateTime
+  finishedAt        DateTime?
+  status            AttemptStatus    @default(IN_PROGRESS)
+  finishReason      String?
+  interruptionCount Int              @default(0)
+  interruptions     Json?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 }
 
 model Notification {
@@ -153,6 +171,12 @@ enum AssignmentStatus {
   DRAFT
   LIVE
   ENDED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  COMPLETED
+  INTERRUPTED
 }
 
 enum NotificationType {
