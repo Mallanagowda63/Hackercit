@@ -3241,6 +3241,7 @@ function CodingPlatform() {
         setCurrentUser(refreshedUser);
         saveAuthSession(authToken, refreshedUser, refreshedUser.role);
       }
+      setPortalError("");
     } catch (error) {
       setLeaderboard([]);
       setUserSubmissions([]);
