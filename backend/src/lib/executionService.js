@@ -1,7 +1,15 @@
+const {
+  checkExecutionQueueHealth,
+  enqueueExecution,
+  isExecutionQueueEnabled,
+} = require('./executionQueue');
+
 const JUDGE0_URL = String(process.env.JUDGE0_URL || 'https://ce.judge0.com').replace(/\/+$/, '');
 const HEALTH_TIMEOUT_MS = Number(process.env.JUDGE0_HEALTH_TIMEOUT_MS || 8000);
 const JUDGE0_AUTH_TOKEN = String(process.env.JUDGE0_AUTH_TOKEN || '').trim();
 const JUDGE0_AUTH_USER = String(process.env.JUDGE0_AUTH_USER || '').trim();
+const DIRECT_FALLBACK_DISABLED_VALUES = new Set(['0', 'false', 'off', 'disabled', 'no']);
+const DIRECT_FALLBACK_ENABLED_VALUES = new Set(['1', 'true', 'on', 'enabled', 'yes']);
 
 let runnerModulePromise = null;
 
@@ -27,12 +35,45 @@ function buildJudge0Headers() {
   return headers;
 }
 
-async function executeSubmission(payload) {
+async function executeSubmissionDirect(payload) {
   const runner = await getRunnerModule();
   return runner.runSubmission(payload);
 }
 
-async function checkExecutionHealth() {
+function isDirectFallbackEnabled() {
+  const configured = String(process.env.EXECUTION_QUEUE_DIRECT_FALLBACK || '').trim().toLowerCase();
+  if (DIRECT_FALLBACK_ENABLED_VALUES.has(configured)) return true;
+  if (DIRECT_FALLBACK_DISABLED_VALUES.has(configured)) return false;
+
+  return process.env.NODE_ENV !== 'production';
+}
+
+function isQueueAvailabilityError(error) {
+  const message = String(error?.message || '');
+  return error?.statusCode === 503
+    || /execution queue is unavailable|redis|bull|execution queue processor/i.test(message);
+}
+
+async function executeSubmission(payload, options = {}) {
+  if (options.useQueue === false || !isExecutionQueueEnabled()) {
+    return executeSubmissionDirect(payload);
+  }
+
+  try {
+    return await enqueueExecution(payload, {
+      priority: options.priority,
+    });
+  } catch (error) {
+    if (isDirectFallbackEnabled() && isQueueAvailabilityError(error)) {
+      console.warn(`Execution queue failed (${error.message}). Running locally for this request.`);
+      return executeSubmissionDirect(payload);
+    }
+
+    throw error;
+  }
+}
+
+async function checkJudge0Health() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
 
@@ -85,8 +126,22 @@ async function checkExecutionHealth() {
   }
 }
 
+async function checkExecutionHealth() {
+  const [judge0, queue] = await Promise.all([
+    checkJudge0Health(),
+    checkExecutionQueueHealth(),
+  ]);
+
+  return {
+    ...judge0,
+    ok: judge0.ok && queue.ok,
+    queue,
+  };
+}
+
 module.exports = {
   checkExecutionHealth,
   executeSubmission,
+  executeSubmissionDirect,
   JUDGE0_URL,
 };

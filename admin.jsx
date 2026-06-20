@@ -244,7 +244,7 @@ function AdminPortal({
           ...tc,
           actual: null,
           status: "error",
-          error: `Case ${index + 1}: ${error.message}`,
+          error: error.message,
         })),
         runtime: "N/A",
         status: "failed",

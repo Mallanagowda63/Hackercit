@@ -1089,8 +1089,12 @@ async function requestExecutionResult({ language, sourceCode, fnName, testCases 
 
     return data;
   } catch (error) {
+    const message = error.message || "Execution failed.";
+    const needsServerHint = /Failed to fetch|Cannot reach backend|not configured|received HTML/i.test(message);
     throw new Error(
-      `${error.message || "Execution failed."} Judge0 execution needs the local server running with "node hacker.js" and internet access.`
+      needsServerHint
+        ? `${message} Start the local server with "node hacker.js" and make sure Judge0 is reachable.`
+        : message
     );
   }
 }
@@ -3672,10 +3676,6 @@ function CodingPlatform() {
     setView("contestResult");
   };
 
-  const goBackFromAdmin = () => {
-    setView("home");
-  };
-
   const goBackFromProblem = () => {
     if (problemNavigationSource === "contest" && contestEntered) {
       finishContest("Ended because you left the test screen.");
@@ -4179,7 +4179,7 @@ function CodingPlatform() {
         ...tc,
         actual: null,
         status: "error",
-        error: `Case ${index + 1}: ${message}`,
+        error: message,
       }));
 
     try {
@@ -4363,7 +4363,7 @@ function CodingPlatform() {
         ...tc,
         actual: null,
         status: "error",
-        error: `Case ${i+1}: ${error.message}${deploymentHint}${isSubmit ? " Submission was not saved." : ""}`
+        error: `${error.message}${deploymentHint}${isSubmit ? " Submission was not saved." : ""}`
       }));
       status = "failed";
     }
@@ -4885,23 +4885,6 @@ function CodingPlatform() {
       letterSpacing:"0.08em",
       textTransform:"uppercase",
       boxShadow:"0 10px 24px rgba(0,0,0,0.16)",
-    },
-    adminBackButton: {
-      display:"inline-flex",
-      alignItems:"center",
-      gap:8,
-      padding:"10px 14px",
-      borderRadius:999,
-      border:`1px solid ${ADMIN_THEME.divider}`,
-      background:ADMIN_THEME.card,
-      color:ADMIN_THEME.textSecondary,
-      cursor:"pointer",
-      fontSize:12,
-      fontWeight:700,
-      fontFamily:"'Space Grotesk',sans-serif",
-      letterSpacing:"0.08em",
-      textTransform:"uppercase",
-      boxShadow:ADMIN_THEME.shadowSoft,
     },
     adminAlert: (tone) => ({
       borderRadius:14,
@@ -5666,12 +5649,6 @@ function CodingPlatform() {
 
         <div style={S.adminShell}>
           {renderQuestionUploadSuccessModal()}
-          <div style={S.backButtonRow}>
-            <button onClick={goBackFromAdmin} style={S.adminBackButton}>
-              <span aria-hidden="true">←</span>
-              <span>Back</span>
-            </button>
-          </div>
           {adminWarning && (
             <div style={S.adminAlert("warning")}>
               {adminWarning}

@@ -1,11 +1,19 @@
 services:
+  - type: keyvalue
+    name: hackercit-queue
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
   - type: web
     name: hackercit
     runtime: node
+    plan: starter
     rootDir: .
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/health
+    maxShutdownDelaySeconds: 120
     envVars:
       - key: NODE_ENV
         value: production
@@ -15,5 +23,76 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: JUDGE0_URL
+        sync: false
+      - key: JUDGE0_AUTH_TOKEN
+        sync: false
+      - key: JUDGE0_AUTH_USER
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: hackercit-queue
+          property: connectionString
       - key: START_BACKEND
         value: "true"
+      - key: START_WORKER
+        value: "false"
+      - key: EXECUTION_QUEUE_ENABLED
+        value: "true"
+      - key: EXECUTION_QUEUE_PROCESS_IN_APP
+        value: "false"
+      - key: EXECUTION_QUEUE_LOCAL_FALLBACK
+        value: "false"
+      - key: EXECUTION_QUEUE_DIRECT_FALLBACK
+        value: "false"
+      - key: EXECUTION_QUEUE_RESULT_TIMEOUT_MS
+        value: "600000"
+      - key: EXECUTION_QUEUE_ATTEMPTS
+        value: "2"
+      - key: EXECUTION_QUEUE_JOB_TIMEOUT_MS
+        value: "60000"
+
+  - type: worker
+    name: hackercit-execution-worker
+    runtime: node
+    plan: starter
+    numInstances: 2
+    rootDir: .
+    buildCommand: npm install
+    startCommand: npm run worker
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JUDGE0_URL
+        sync: false
+      - key: JUDGE0_AUTH_TOKEN
+        sync: false
+      - key: JUDGE0_AUTH_USER
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: hackercit-queue
+          property: connectionString
+      - key: EXECUTION_QUEUE_ENABLED
+        value: "true"
+      - key: EXECUTION_QUEUE_LOCAL_FALLBACK
+        value: "false"
+      - key: EXECUTION_QUEUE_DIRECT_FALLBACK
+        value: "false"
+      - key: EXECUTION_QUEUE_CONCURRENCY
+        value: "10"
+      - key: EXECUTION_QUEUE_ATTEMPTS
+        value: "2"
+      - key: EXECUTION_QUEUE_JOB_TIMEOUT_MS
+        value: "60000"

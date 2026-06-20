@@ -2,14 +2,19 @@ import { createServer } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { spawn } from "node:child_process";
-import { runSubmission } from "./runner/index.js";
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 const rootDir = process.cwd();
-const backendProxyBase = (process.env.BACKEND_API_PROXY_URL || "http://127.0.0.1:4000").replace(/\/+$/, "");
-const shouldStartBackend = process.env.START_BACKEND !== "false" && backendProxyBase === "http://127.0.0.1:4000";
+const backendPort = process.env.BACKEND_PORT || "4000";
+const defaultBackendProxyBase = `http://127.0.0.1:${backendPort}`;
+const backendProxyBase = (process.env.BACKEND_API_PROXY_URL || defaultBackendProxyBase).replace(/\/+$/, "");
+const shouldStartBackend = process.env.START_BACKEND !== "false" && backendProxyBase === defaultBackendProxyBase;
+const shouldStartWorker = shouldStartBackend
+  && process.env.START_WORKER === "true"
+  && process.env.EXECUTION_QUEUE_ENABLED !== "false";
 let backendProcess = null;
+let workerProcess = null;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -32,7 +37,8 @@ function startBackendServer() {
     cwd: join(rootDir, "backend"),
     env: {
       ...process.env,
-      PORT: process.env.BACKEND_PORT || "4000",
+      PORT: backendPort,
+      EXECUTION_QUEUE_PROCESS_IN_APP: process.env.EXECUTION_QUEUE_PROCESS_IN_APP || (shouldStartWorker ? "false" : "true"),
     },
     stdio: ["ignore", "inherit", "inherit"],
     windowsHide: true,
@@ -42,11 +48,31 @@ function startBackendServer() {
     if (code === 0 || signal) return;
     console.error(`Backend process exited with code ${code}. Database API routes will be unavailable until it is restarted.`);
   });
+
+  if (!shouldStartWorker) return;
+
+  workerProcess = spawn(process.execPath, ["src/worker.js"], {
+    cwd: join(rootDir, "backend"),
+    env: {
+      ...process.env,
+    },
+    stdio: ["ignore", "inherit", "inherit"],
+    windowsHide: true,
+  });
+
+  workerProcess.on("exit", (code, signal) => {
+    if (code === 0 || signal) return;
+    console.error(`Execution worker exited with code ${code}. Queued execution jobs will not complete until it is restarted.`);
+  });
 }
 
 function stopBackendServer() {
   if (backendProcess && !backendProcess.killed) {
     backendProcess.kill();
+  }
+
+  if (workerProcess && !workerProcess.killed) {
+    workerProcess.kill();
   }
 }
 
@@ -151,41 +177,14 @@ createServer(async (req, res) => {
   const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const pathname = requestUrl.pathname;
 
-  if (req.method === "GET" && pathname === "/api/health") {
-    sendJson(res, 200, {
-      ok: true,
-      service: "devorbit",
-      executionProvider: "Judge0",
-      judge0Url: (process.env.JUDGE0_URL || "https://ce.judge0.com").replace(/\/+$/, ""),
-      host,
-      port,
-    });
+  if (pathname === "/run") {
+    const proxyUrl = new URL(requestUrl.toString());
+    proxyUrl.pathname = "/api/run";
+    await proxyBackendRequest(req, res, proxyUrl);
     return;
   }
 
-  if (req.method === "GET" && pathname === "/api/run/health") {
-    sendJson(res, 200, {
-      ok: true,
-      service: "runner",
-      executionProvider: "Judge0",
-      judge0Url: (process.env.JUDGE0_URL || "https://ce.judge0.com").replace(/\/+$/, ""),
-    });
-    return;
-  }
-
-  if (req.method === "POST" && (pathname === "/api/run" || pathname === "/run")) {
-    try {
-      const payload = await readJsonBody(req);
-      const result = await runSubmission(payload);
-      sendJson(res, 200, result);
-    } catch (error) {
-      const statusCode = error.statusCode || 500;
-      sendJson(res, statusCode, { error: error.message || "Execution failed." });
-    }
-    return;
-  }
-
-  if (pathname.startsWith("/api/") && pathname !== "/api/health") {
+  if (pathname.startsWith("/api/")) {
     await proxyBackendRequest(req, res, requestUrl);
     return;
   }
