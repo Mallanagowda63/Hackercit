@@ -42,7 +42,7 @@ async function executeSubmissionDirect(payload) {
 function isQueueAvailabilityError(error) {
   const message = String(error?.message || '');
   return error?.statusCode === 503
-    || /execution queue is unavailable|redis|bull|execution queue processor/i.test(message);
+    || /execution queue is unavailable|execution queue timed out|redis|bull|execution queue processor/i.test(message);
 }
 
 async function executeSubmission(payload, options = {}) {

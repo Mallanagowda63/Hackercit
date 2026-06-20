@@ -49,11 +49,11 @@ services:
       - key: EXECUTION_QUEUE_ENABLED
         value: "true"
       - key: EXECUTION_QUEUE_PROCESS_IN_APP
-        value: "false"
+        value: "true"
       - key: EXECUTION_QUEUE_LOCAL_FALLBACK
         value: "false"
       - key: EXECUTION_QUEUE_DIRECT_FALLBACK
-        value: "false"
+        value: "true"
       - key: EXECUTION_QUEUE_RESULT_TIMEOUT_MS
         value: "600000"
       - key: EXECUTION_QUEUE_ATTEMPTS
