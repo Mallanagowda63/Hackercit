@@ -7,6 +7,8 @@ const prisma = require('./prismaClient');
 const { executeSubmissionDirect } = require('./lib/executionService');
 const {
   checkExecutionQueueHealth,
+  isDirectFallbackEnabled,
+  isLocalFallbackEnabled,
   registerExecutionProcessor,
 } = require('./lib/executionQueue');
 
@@ -24,7 +26,11 @@ const runRoutes = require('./routes/run');
 const submissionRoutes = require('./routes/submission');
 const testRoutes = require('./routes/test');
 
-if (process.env.EXECUTION_QUEUE_PROCESS_IN_APP !== 'false') {
+const shouldRegisterInAppExecutionProcessor = process.env.EXECUTION_QUEUE_PROCESS_IN_APP !== 'false'
+  || isLocalFallbackEnabled()
+  || isDirectFallbackEnabled();
+
+if (shouldRegisterInAppExecutionProcessor) {
   const queueRegistration = registerExecutionProcessor(executeSubmissionDirect, { lazy: true });
   if (queueRegistration.started) {
     logger.info(
@@ -38,6 +44,8 @@ if (process.env.EXECUTION_QUEUE_PROCESS_IN_APP !== 'false') {
   } else if (queueRegistration.reason === 'disabled') {
     logger.warn('Execution queue processor not started because the queue is disabled');
   }
+} else {
+  logger.info('Execution queue processor will not run in this backend process');
 }
 
 app.use('/api/auth', authRoutes);

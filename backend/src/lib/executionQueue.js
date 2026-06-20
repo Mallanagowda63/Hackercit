@@ -40,6 +40,14 @@ function isLocalFallbackEnabled() {
   return process.env.NODE_ENV !== 'production';
 }
 
+function isDirectFallbackEnabled() {
+  const configured = String(process.env.EXECUTION_QUEUE_DIRECT_FALLBACK || '').trim().toLowerCase();
+  if (ENABLED_VALUES.has(configured)) return true;
+  if (DISABLED_VALUES.has(configured)) return false;
+
+  return process.env.NODE_ENV !== 'production';
+}
+
 function redactRedisUrl(value) {
   try {
     const url = new URL(value);
@@ -429,5 +437,7 @@ module.exports = {
   getExecutionQueue,
   getExecutionQueueConfig,
   isExecutionQueueEnabled,
+  isLocalFallbackEnabled,
+  isDirectFallbackEnabled,
   registerExecutionProcessor,
 };

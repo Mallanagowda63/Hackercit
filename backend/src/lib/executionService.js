@@ -1,6 +1,7 @@
 const {
   checkExecutionQueueHealth,
   enqueueExecution,
+  isDirectFallbackEnabled,
   isExecutionQueueEnabled,
 } = require('./executionQueue');
 
@@ -8,8 +9,6 @@ const JUDGE0_URL = String(process.env.JUDGE0_URL || 'https://ce.judge0.com').rep
 const HEALTH_TIMEOUT_MS = Number(process.env.JUDGE0_HEALTH_TIMEOUT_MS || 8000);
 const JUDGE0_AUTH_TOKEN = String(process.env.JUDGE0_AUTH_TOKEN || '').trim();
 const JUDGE0_AUTH_USER = String(process.env.JUDGE0_AUTH_USER || '').trim();
-const DIRECT_FALLBACK_DISABLED_VALUES = new Set(['0', 'false', 'off', 'disabled', 'no']);
-const DIRECT_FALLBACK_ENABLED_VALUES = new Set(['1', 'true', 'on', 'enabled', 'yes']);
 
 let runnerModulePromise = null;
 
@@ -38,14 +37,6 @@ function buildJudge0Headers() {
 async function executeSubmissionDirect(payload) {
   const runner = await getRunnerModule();
   return runner.runSubmission(payload);
-}
-
-function isDirectFallbackEnabled() {
-  const configured = String(process.env.EXECUTION_QUEUE_DIRECT_FALLBACK || '').trim().toLowerCase();
-  if (DIRECT_FALLBACK_ENABLED_VALUES.has(configured)) return true;
-  if (DIRECT_FALLBACK_DISABLED_VALUES.has(configured)) return false;
-
-  return process.env.NODE_ENV !== 'production';
 }
 
 function isQueueAvailabilityError(error) {
