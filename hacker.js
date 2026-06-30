@@ -13,6 +13,7 @@ const shouldStartBackend = process.env.START_BACKEND !== "false" && backendProxy
 const shouldStartWorker = shouldStartBackend
   && process.env.START_WORKER === "true"
   && process.env.EXECUTION_QUEUE_ENABLED !== "false";
+const isProduction = process.env.NODE_ENV === "production";
 let backendProcess = null;
 let workerProcess = null;
 
@@ -39,6 +40,8 @@ function startBackendServer() {
       ...process.env,
       PORT: backendPort,
       EXECUTION_QUEUE_PROCESS_IN_APP: process.env.EXECUTION_QUEUE_PROCESS_IN_APP || (shouldStartWorker ? "false" : "true"),
+      EXECUTION_QUEUE_LOCAL_FALLBACK: process.env.EXECUTION_QUEUE_LOCAL_FALLBACK || (isProduction ? "false" : "true"),
+      EXECUTION_QUEUE_DIRECT_FALLBACK: process.env.EXECUTION_QUEUE_DIRECT_FALLBACK || (isProduction ? "false" : "true"),
     },
     stdio: ["ignore", "inherit", "inherit"],
     windowsHide: true,
