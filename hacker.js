@@ -10,12 +10,7 @@ const backendPort = process.env.BACKEND_PORT || "4000";
 const defaultBackendProxyBase = `http://127.0.0.1:${backendPort}`;
 const backendProxyBase = (process.env.BACKEND_API_PROXY_URL || defaultBackendProxyBase).replace(/\/+$/, "");
 const shouldStartBackend = process.env.START_BACKEND !== "false" && backendProxyBase === defaultBackendProxyBase;
-const shouldStartWorker = shouldStartBackend
-  && process.env.START_WORKER === "true"
-  && process.env.EXECUTION_QUEUE_ENABLED !== "false";
-const isProduction = process.env.NODE_ENV === "production";
 let backendProcess = null;
-let workerProcess = null;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -39,9 +34,6 @@ function startBackendServer() {
     env: {
       ...process.env,
       PORT: backendPort,
-      EXECUTION_QUEUE_PROCESS_IN_APP: process.env.EXECUTION_QUEUE_PROCESS_IN_APP || (shouldStartWorker ? "false" : "true"),
-      EXECUTION_QUEUE_LOCAL_FALLBACK: process.env.EXECUTION_QUEUE_LOCAL_FALLBACK || (isProduction ? "false" : "true"),
-      EXECUTION_QUEUE_DIRECT_FALLBACK: process.env.EXECUTION_QUEUE_DIRECT_FALLBACK || (isProduction ? "false" : "true"),
     },
     stdio: ["ignore", "inherit", "inherit"],
     windowsHide: true,
@@ -52,30 +44,11 @@ function startBackendServer() {
     console.error(`Backend process exited with code ${code}. Database API routes will be unavailable until it is restarted.`);
   });
 
-  if (!shouldStartWorker) return;
-
-  workerProcess = spawn(process.execPath, ["src/worker.js"], {
-    cwd: join(rootDir, "backend"),
-    env: {
-      ...process.env,
-    },
-    stdio: ["ignore", "inherit", "inherit"],
-    windowsHide: true,
-  });
-
-  workerProcess.on("exit", (code, signal) => {
-    if (code === 0 || signal) return;
-    console.error(`Execution worker exited with code ${code}. Queued execution jobs will not complete until it is restarted.`);
-  });
 }
 
 function stopBackendServer() {
   if (backendProcess && !backendProcess.killed) {
     backendProcess.kill();
-  }
-
-  if (workerProcess && !workerProcess.killed) {
-    workerProcess.kill();
   }
 }
 

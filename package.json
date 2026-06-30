@@ -9,8 +9,7 @@
   "scripts": {
     "dev": "node hacker.js",
     "postinstall": "npm install --prefix backend",
-    "start": "node hacker.js",
-    "worker": "npm run worker --prefix backend"
+    "start": "node hacker.js"
   },
   "dependencies": {
     "@babel/standalone": "^7.28.5",

@@ -7,46 +7,15 @@ services:
     networks:
       - hacknet
 
-  redis:
-    image: redis:7
-    command: ["redis-server","--appendonly","yes"]
-    networks:
-      - hacknet
-
   backend:
     build:
       context: ..
       dockerfile: backend/Dockerfile
     env_file:
       - ../backend/.env.example
-    environment:
-      REDIS_URL: redis://redis:6379
-      EXECUTION_QUEUE_PROCESS_IN_APP: "false"
-      EXECUTION_QUEUE_LOCAL_FALLBACK: "false"
-      EXECUTION_QUEUE_DIRECT_FALLBACK: "false"
-      EXECUTION_QUEUE_RESULT_TIMEOUT_MS: "600000"
     ports:
       - "4000:4000"
     depends_on:
-      - mongo
-      - redis
-    networks:
-      - hacknet
-
-  worker:
-    build:
-      context: ..
-      dockerfile: docker/worker/Dockerfile
-    env_file:
-      - ../backend/.env.example
-    environment:
-      REDIS_URL: redis://redis:6379
-      EXECUTION_QUEUE_PROCESS_IN_APP: "false"
-      EXECUTION_QUEUE_LOCAL_FALLBACK: "false"
-      EXECUTION_QUEUE_DIRECT_FALLBACK: "false"
-      EXECUTION_QUEUE_CONCURRENCY: "10"
-    depends_on:
-      - redis
       - mongo
     networks:
       - hacknet
