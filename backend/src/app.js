@@ -7,7 +7,6 @@ const prisma = require('./prismaClient');
 const { executeSubmissionDirect } = require('./lib/executionService');
 const {
   checkExecutionQueueHealth,
-  isDirectFallbackEnabled,
   isLocalFallbackEnabled,
   registerExecutionProcessor,
 } = require('./lib/executionQueue');
@@ -27,8 +26,7 @@ const submissionRoutes = require('./routes/submission');
 const testRoutes = require('./routes/test');
 
 const shouldRegisterInAppExecutionProcessor = process.env.EXECUTION_QUEUE_PROCESS_IN_APP !== 'false'
-  || isLocalFallbackEnabled()
-  || isDirectFallbackEnabled();
+  || isLocalFallbackEnabled();
 
 if (shouldRegisterInAppExecutionProcessor) {
   const queueRegistration = registerExecutionProcessor(executeSubmissionDirect, { lazy: true });
