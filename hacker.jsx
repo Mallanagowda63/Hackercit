@@ -3869,7 +3869,8 @@ function CodingPlatform() {
     const department = authDepartment.trim();
     const email = authEmail.trim();
     const password = authPassword.trim();
-    const emailPattern = /^[A-Z0-9._%+-]+@cambridge\.edu\.in$/i;
+   // const emailPattern = /^[A-Z0-9._%+-]+@cambridge\.edu\.in$/i;
+    const emailPattern = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
 
     if (!authMode || !authRole) {
       setAuthError("Choose login or sign up and select a role first.");
