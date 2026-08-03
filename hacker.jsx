@@ -3899,7 +3899,7 @@ function CodingPlatform() {
     }
 
     if (!emailPattern.test(email)) {
-      setAuthError("Only @cambridge.edu.in email addresses are allowed.");
+      setAuthError("Only  email addresses are allowed.");
       return;
     }
 
@@ -5597,7 +5597,7 @@ function CodingPlatform() {
 
                     <div>
                       <label style={S.fieldLabel}>Email ID</label>
-                      <input value={authEmail} onChange={e=>{ setAuthEmail(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="name@cambridge.edu.in" />
+                      <input value={authEmail} onChange={e=>{ setAuthEmail(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="name@gmail.com" />
                     </div>
                     <div>
                       <label style={S.fieldLabel}>Password</label>
