@@ -1,8 +1,9 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 const express = require('express');
 const cors = require('cors');
 const pino = require('pino');
 const pinoHttp = require('pino-http');
+const prisma = require('./prismaClient');
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const app = express();
@@ -27,7 +28,23 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/admin/reports', reportsRoutes);
 
-app.get('/health', (req, res) => res.json({ ok: true, service: 'backend' }));
-app.get('/api/health', (req, res) => res.json({ ok: true, service: 'backend' }));
+async function health(req, res) {
+  const database = await prisma.$ping()
+    .then(() => ({ ok: true }))
+    .catch((error) => ({ ok: false, error: error.message || 'Database health check failed.' }));
+  const ok = database.ok;
+
+  return res.status(ok ? 200 : 503).json({
+    ok,
+    service: 'backend',
+    database,
+    execution: {
+      mode: 'direct',
+    },
+  });
+}
+
+app.get('/health', health);
+app.get('/api/health', health);
 
 module.exports = { app, logger };

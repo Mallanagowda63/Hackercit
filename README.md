@@ -1,6 +1,6 @@
-# CodeArena
+# DevOrbit
 
-This app serves a static frontend and an Express backend API. Code execution is handled through Judge0.
+This app serves a static frontend and an Express backend API. Code execution runs directly through the configured Judge0-compatible execution provider.
 
 ## Architecture
 
@@ -15,13 +15,14 @@ Judge0
 ## Local Run
 
 1. Install Node.js 20+.
-2. Start the frontend/static server from the repo root:
+2. Configure backend environment values in `backend/.env`.
+3. Start the app from the repo root:
 
 ```bash
 npm start
 ```
 
-3. Start the backend API:
+`npm start` launches the static frontend and backend API when using the default same-origin setup. To run the backend separately:
 
 ```bash
 cd backend
@@ -37,7 +38,9 @@ This repo includes the app code, backend API, and Judge0-based execution flow.
 
 - The frontend is served as static files.
 - The backend exposes the API routes.
-- The backend calls Judge0 directly for `/api/run` and submission execution.
+- The backend executes `/api/run` and submission jobs directly through Judge0.
+
+The included `render.yaml` deploys one web service. No Redis instance or background worker is required.
 
 Required backend env vars:
 
@@ -80,8 +83,15 @@ GET /api/run/health
 GET /health
 ```
 
+The health responses include database status and direct execution mode. In production, MongoDB and Judge0 must both be available for execution requests to succeed.
+
+## Achievement Badges
+
+- `Silver Solver` is awarded after more than 50 unique accepted problems.
+- `Gold Solver` is awarded at 100 or more unique accepted problems.
+- Badge tier and solved-problem count are persisted on the user record and refreshed from stored submissions.
+
 ## Notes
 
-- Judge0 is the recommended execution path for deployment.
-- The old Docker files are still in the repo as legacy local infrastructure, but deployment no longer depends on them.
-- The old Redis/Bull worker path is no longer used by the active `/api/run` and submission routes.
+- Judge0 is the execution provider.
+- The Docker Compose stack includes MongoDB and the backend.

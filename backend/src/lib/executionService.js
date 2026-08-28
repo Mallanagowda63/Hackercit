@@ -27,12 +27,16 @@ function buildJudge0Headers() {
   return headers;
 }
 
-async function executeSubmission(payload) {
+async function executeSubmissionDirect(payload) {
   const runner = await getRunnerModule();
   return runner.runSubmission(payload);
 }
 
-async function checkExecutionHealth() {
+async function executeSubmission(payload) {
+  return executeSubmissionDirect(payload);
+}
+
+async function checkJudge0Health() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
 
@@ -85,8 +89,19 @@ async function checkExecutionHealth() {
   }
 }
 
+async function checkExecutionHealth() {
+  const judge0 = await checkJudge0Health();
+
+  return {
+    ...judge0,
+    ok: judge0.ok,
+    executionMode: 'direct',
+  };
+}
+
 module.exports = {
   checkExecutionHealth,
   executeSubmission,
+  executeSubmissionDirect,
   JUDGE0_URL,
 };

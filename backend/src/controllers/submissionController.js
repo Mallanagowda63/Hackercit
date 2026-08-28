@@ -1,5 +1,6 @@
 const prisma = require('../prismaClient');
 const { executeSubmission } = require('../lib/executionService');
+const { getBadgePresentation, resolveBadgeForSolvedCount, syncUserBadge } = require('../lib/badgeService');
 const LEVEL_LABELS = {
   0: 'No Submission',
   1: 'Easy',
@@ -179,6 +180,7 @@ function buildScoreCard(student, submissions, problemsById, activeAssignment) {
   const contestScore = contestMetrics.acceptedWeight;
   const overallScore = overallMetrics.acceptedWeight;
   const globalScore = overallMetrics.acceptedWeight;
+  const earnedBadge = resolveBadgeForSolvedCount(overallMetrics.solved);
 
   return {
     userId: student.id,
@@ -186,6 +188,9 @@ function buildScoreCard(student, submissions, problemsById, activeAssignment) {
     email: student.email,
     usn: student.usn || '',
     department: student.department || '',
+    badgeTier: earnedBadge?.tier || student.badgeTier || null,
+    badgeLabel: earnedBadge?.label || getBadgePresentation(student).badgeLabel,
+    solvedProblemCount: overallMetrics.solved,
     rating: overallScore,
     avatarGradient: getAvatarGradient(student.email || student.id),
     contest: {
@@ -294,13 +299,16 @@ exports.runSample = async (req, res) => {
       return res.status(404).json({ error: 'problem not found' });
     }
 
-    const execution = await executeSubmission({
-      language,
-      sourceCode: code,
-      fnName: problem.fnName,
-      testCases: Array.isArray(problem.testCases) ? problem.testCases : [],
-      input: customInput || '',
-    });
+    const execution = await executeSubmission(
+      {
+        language,
+        sourceCode: code,
+        fnName: problem.fnName,
+        testCases: Array.isArray(problem.testCases) ? problem.testCases : [],
+        input: customInput || '',
+      },
+      { priority: 10 },
+    );
     const tests = Array.isArray(execution.tests) ? execution.tests : [];
     const storedStatus = resolveSubmissionStatus(tests);
     const submission = await prisma.submission.create({
@@ -315,9 +323,12 @@ exports.runSample = async (req, res) => {
       },
     });
 
+    const userWithBadge = await syncUserBadge(req.user.id);
+
     return res.json({
       submissionId: submission.id,
       submission,
+      badge: getBadgePresentation(userWithBadge || req.user),
       passed: Boolean(execution.passed),
       status: execution.status || (storedStatus === 'ACCEPTED' ? 'passed' : 'failed'),
       tests,
@@ -344,12 +355,15 @@ exports.submit = async (req, res) => {
       return res.status(404).json({ error: 'problem not found' });
     }
 
-    const execution = await executeSubmission({
-      language,
-      sourceCode: code,
-      fnName: problem.fnName,
-      testCases: Array.isArray(problem.testCases) ? problem.testCases : [],
-    });
+    const execution = await executeSubmission(
+      {
+        language,
+        sourceCode: code,
+        fnName: problem.fnName,
+        testCases: Array.isArray(problem.testCases) ? problem.testCases : [],
+      },
+      { priority: 1 },
+    );
     const tests = Array.isArray(execution.tests) ? execution.tests : [];
     const storedStatus = resolveSubmissionStatus(tests);
     const submission = await prisma.submission.create({
@@ -364,8 +378,11 @@ exports.submit = async (req, res) => {
       },
     });
 
+    const userWithBadge = await syncUserBadge(req.user.id);
+
     return res.json({
       submission,
+      badge: getBadgePresentation(userWithBadge || req.user),
       passed: Boolean(execution.passed),
       status: execution.status || (storedStatus === 'ACCEPTED' ? 'passed' : 'failed'),
       tests,

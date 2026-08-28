@@ -1,12 +1,16 @@
 import { createServer } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
-import { runSubmission } from "./runner/index.js";
+import { spawn } from "node:child_process";
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 const rootDir = process.cwd();
-const backendProxyBase = (process.env.BACKEND_API_PROXY_URL || "http://127.0.0.1:4000").replace(/\/+$/, "");
+const backendPort = process.env.BACKEND_PORT || "4000";
+const defaultBackendProxyBase = `http://127.0.0.1:${backendPort}`;
+const backendProxyBase = (process.env.BACKEND_API_PROXY_URL || defaultBackendProxyBase).replace(/\/+$/, "");
+const shouldStartBackend = process.env.START_BACKEND !== "false" && backendProxyBase === defaultBackendProxyBase;
+let backendProcess = null;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -14,11 +18,38 @@ const contentTypes = {
   ".jsx": "text/babel; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".pdf": "application/pdf",
 };
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+function startBackendServer() {
+  if (!shouldStartBackend) return;
+
+  backendProcess = spawn(process.execPath, ["src/index.js"], {
+    cwd: join(rootDir, "backend"),
+    env: {
+      ...process.env,
+      PORT: backendPort,
+    },
+    stdio: ["ignore", "inherit", "inherit"],
+    windowsHide: true,
+  });
+
+  backendProcess.on("exit", (code, signal) => {
+    if (code === 0 || signal) return;
+    console.error(`Backend process exited with code ${code}. Database API routes will be unavailable until it is restarted.`);
+  });
+
+}
+
+function stopBackendServer() {
+  if (backendProcess && !backendProcess.killed) {
+    backendProcess.kill();
+  }
 }
 
 function readRequestBody(req, limit = 1024 * 1024) {
@@ -101,12 +132,22 @@ async function proxyBackendRequest(req, res, requestUrl) {
     res.end(responseBody);
   } catch (error) {
     sendJson(res, 502, {
-      error: "Unable to reach backend API proxy.",
+      error: "Unable to reach backend API. Start the backend with npm start --prefix backend.",
       detail: error.message,
       backendProxyBase,
     });
   }
 }
+
+startBackendServer();
+process.on("SIGINT", () => {
+  stopBackendServer();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  stopBackendServer();
+  process.exit(0);
+});
 
 createServer(async (req, res) => {
   const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -124,19 +165,14 @@ createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "POST" && (pathname === "/api/run" || pathname === "/run")) {
-    try {
-      const payload = await readJsonBody(req);
-      const result = await runSubmission(payload);
-      sendJson(res, 200, result);
-    } catch (error) {
-      const statusCode = error.statusCode || 500;
-      sendJson(res, statusCode, { error: error.message || "Execution failed." });
-    }
+  if (pathname === "/run") {
+    const proxyUrl = new URL(requestUrl.toString());
+    proxyUrl.pathname = "/api/run";
+    await proxyBackendRequest(req, res, proxyUrl);
     return;
   }
 
-  if (pathname.startsWith("/api/") && pathname !== "/api/health") {
+  if (pathname.startsWith("/api/")) {
     await proxyBackendRequest(req, res, requestUrl);
     return;
   }
@@ -160,5 +196,5 @@ createServer(async (req, res) => {
   createReadStream(filePath).pipe(res);
 }).listen(port, host, () => {
   const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
-  console.log(`devOrbit is running at http://${displayHost}:${port}`);
+  console.log(`DevOrbit is running at http://${displayHost}:${port}`);
 });

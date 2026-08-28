@@ -2,7 +2,7 @@ const { checkExecutionHealth, executeSubmission } = require('../lib/executionSer
 
 exports.run = async (req, res) => {
   try {
-    const payload = await executeSubmission(req.body || {});
+    const payload = await executeSubmission(req.body || {}, { priority: 10 });
     return res.status(200).json(payload);
   } catch (error) {
     const statusCode = error.statusCode || 502;
