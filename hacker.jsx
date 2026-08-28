@@ -5646,7 +5646,6 @@ function CodingPlatform() {
   );
 
   const renderDeleteQuestionModal = () => deletingProblem ? (
-  const renderDeleteQuestionModal = () => deletingProblem ? (
     <div style={S.modalBackdrop} onClick={() => !deletingQuestion && setDeletingProblem(null)}>
       <div
         style={{
@@ -7048,6 +7047,9 @@ function CodingPlatform() {
           </div>
         </div>
       </div>
+    );
+  };
+
   const downloadReportCSV = () => {
     if (!activeTestReport) return;
     const { test, stats, students } = activeTestReport;
