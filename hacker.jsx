@@ -8481,6 +8481,7 @@ function CodingPlatform() {
               )}
             </div>
               </div>
+            </div>
 
               <div style={{ flex: "1 1 240px", maxWidth: 280, minWidth: 220 }}>
                 {renderRightActivityPanel()}
@@ -9845,6 +9846,7 @@ function CodingPlatform() {
           />
         </div>
       )}
+    </div>
     </div>
   );
 }
