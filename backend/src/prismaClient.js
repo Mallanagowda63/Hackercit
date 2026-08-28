@@ -1,4 +1,12 @@
+const dns = require('dns');
 const { MongoClient, ObjectId } = require('mongodb');
+
+// Ensure reliable DNS resolution for mongodb+srv connection strings
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1', ...dns.getServers()]);
+} catch (err) {
+  try { dns.setServers(['8.8.8.8', '1.1.1.1']); } catch (_) {}
+}
 
 function normalizeConnectionString(value) {
   const trimmed = String(value || '').trim();
@@ -215,6 +223,14 @@ function applyDefaults(modelName, data) {
       createdAt: now,
     },
     loginEvent: {
+      createdAt: now,
+    },
+    assessmentSubmission: {
+      theoryScore: 0,
+      codingScore: 0,
+      totalScore: 0,
+      maxScore: 0,
+      percentage: 0,
       createdAt: now,
     },
   };
@@ -454,6 +470,7 @@ prisma = {
   testAssignment: new MongoModel('testAssignment', 'TestAssignment'),
   notification: new MongoModel('notification', 'Notification'),
   loginEvent: new MongoModel('loginEvent', 'LoginEvent'),
+  assessmentSubmission: new MongoModel('assessmentSubmission', 'AssessmentSubmission'),
   async $transaction(operations) {
     return Promise.all(operations);
   },

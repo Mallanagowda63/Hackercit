@@ -8,25 +8,26 @@ datasource db {
 }
 
 model User {
-  id                 String              @id @default(auto()) @map("_id") @db.ObjectId
-  email              String              @unique
-  name               String?
-  usn                String?
-  department         String?
-  password           String
-  role               Role                @default(USER)
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  lastLoginAt        DateTime?
-  loginCount         Int                 @default(0)
-  submissions        Submission[]
-  loginEvents        LoginEvent[]
-  notifications      Notification[]
-  verificationTokens VerificationToken[]
-  resetTokens        ResetToken[]
-  badgeIds           String[]            @default([]) @db.ObjectId
-  badges             Badge[]             @relation("UserBadges", fields: [badgeIds], references: [id])
-  verified           Boolean             @default(false)
+  id                    String                 @id @default(auto()) @map("_id") @db.ObjectId
+  email                 String                 @unique
+  name                  String?
+  usn                   String?
+  department            String?
+  password              String
+  role                  Role                   @default(USER)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  lastLoginAt           DateTime?
+  loginCount            Int                    @default(0)
+  submissions           Submission[]
+  assessmentSubmissions AssessmentSubmission[]
+  loginEvents           LoginEvent[]
+  notifications         Notification[]
+  verificationTokens    VerificationToken[]
+  resetTokens           ResetToken[]
+  badgeIds              String[]               @default([]) @db.ObjectId
+  badges                Badge[]                @relation("UserBadges", fields: [badgeIds], references: [id])
+  verified              Boolean                @default(false)
 }
 
 model VerificationToken {
@@ -46,23 +47,28 @@ model ResetToken {
 }
 
 model Problem {
-  id          String       @id @default(auto()) @map("_id") @db.ObjectId
-  legacyId    Int?         @unique
-  title       String
-  slug        String       @unique
-  fnName      String?
-  difficulty  Difficulty
-  tags        String[]     @default([])
-  acceptance  String?
-  statement   String
-  examples    Json?
-  starterCode Json?
-  testCases   Json?
-  constraints String[]     @default([])
-  samples     Json
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  submissions Submission[]
+  id            String       @id @default(auto()) @map("_id") @db.ObjectId
+  type          String       @default("coding")
+  legacyId      Int?         @unique
+  title         String
+  slug          String       @unique
+  fnName        String?
+  difficulty    Difficulty
+  tags          String[]     @default([])
+  acceptance    String?
+  statement     String
+  examples      Json?
+  starterCode   Json?
+  testCases     Json?
+  constraints   String[]     @default([])
+  samples       Json?
+  options       Json?
+  correctAnswer String?
+  explanation   String?
+  marks         Int          @default(10)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  submissions   Submission[]
 }
 
 model Submission {
@@ -78,6 +84,22 @@ model Submission {
   memoryKb  Int?
   createdAt DateTime  @default(now())
   results   Json?
+}
+
+model AssessmentSubmission {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  assignmentId      String   @db.ObjectId
+  userId            String   @db.ObjectId
+  user              User     @relation(fields: [userId], references: [id])
+  theoryAnswers     Json?
+  codingSubmissions Json?
+  theoryScore       Float    @default(0)
+  codingScore       Float    @default(0)
+  totalScore        Float    @default(0)
+  maxScore          Float    @default(0)
+  percentage        Float    @default(0)
+  details           Json?
+  createdAt         DateTime @default(now())
 }
 
 model Badge {

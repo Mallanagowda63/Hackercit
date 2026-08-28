@@ -17,6 +17,7 @@ const problemRoutes = require('./routes/problem');
 const runRoutes = require('./routes/run');
 const submissionRoutes = require('./routes/submission');
 const testRoutes = require('./routes/test');
+const reportsRoutes = require('./routes/reports');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -24,6 +25,7 @@ app.use('/api/problems', problemRoutes);
 app.use('/api/run', runRoutes);
 app.use('/api/submissions', submissionRoutes);
 app.use('/api/tests', testRoutes);
+app.use('/api/admin/reports', reportsRoutes);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'backend' }));
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'backend' }));

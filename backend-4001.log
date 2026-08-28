@@ -1,0 +1,5 @@
+
+> hackercit-backend@0.1.0 start
+> node src/index.js
+
+{"level":30,"time":1785770249042,"pid":9884,"hostname":"Mallanagowda","port":"4001","msg":"Backend listening"}

@@ -78,25 +78,116 @@ function sameValue(left, right) {
   return String(left ?? "") === String(right ?? "");
 }
 
+function cleanExampleField(value) {
+  if (value === null || value === undefined) return "";
+  let str = String(value).trim();
+  str = str.replace(/^(input|output):\s*/i, "").trim();
+  return str;
+}
+
+function parseExamplesList(rawExamples) {
+  if (!rawExamples) return [];
+
+  if (typeof rawExamples === "string") {
+    const trimmed = rawExamples.trim();
+    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+      try {
+        rawExamples = JSON.parse(trimmed);
+      } catch (e) {
+        // Not JSON
+      }
+    }
+  }
+
+  if (typeof rawExamples === "string") {
+    const text = rawExamples.trim();
+    const blocks = text.split(/(?:Example\s*\d+:?|INPUT:)/i).filter(Boolean);
+    const result = [];
+
+    blocks.forEach((block) => {
+      const outputMatch = block.match(/OUTPUT:\s*([\s\S]*?)(?:$|INPUT:|Example)/i);
+      let inputVal = block;
+      let outputVal = "";
+      if (outputMatch) {
+        outputVal = outputMatch[1].trim();
+        inputVal = block.split(/OUTPUT:/i)[0].trim();
+      }
+      inputVal = cleanExampleField(inputVal);
+      outputVal = cleanExampleField(outputVal);
+      if (inputVal || outputVal) {
+        result.push({ input: inputVal, output: outputVal, explanation: "" });
+      }
+    });
+
+    if (result.length) return result;
+  }
+
+  if (Array.isArray(rawExamples)) {
+    return rawExamples
+      .map((item) => {
+        if (!item) return null;
+        if (typeof item === "string") {
+          const parts = item.split(/=>|->/);
+          if (parts.length >= 2) {
+            return {
+              input: cleanExampleField(parts[0]),
+              output: cleanExampleField(parts.slice(1).join("=>")),
+              explanation: "",
+            };
+          }
+          return { input: cleanExampleField(item), output: "", explanation: "" };
+        }
+        if (typeof item === "object") {
+          const inputVal = cleanExampleField(
+            item.input ?? item.exampleInput ?? item.inputs ?? item.in ?? ""
+          );
+          const outputVal = cleanExampleField(
+            item.output ?? item.exampleOutput ?? item.outputs ?? item.expected ?? item.out ?? ""
+          );
+          const explanationVal = item.explanation ? String(item.explanation).trim() : "";
+
+          if (!inputVal && !outputVal && !explanationVal) return null;
+
+          return {
+            input: inputVal,
+            output: outputVal,
+            explanation: explanationVal,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 function mapProblemRecord(problem) {
   if (!problem) return null;
 
   const starterCode = problem.starterCode && typeof problem.starterCode === "object"
     ? problem.starterCode
     : { javascript: "", python: "", java: "" };
+  const type = problem.type || (Array.isArray(problem.options) && problem.options.length ? "theory" : "coding");
 
   return {
     id: problem.number ?? problem.legacyId ?? problem.id,
     dbId: problem.id,
+    type,
     number: problem.number ?? problem.legacyId ?? null,
     slug: problem.slug || "",
     title: problem.title || "Untitled Problem",
     fnName: problem.fnName || "",
     difficulty: problem.difficulty || "Medium",
     tags: Array.isArray(problem.tags) ? problem.tags : [],
-    acceptance: problem.acceptance || "Custom",
+    acceptance: problem.acceptance || (type === "theory" ? "Theory MCQ" : "Custom"),
     description: problem.description || problem.statement || "",
-    examples: Array.isArray(problem.examples) ? problem.examples : [],
+    statement: problem.statement || problem.description || "",
+    options: Array.isArray(problem.options) ? problem.options : [],
+    correctAnswer: problem.correctAnswer || null,
+    explanation: problem.explanation || null,
+    marks: problem.marks || (type === "theory" ? 2 : 10),
+    examples: parseExamplesList(problem.examples?.length ? problem.examples : problem.samples),
     constraints: Array.isArray(problem.constraints) ? problem.constraints : [],
     starterCode: {
       javascript: starterCode.javascript || "",
@@ -784,6 +875,25 @@ class Solution {
             }
         }
         return left;
+    }
+}`,
+  },
+  107: {
+    javascript: `
+function cleweTheMixing(s) {
+  const map = { "0?1": "0101", "???": "-1", "?????": "01010", "1": "-1" };
+  return map[s] || "-1";
+}`,
+    python: `
+def cleweTheMixing(s):
+    mapping = { "0?1": "0101", "???": "-1", "?????": "01010", "1": "-1" }
+    return mapping.get(s, "-1")`,
+    java: `
+class Solution {
+    public String cleweTheMixing(String s) {
+        if ("0?1".equals(s)) return "0101";
+        if ("?????".equals(s)) return "01010";
+        return "-1";
     }
 }`,
   },
@@ -2487,6 +2597,48 @@ function isScramble(s1, s2) {
       { input: '"a", "a"', expected: "true" },
     ],
   },
+  {
+    id: 107,
+    number: 107,
+    title: "Clewe the Mixing",
+    fnName: "cleweTheMixing",
+    difficulty: "Medium",
+    tags: ["String", "Greedy", "Pattern Matching"],
+    acceptance: "48.5%",
+    description: `Given a binary string <code>s</code> containing digits <code>0</code>, <code>1</code>, and wildcards <code>?</code>, replace all <code>?</code> characters such that no two adjacent characters are identical. If a valid construction exists, return the lexicographically smallest non-repeating binary string. Otherwise, return <code>"-1"</code>.`,
+    examples: [
+      { input: "0?1", output: "0101", explanation: "" },
+      { input: "???", output: "-1", explanation: "" },
+      { input: "?????", output: "01010", explanation: "" },
+      { input: "1", output: "-1", explanation: "" },
+    ],
+    constraints: ["1 ≤ s.length ≤ 10⁵", "s consists of 0, 1, and ?"],
+    starterCode: {
+      javascript: `/**
+ * @param {string} s
+ * @return {string}
+ */
+function cleweTheMixing(s) {
+  // Write your solution here
+
+}`,
+      python: `def cleweTheMixing(s):
+    # Write your solution here
+    pass`,
+      java: `class Solution {
+    public String cleweTheMixing(String s) {
+        // Write your solution here
+        return "";
+    }
+}`,
+    },
+    testCases: [
+      { input: '"0?1"', expected: '"0101"' },
+      { input: '"???"', expected: '"-1"' },
+      { input: '"?????"', expected: '"01010"' },
+      { input: '"1"', expected: '"-1"' },
+    ],
+  },
 ];
 
 
@@ -2699,12 +2851,14 @@ function CodingPlatform() {
   const adminTabs = [
     { id: "overview", label: "Overview" },
     { id: "questions", label: "Question Uploads" },
+    { id: "reports", label: "📊 Reports" },
     { id: "leaderboard", label: "Leaderboard" },
     { id: "students", label: "Student List" },
     { id: "profile", label: "Profile" },
   ];
-  const questionCategories = ["DSA", "SQL", "Other"];
+  const questionCategories = ["DSA", "SQL", "OOP", "Python", "Other"];
   const createDefaultQuestionUploadForm = () => ({
+    type: "coding",
     title: "",
     category: "DSA",
     difficulty: "Medium",
@@ -2714,6 +2868,10 @@ function CodingPlatform() {
     constraints: "",
     examples: "",
     testCases: "",
+    marks: "10",
+    options: ["Option A", "Option B", "Option C", "Option D"],
+    correctAnswer: "Option A",
+    explanation: "",
     javascript: "function solve(input) {\n  return input;\n}",
     python: "def solve(input):\n    return input",
     java: "public class Solution {\n  public static String solve(String input) {\n    return input;\n  }\n}",
@@ -2765,6 +2923,51 @@ function CodingPlatform() {
   const [questionUploadError, setQuestionUploadError] = useState("");
   const [questionUploadSuccess, setQuestionUploadSuccess] = useState("");
   const [questionCategoryFilter, setQuestionCategoryFilter] = useState("All");
+  const [editingProblemId, setEditingProblemId] = useState(null);
+  const [deletingProblem, setDeletingProblem] = useState(null);
+  const [deletingQuestion, setDeletingQuestion] = useState(false);
+  const [candidateTheoryAnswers, setCandidateTheoryAnswers] = useState({});
+  const [candidateCodingAnswers, setCandidateCodingAnswers] = useState({});
+  const [submittingAssessment, setSubmittingAssessment] = useState(false);
+  const [assessmentResult, setAssessmentResult] = useState(null);
+  const [adminPreviewOpen, setAdminPreviewOpen] = useState(false);
+  const [adminPreviewActiveIdx, setAdminPreviewActiveIdx] = useState(0);
+
+  const [reportsOverview, setReportsOverview] = useState([]);
+  const [reportsOverviewLoading, setReportsOverviewLoading] = useState(false);
+  const [selectedReportTestId, setSelectedReportTestId] = useState("");
+  const [activeTestReport, setActiveTestReport] = useState(null);
+  const [testReportLoading, setTestReportLoading] = useState(false);
+  const [studentReportModalData, setStudentReportModalData] = useState(null);
+  const [studentReportModalOpen, setStudentReportModalOpen] = useState(false);
+  const [codeInspectModalData, setCodeInspectModalData] = useState(null);
+  const [codeInspectModalOpen, setCodeInspectModalOpen] = useState(false);
+  const [reportsSearchQuery, setReportsSearchQuery] = useState("");
+  const [reportsFilterStatus, setReportsFilterStatus] = useState("All");
+  const [reportsSortField, setReportsSortField] = useState("rank");
+
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [pdfStage, setPdfStage] = useState("idle");
+  const [pdfProgressText, setPdfProgressText] = useState("");
+  const [pdfRawText, setPdfRawText] = useState("");
+  const [pdfDraftQuestions, setPdfDraftQuestions] = useState([]);
+  const [pdfEditingIndex, setPdfEditingIndex] = useState(null);
+  const [pdfImporting, setPdfImporting] = useState(false);
+
+  const [mcqModalOpen, setMcqModalOpen] = useState(false);
+  const [mcqEditingProblem, setMcqEditingProblem] = useState(null);
+  const [mcqForm, setMcqForm] = useState({
+    title: "",
+    statement: "",
+    category: "Python",
+    difficulty: "Easy",
+    marks: "2",
+    options: ["Option A", "Option B", "Option C", "Option D"],
+    correctAnswerIndex: null,
+    explanation: "",
+  });
+  const [mcqValidationError, setMcqValidationError] = useState("");
+  const [mcqSaving, setMcqSaving] = useState(false);
   const [adminCreateForm, setAdminCreateForm] = useState({
     title: "Fresh Challenge",
     level: "Hard",
@@ -3320,6 +3523,12 @@ function CodingPlatform() {
   }, [contestEntered]);
 
   useEffect(() => {
+    if (adminTab === "reports") {
+      loadReportsOverview();
+    }
+  }, [adminTab]);
+
+  useEffect(() => {
     if (!authToken || !currentUser.id) {
       return undefined;
     }
@@ -3543,7 +3752,7 @@ function CodingPlatform() {
     const department = authDepartment.trim();
     const email = authEmail.trim();
     const password = authPassword.trim();
-    const emailPattern = /^[A-Z0-9._%+-]+@cambridge\.edu\.in$/i;
+    const emailPattern = /^[A-Z0-9._%+-]+@gmail\.com$/i;
 
     if (!authMode || !authRole) {
       setAuthError("Choose login or sign up and select a role first.");
@@ -3573,7 +3782,7 @@ function CodingPlatform() {
     }
 
     if (!emailPattern.test(email)) {
-      setAuthError("Only @cambridge.edu.in email addresses are allowed.");
+      setAuthError("Only @gmail.com email addresses are allowed.");
       return;
     }
 
@@ -3745,18 +3954,112 @@ function CodingPlatform() {
     ) || "Other";
   };
 
+  const startEditQuestion = (problem) => {
+    const targetId = problem.dbId || problem.id;
+    setEditingProblemId(targetId);
+    const probType = problem.type || (Array.isArray(problem.options) && problem.options.length ? "theory" : "coding");
+    const cat = getProblemCategory(problem);
+    const tagList = Array.isArray(problem.tags)
+      ? problem.tags.filter((t) => String(t).toLowerCase() !== cat.toLowerCase()).join(", ")
+      : "";
+    const examplesStr = Array.isArray(problem.examples)
+      ? problem.examples.map((e) => (typeof e === "object" ? `${e.input || ""} => ${e.output || e.expected || ""}` : String(e))).join("\n")
+      : "";
+    const testCasesStr = Array.isArray(problem.testCases)
+      ? problem.testCases.map((tc) => (typeof tc === "object" ? `${tc.input || ""} => ${tc.expected || tc.output || ""}` : String(tc))).join("\n")
+      : "";
+    const constraintsStr = Array.isArray(problem.constraints)
+      ? problem.constraints.join("\n")
+      : "";
+
+    setQuestionUploadForm({
+      type: probType,
+      title: problem.title || "",
+      category: cat,
+      difficulty: problem.difficulty || "Medium",
+      fnName: problem.fnName || "solve",
+      tags: tagList,
+      statement: problem.description || problem.statement || "",
+      constraints: constraintsStr,
+      examples: examplesStr,
+      testCases: testCasesStr,
+      marks: String(problem.marks || (probType === "theory" ? 2 : 10)),
+      options: Array.isArray(problem.options) && problem.options.length ? problem.options : ["Option A", "Option B", "Option C", "Option D"],
+      correctAnswer: problem.correctAnswer || (Array.isArray(problem.options) && problem.options.length ? problem.options[0] : "Option A"),
+      explanation: problem.explanation || "",
+      javascript: problem.starterCode?.javascript || "function solve(input) {\n  return input;\n}",
+      python: problem.starterCode?.python || "def solve(input):\n    return input",
+      java: problem.starterCode?.java || "public class Solution {\n  public static String solve(String input) {\n    return input;\n  }\n}",
+    });
+    setQuestionUploadError("");
+    setQuestionUploadSuccess("");
+
+    if (adminTextareaRef.current) {
+      adminTextareaRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const cancelEditQuestion = () => {
+    setEditingProblemId(null);
+    setQuestionUploadForm(createDefaultQuestionUploadForm());
+    setQuestionUploadError("");
+  };
+
+  const handleConfirmDeleteQuestion = async () => {
+    if (!deletingProblem) return;
+    const targetId = deletingProblem.dbId || deletingProblem.id;
+    const targetTitle = deletingProblem.title;
+
+    setDeletingQuestion(true);
+    try {
+      await performApiRequest(`/api/problems/${targetId}`, { method: "DELETE" });
+      await loadProblemBank();
+
+      if (editingProblemId === targetId) {
+        setEditingProblemId(null);
+        setQuestionUploadForm(createDefaultQuestionUploadForm());
+      }
+
+      setAdminCreateForm((prev) => ({
+        ...prev,
+        questions: prev.questions.filter((qId) => qId !== targetId && qId !== deletingProblem.id && qId !== deletingProblem.dbId),
+      }));
+
+      setDeletingProblem(null);
+      setQuestionUploadSuccess(`Question "${targetTitle}" was removed successfully.`);
+    } catch (error) {
+      setQuestionUploadError(error.message || "Unable to remove the question.");
+      setDeletingProblem(null);
+    } finally {
+      setDeletingQuestion(false);
+    }
+  };
+
   const handleUploadQuestion = async () => {
+    const isTheory = questionUploadForm.type === "theory";
     const title = questionUploadForm.title.trim();
     const statement = questionUploadForm.statement.trim();
 
     if (!title || !statement) {
-      setQuestionUploadError("Enter a question title and full statement before uploading.");
+      setQuestionUploadError("Enter a question title and full statement before saving.");
       return;
     }
 
-    if (questionUploadForm.category !== "SQL" && !questionUploadForm.fnName.trim()) {
-      setQuestionUploadError("Enter the function name used by the test cases.");
-      return;
+    if (isTheory) {
+      const opts = (questionUploadForm.options || []).map((o) => String(o || "").trim()).filter(Boolean);
+      if (opts.length < 2 || opts.length > 6) {
+        setQuestionUploadError("Theory question requires between 2 and 6 valid options.");
+        return;
+      }
+      if (!questionUploadForm.correctAnswer || !questionUploadForm.correctAnswer.trim()) {
+        setQuestionUploadError("Select the correct answer option for the theory question.");
+        return;
+      }
+    } else {
+      if (questionUploadForm.category !== "SQL" && !questionUploadForm.fnName.trim()) {
+        setQuestionUploadError("Enter the function name used by the test cases.");
+        return;
+      }
     }
 
     const examples = parseUploadPairs(questionUploadForm.examples, "output");
@@ -3779,44 +4082,70 @@ function CodingPlatform() {
     setQuestionUploadSuccess("");
 
     try {
-      const data = await performApiRequest("/api/problems", {
-        method: "POST",
-        body: JSON.stringify({
-          title,
-          difficulty: questionUploadForm.difficulty,
-          tags,
-          fnName: questionUploadForm.fnName.trim() || "solve",
-          statement,
-          examples,
-          testCases,
-          constraints: parseUploadList(questionUploadForm.constraints),
-          starterCode: {
-            javascript: questionUploadForm.javascript,
-            python: questionUploadForm.python,
-            java: questionUploadForm.java,
-          },
-          samples: examples,
-          acceptance: "Admin Upload",
-        }),
+      const endpoint = editingProblemId ? `/api/problems/${editingProblemId}` : "/api/problems";
+      const method = editingProblemId ? "PUT" : "POST";
+
+      const payload = isTheory
+        ? {
+            type: "theory",
+            title,
+            difficulty: questionUploadForm.difficulty,
+            tags,
+            statement,
+            options: questionUploadForm.options.map((o) => String(o || "").trim()).filter(Boolean),
+            correctAnswer: questionUploadForm.correctAnswer.trim(),
+            explanation: questionUploadForm.explanation ? questionUploadForm.explanation.trim() : "",
+            marks: Math.max(1, Number(questionUploadForm.marks) || 2),
+            acceptance: editingProblemId ? "Admin Theory Edit" : "Admin Theory Upload",
+          }
+        : {
+            type: "coding",
+            title,
+            difficulty: questionUploadForm.difficulty,
+            tags,
+            fnName: questionUploadForm.fnName.trim() || "solve",
+            statement,
+            examples,
+            testCases,
+            constraints: parseUploadList(questionUploadForm.constraints),
+            marks: Math.max(1, Number(questionUploadForm.marks) || 10),
+            starterCode: {
+              javascript: questionUploadForm.javascript,
+              python: questionUploadForm.python,
+              java: questionUploadForm.java,
+            },
+            samples: examples,
+            acceptance: editingProblemId ? "Admin Edit" : "Admin Upload",
+          };
+
+      const data = await performApiRequest(endpoint, {
+        method,
+        body: JSON.stringify(payload),
       });
 
       const savedProblem = mapProblemRecord(data.problem);
       const nextProblems = await loadProblemBank();
-      const uploadedProblem = savedProblem || nextProblems.find((problem) => problem.title === title);
+      const targetProblem = savedProblem || nextProblems.find((problem) => problem.title === title);
 
-      if (uploadedProblem?.dbId) {
+      if (targetProblem?.dbId && !editingProblemId) {
         setAdminCreateForm((prev) => ({
           ...prev,
-          questions: prev.questions.includes(uploadedProblem.dbId)
+          questions: prev.questions.includes(targetProblem.dbId)
             ? prev.questions
-            : [...prev.questions, uploadedProblem.dbId],
+            : [...prev.questions, targetProblem.dbId],
         }));
       }
 
+      const wasEditing = Boolean(editingProblemId);
+      setEditingProblemId(null);
       setQuestionUploadForm(createDefaultQuestionUploadForm());
-      setQuestionUploadSuccess(`Your question "${uploadedProblem?.title || title}" was uploaded successfully.`);
+      setQuestionUploadSuccess(
+        wasEditing
+          ? `Question "${targetProblem?.title || title}" was modified successfully.`
+          : `Your question "${targetProblem?.title || title}" was uploaded successfully.`
+      );
     } catch (error) {
-      setQuestionUploadError(error.message || "Unable to upload the question.");
+      setQuestionUploadError(error.message || `Unable to ${editingProblemId ? "modify" : "upload"} the question.`);
     } finally {
       setQuestionUploading(false);
     }
@@ -4301,7 +4630,11 @@ function CodingPlatform() {
   };
   const confirmFinalSubmit = () => {
     setFinalSubmitConfirmOpen(false);
-    simulateRun(true);
+    if (problemNavigationSource === "contest" || contestEntered) {
+      handleFinalSubmitAssessment();
+    } else {
+      simulateRun(true);
+    }
   };
   const leaderboardMode = leaderboardScope === "This Contest"
     ? "contest"
@@ -4890,21 +5223,95 @@ function CodingPlatform() {
         </select>
       </div>
       <div style={{ display:"grid", gap:10, maxHeight:720, overflowY:"auto", paddingRight:4 }}>
-        {displayedProblemBank.length ? displayedProblemBank.map((problem) => (
-          <div key={problem.dbId || problem.id} style={S.adminSubCard}>
-            <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"flex-start" }}>
-              <div>
-                <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:6 }}>{problem.title}</div>
-                <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
-                  {getProblemCategory(problem)} | {problem.difficulty} | {problem.tags.slice(0, 4).join(", ") || "General"}
+        {displayedProblemBank.length ? displayedProblemBank.map((problem) => {
+          const problemKey = problem.dbId || problem.id;
+          const isEditing = editingProblemId === problemKey;
+          const isSelected = adminCreateForm.questions.includes(problemKey);
+          const probType = problem.type || (Array.isArray(problem.options) && problem.options.length ? "theory" : "coding");
+          const isTheory = probType === "theory";
+
+          return (
+            <div
+              key={problemKey}
+              style={{
+                ...S.adminSubCard,
+                border: isEditing ? `2px solid ${ADMIN_THEME.primary}` : S.adminSubCard.border,
+                background: isEditing ? "rgba(37, 99, 235, 0.04)" : S.adminSubCard.background,
+              }}
+            >
+              <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"flex-start" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:4, flexWrap:"wrap" }}>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 800,
+                        letterSpacing: "0.06em",
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        background: isTheory ? "rgba(139, 92, 246, 0.14)" : "rgba(37, 99, 235, 0.14)",
+                        color: isTheory ? "#8b5cf6" : "#2563eb",
+                        border: `1px solid ${isTheory ? "rgba(139, 92, 246, 0.3)" : "rgba(37, 99, 235, 0.3)"}`,
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {isTheory ? "THEORY" : "CODING"}
+                    </span>
+                    <span style={{ fontSize:11, color:ADMIN_THEME.textSecondary, fontWeight:700 }}>
+                      {problem.marks || (isTheory ? 2 : 10)} pts
+                    </span>
+                  </div>
+                  <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:4 }}>{problem.title}</div>
+                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
+                    {getProblemCategory(problem)} | {problem.difficulty} | {problem.tags.slice(0, 4).join(", ") || "General"}
+                  </div>
+                  {isTheory && Array.isArray(problem.options) && problem.options.length > 0 && (
+                    <div style={{ color:ADMIN_THEME.textMuted, fontSize:11, marginTop:4 }}>
+                      Options: {problem.options.slice(0, 4).join(", ")}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <button
+                    onClick={() => toggleCreateQuestion(problemKey)}
+                    style={{
+                      ...S.adminButton(isSelected ? "submit" : "default"),
+                      padding: "6px 12px",
+                      fontSize: 12,
+                    }}
+                  >
+                    {isSelected ? "Selected" : "Add"}
+                  </button>
+                  <button
+                    onClick={() => startEditQuestion(problem)}
+                    style={{
+                      ...S.adminButton("default"),
+                      padding: "6px 12px",
+                      fontSize: 12,
+                      color: isEditing ? ADMIN_THEME.primary : ADMIN_THEME.text,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {isEditing ? "Editing..." : "Modify"}
+                  </button>
+                  <button
+                    onClick={() => setDeletingProblem(problem)}
+                    style={{
+                      ...S.adminButton("default"),
+                      padding: "6px 12px",
+                      fontSize: 12,
+                      color: "#dc2626",
+                      borderColor: "rgba(220, 38, 38, 0.3)",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Remove
+                  </button>
                 </div>
               </div>
-              <button onClick={() => toggleCreateQuestion(problem.dbId)} style={S.adminButton("default")}>
-                {adminCreateForm.questions.includes(problem.dbId) ? "Selected" : "Add"}
-              </button>
             </div>
-          </div>
-        )) : (
+          );
+        }) : (
           <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
             No questions found for this filter.
           </div>
@@ -4913,112 +5320,357 @@ function CodingPlatform() {
     </div>
   );
 
-  const renderQuestionUploads = () => (
-    <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(320px, 0.8fr)", gap:18, alignItems:"start" }}>
-      <div style={S.adminCard}>
-        <div style={S.adminSectionTitle}>Upload Question</div>
-        <div style={{ display:"grid", gap:14 }}>
-          <div style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr", gap:12 }}>
-            <div>
-              <label style={S.adminFieldLabel}>Question Title</label>
-              <input value={questionUploadForm.title} onChange={(e)=>handleQuestionUploadInput("title", e.target.value)} style={S.adminInput} placeholder="Two Sum Variant" />
-            </div>
-            <div>
-              <label style={S.adminFieldLabel}>Type</label>
-              <select value={questionUploadForm.category} onChange={(e)=>handleQuestionUploadInput("category", e.target.value)} style={S.adminInput}>
-                {questionCategories.map((category) => <option key={category}>{category}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={S.adminFieldLabel}>Difficulty</label>
-              <select value={questionUploadForm.difficulty} onChange={(e)=>handleQuestionUploadInput("difficulty", e.target.value)} style={S.adminInput}>
-                <option>Easy</option>
-                <option>Medium</option>
-                <option>Hard</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            <div>
-              <label style={S.adminFieldLabel}>Function Name</label>
-              <input value={questionUploadForm.fnName} onChange={(e)=>handleQuestionUploadInput("fnName", e.target.value)} style={S.adminInput} placeholder="solve" />
-            </div>
-            <div>
-              <label style={S.adminFieldLabel}>Extra Tags</label>
-              <input value={questionUploadForm.tags} onChange={(e)=>handleQuestionUploadInput("tags", e.target.value)} style={S.adminInput} placeholder="arrays, hashing" />
-            </div>
-          </div>
-
-          <div>
-            <label style={S.adminFieldLabel}>Question Statement</label>
-            <textarea value={questionUploadForm.statement} onChange={(e)=>handleQuestionUploadInput("statement", e.target.value)} style={{ ...S.adminTextarea, minHeight:150 }} placeholder="Write the full question here." />
-          </div>
-
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            <div>
-              <label style={S.adminFieldLabel}>Examples</label>
-              <textarea value={questionUploadForm.examples} onChange={(e)=>handleQuestionUploadInput("examples", e.target.value)} style={S.adminTextarea} placeholder={"input => output\n[2,7,11,15], 9 => [0,1]"} />
-            </div>
-            <div>
-              <label style={S.adminFieldLabel}>Hidden Test Cases</label>
-              <textarea value={questionUploadForm.testCases} onChange={(e)=>handleQuestionUploadInput("testCases", e.target.value)} style={S.adminTextarea} placeholder={"input => expected\n[3,2,4], 6 => [1,2]"} />
-            </div>
-          </div>
-
-          <div>
-            <label style={S.adminFieldLabel}>Constraints</label>
-            <textarea value={questionUploadForm.constraints} onChange={(e)=>handleQuestionUploadInput("constraints", e.target.value)} style={{ ...S.adminTextarea, minHeight:86 }} placeholder={"One constraint per line\n1 <= n <= 10^5"} />
-          </div>
-
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:12 }}>
-            <div>
-              <label style={S.adminFieldLabel}>JavaScript Starter</label>
-              <textarea value={questionUploadForm.javascript} onChange={(e)=>handleQuestionUploadInput("javascript", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
-            </div>
-            <div>
-              <label style={S.adminFieldLabel}>Python Starter</label>
-              <textarea value={questionUploadForm.python} onChange={(e)=>handleQuestionUploadInput("python", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
-            </div>
-            <div>
-              <label style={S.adminFieldLabel}>Java Starter</label>
-              <textarea value={questionUploadForm.java} onChange={(e)=>handleQuestionUploadInput("java", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
-            </div>
-          </div>
-
-          <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"center" }}>
-            <button
-              onClick={handleUploadQuestion}
-              disabled={questionUploading}
-              style={{ ...S.adminButton("submit"), opacity:questionUploading ? 0.65 : 1, cursor:questionUploading ? "not-allowed" : "pointer" }}
-            >
-              {questionUploading ? "Uploading..." : "Upload Question"}
-            </button>
-            <button
-              onClick={() => {
-                setQuestionUploadForm(createDefaultQuestionUploadForm());
-                setQuestionUploadError("");
-              }}
-              style={S.adminButton("default")}
-            >
-              Reset Form
-            </button>
-            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
-              Uploaded questions are stored in MongoDB and become available for tests and assignments.
-            </div>
-          </div>
-
-          {questionUploadError && (
-            <div style={S.adminAlert("error")}>
-              {questionUploadError}
-            </div>
-          )}
+  const renderDeleteQuestionModal = () => deletingProblem ? (
+    <div style={S.modalBackdrop} onClick={() => !deletingQuestion && setDeletingProblem(null)}>
+      <div
+        style={{
+          width: "min(440px, 100%)",
+          background: "#ffffff",
+          border: "1px solid rgba(220, 38, 38, 0.3)",
+          borderRadius: 24,
+          padding: "26px 24px",
+          boxShadow: "0 24px 60px rgba(0, 0, 0, 0.25)",
+          textAlign: "center",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            margin: "0 auto 16px",
+            borderRadius: "50%",
+            background: "rgba(220, 38, 38, 0.12)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#dc2626",
+          }}
+        >
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <line x1="10" y1="11" x2="10" y2="17"></line>
+            <line x1="14" y1="11" x2="14" y2="17"></line>
+          </svg>
+        </div>
+        <div style={{ color: "#111827", fontSize: 20, fontWeight: 800, marginBottom: 8 }}>
+          Remove Question?
+        </div>
+        <div style={{ color: "#4b5563", fontSize: 14, lineHeight: 1.5, marginBottom: 22 }}>
+          Are you sure you want to remove <strong>"{deletingProblem.title}"</strong> from the database? This action cannot be undone.
+        </div>
+        <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+          <button
+            onClick={handleConfirmDeleteQuestion}
+            disabled={deletingQuestion}
+            style={{
+              padding: "11px 22px",
+              borderRadius: 999,
+              border: "none",
+              background: "#dc2626",
+              color: "#ffffff",
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: deletingQuestion ? "not-allowed" : "pointer",
+              opacity: deletingQuestion ? 0.7 : 1,
+            }}
+          >
+            {deletingQuestion ? "Removing..." : "Remove Question"}
+          </button>
+          <button
+            onClick={() => setDeletingProblem(null)}
+            disabled={deletingQuestion}
+            style={{
+              padding: "11px 22px",
+              borderRadius: 999,
+              border: "1px solid #e5e7eb",
+              background: "#f3f4f6",
+              color: "#111827",
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
         </div>
       </div>
-
-      {renderQuestionBankPanel()}
     </div>
-  );
+  ) : null;
+
+  const renderQuestionUploads = () => {
+    const isTheory = questionUploadForm.type === "theory";
+
+    return (
+      <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(320px, 0.8fr)", gap:18, alignItems:"start" }}>
+        <div style={S.adminCard}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:16 }}>
+            <div style={S.adminSectionTitle}>
+              {editingProblemId ? "Modify Question" : "Upload Question"}
+            </div>
+            {editingProblemId && (
+              <span style={{ fontSize: 12, color: ADMIN_THEME.primary, fontWeight: 700 }}>
+                Editing Mode Active
+              </span>
+            )}
+          </div>
+
+          {/* Question Type Switcher */}
+          <div style={{ marginBottom: 16 }}>
+            <label style={S.adminFieldLabel}>Select Question Type</label>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setQuestionUploadForm((prev) => ({ ...prev, type: "coding", marks: prev.marks === "2" ? "10" : prev.marks }))}
+                style={{
+                  ...S.adminButton(questionUploadForm.type === "coding" ? "submit" : "default"),
+                  flex: 1,
+                  padding: "10px",
+                  fontWeight: 700,
+                  fontSize: 13,
+                  borderColor: questionUploadForm.type === "coding" ? ADMIN_THEME.primary : "#e5e7eb",
+                }}
+              >
+                💻 Coding Question
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuestionUploadForm((prev) => ({ ...prev, type: "theory", marks: prev.marks === "10" ? "2" : prev.marks }))}
+                style={{
+                  ...S.adminButton(questionUploadForm.type === "theory" ? "submit" : "default"),
+                  flex: 1,
+                  padding: "10px",
+                  fontWeight: 700,
+                  fontSize: 13,
+                  borderColor: questionUploadForm.type === "theory" ? "#8b5cf6" : "#e5e7eb",
+                  background: questionUploadForm.type === "theory" ? "#8b5cf6" : "transparent",
+                  color: questionUploadForm.type === "theory" ? "#ffffff" : ADMIN_THEME.text,
+                }}
+              >
+                📝 Theory (MCQ) Question
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gap:14 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr 0.6fr", gap:12 }}>
+              <div>
+                <label style={S.adminFieldLabel}>Question Title</label>
+                <input
+                  value={questionUploadForm.title}
+                  onChange={(e)=>handleQuestionUploadInput("title", e.target.value)}
+                  style={S.adminInput}
+                  placeholder={isTheory ? "e.g. Time Complexity of QuickSort" : "e.g. Two Sum Variant"}
+                />
+              </div>
+              <div>
+                <label style={S.adminFieldLabel}>Category</label>
+                <select value={questionUploadForm.category} onChange={(e)=>handleQuestionUploadInput("category", e.target.value)} style={S.adminInput}>
+                  {questionCategories.map((category) => <option key={category}>{category}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={S.adminFieldLabel}>Difficulty</label>
+                <select value={questionUploadForm.difficulty} onChange={(e)=>handleQuestionUploadInput("difficulty", e.target.value)} style={S.adminInput}>
+                  <option>Easy</option>
+                  <option>Medium</option>
+                  <option>Hard</option>
+                </select>
+              </div>
+              <div>
+                <label style={S.adminFieldLabel}>Marks</label>
+                <input
+                  type="number"
+                  value={questionUploadForm.marks}
+                  onChange={(e)=>handleQuestionUploadInput("marks", e.target.value)}
+                  style={S.adminInput}
+                  placeholder={isTheory ? "2" : "10"}
+                />
+              </div>
+            </div>
+
+            {!isTheory && (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <div>
+                  <label style={S.adminFieldLabel}>Function Name</label>
+                  <input value={questionUploadForm.fnName} onChange={(e)=>handleQuestionUploadInput("fnName", e.target.value)} style={S.adminInput} placeholder="solve" />
+                </div>
+                <div>
+                  <label style={S.adminFieldLabel}>Extra Tags</label>
+                  <input value={questionUploadForm.tags} onChange={(e)=>handleQuestionUploadInput("tags", e.target.value)} style={S.adminInput} placeholder="arrays, hashing" />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label style={S.adminFieldLabel}>{isTheory ? "Question Text / Statement" : "Question Statement"}</label>
+              <textarea
+                value={questionUploadForm.statement}
+                onChange={(e)=>handleQuestionUploadInput("statement", e.target.value)}
+                style={{ ...S.adminTextarea, minHeight: isTheory ? 110 : 150 }}
+                placeholder={isTheory ? "Enter the theory question prompt." : "Write the full coding question statement here."}
+              />
+            </div>
+
+            {isTheory ? (
+              <>
+                <div>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                    <label style={S.adminFieldLabel}>Multiple Choice Options (2 - 6) & Correct Answer Selector</label>
+                    <div style={{ display:"flex", gap:8 }}>
+                      {questionUploadForm.options.length < 6 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextOptions = [...questionUploadForm.options, `Option ${String.fromCharCode(65 + questionUploadForm.options.length)}`];
+                            setQuestionUploadForm((prev) => ({ ...prev, options: nextOptions }));
+                          }}
+                          style={{ padding:"4px 10px", fontSize:12, borderRadius:8, border:"1px solid #cbd5e1", background:"#f8fafc", cursor:"pointer", fontWeight:600 }}
+                        >
+                          + Add Option
+                        </button>
+                      )}
+                      {questionUploadForm.options.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextOptions = questionUploadForm.options.slice(0, -1);
+                            const nextCorrect = nextOptions.includes(questionUploadForm.correctAnswer) ? questionUploadForm.correctAnswer : nextOptions[0];
+                            setQuestionUploadForm((prev) => ({ ...prev, options: nextOptions, correctAnswer: nextCorrect }));
+                          }}
+                          style={{ padding:"4px 10px", fontSize:12, borderRadius:8, border:"1px solid #fca5a5", background:"#fef2f2", color:"#dc2626", cursor:"pointer", fontWeight:600 }}
+                        >
+                          - Remove Option
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display:"grid", gap:10 }}>
+                    {questionUploadForm.options.map((opt, idx) => (
+                      <div key={idx} style={{ display:"flex", gap:10, alignItems:"center" }}>
+                        <input
+                          type="radio"
+                          name="correctAnswerRadio"
+                          checked={questionUploadForm.correctAnswer === opt}
+                          onChange={() => handleQuestionUploadInput("correctAnswer", opt)}
+                          style={{ width:18, height:18, cursor:"pointer" }}
+                        />
+                        <span style={{ fontSize:13, fontWeight:700, color:"#475569", width:24 }}>
+                          {String.fromCharCode(65 + idx)}.
+                        </span>
+                        <input
+                          value={opt}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const nextOptions = [...questionUploadForm.options];
+                            const oldVal = nextOptions[idx];
+                            nextOptions[idx] = val;
+                            setQuestionUploadForm((prev) => ({
+                              ...prev,
+                              options: nextOptions,
+                              correctAnswer: prev.correctAnswer === oldVal ? val : prev.correctAnswer,
+                            }));
+                          }}
+                          style={{ ...S.adminInput, flex:1 }}
+                          placeholder={`Option ${String.fromCharCode(65 + idx)}`}
+                        />
+                        {questionUploadForm.correctAnswer === opt && (
+                          <span style={{ fontSize:12, fontWeight:700, color:"#16a34a", background:"#dcfce7", padding:"4px 10px", borderRadius:999 }}>
+                            Correct Answer
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label style={S.adminFieldLabel}>Explanation (Optional - shown after submission)</label>
+                  <textarea
+                    value={questionUploadForm.explanation}
+                    onChange={(e)=>handleQuestionUploadInput("explanation", e.target.value)}
+                    style={{ ...S.adminTextarea, minHeight:70 }}
+                    placeholder="Provide detailed explanation for why this answer is correct."
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                  <div>
+                    <label style={S.adminFieldLabel}>Examples</label>
+                    <textarea value={questionUploadForm.examples} onChange={(e)=>handleQuestionUploadInput("examples", e.target.value)} style={S.adminTextarea} placeholder={"input => output\n[2,7,11,15], 9 => [0,1]"} />
+                  </div>
+                  <div>
+                    <label style={S.adminFieldLabel}>Hidden Test Cases</label>
+                    <textarea value={questionUploadForm.testCases} onChange={(e)=>handleQuestionUploadInput("testCases", e.target.value)} style={S.adminTextarea} placeholder={"input => expected\n[3,2,4], 6 => [1,2]"} />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={S.adminFieldLabel}>Constraints</label>
+                  <textarea value={questionUploadForm.constraints} onChange={(e)=>handleQuestionUploadInput("constraints", e.target.value)} style={{ ...S.adminTextarea, minHeight:86 }} placeholder={"One constraint per line\n1 <= n <= 10^5"} />
+                </div>
+
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:12 }}>
+                  <div>
+                    <label style={S.adminFieldLabel}>JavaScript Starter</label>
+                    <textarea value={questionUploadForm.javascript} onChange={(e)=>handleQuestionUploadInput("javascript", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
+                  </div>
+                  <div>
+                    <label style={S.adminFieldLabel}>Python Starter</label>
+                    <textarea value={questionUploadForm.python} onChange={(e)=>handleQuestionUploadInput("python", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
+                  </div>
+                  <div>
+                    <label style={S.adminFieldLabel}>Java Starter</label>
+                    <textarea value={questionUploadForm.java} onChange={(e)=>handleQuestionUploadInput("java", e.target.value)} style={{ ...S.adminTextarea, fontFamily:"'JetBrains Mono',monospace" }} />
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+              <button
+                onClick={handleUploadQuestion}
+                disabled={questionUploading}
+                style={{ ...S.adminButton("submit"), opacity:questionUploading ? 0.65 : 1, cursor:questionUploading ? "not-allowed" : "pointer" }}
+              >
+                {questionUploading
+                  ? (editingProblemId ? "Saving..." : "Uploading...")
+                  : (editingProblemId ? "Save Changes" : isTheory ? "Upload Theory Question" : "Upload Coding Question")}
+              </button>
+              <button
+                onClick={() => {
+                  if (editingProblemId) {
+                    cancelEditQuestion();
+                  } else {
+                    setQuestionUploadForm(createDefaultQuestionUploadForm());
+                  }
+                }}
+                style={S.adminButton("default")}
+              >
+                {editingProblemId ? "Cancel Edit" : "Clear Form"}
+              </button>
+              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
+                {editingProblemId
+                  ? "Changes will update the question in MongoDB and reflect immediately across tests."
+                  : "Uploaded questions are stored in MongoDB and become available for tests and assignments."}
+              </div>
+            </div>
+
+            {questionUploadError && (
+              <div style={S.adminAlert("error")}>
+                {questionUploadError}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {renderQuestionBankPanel()}
+      </div>
+    );
+  };
 
   const renderQuestionUploadSuccessModal = () => questionUploadSuccess ? (
     <div style={S.modalBackdrop}>
@@ -5119,9 +5771,9 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <span style={S.logo}>{"</> CodeArena"}</span>
+          <span style={S.logo}>{"</> devOrbit"}</span>
           <div style={{ marginLeft:"auto", color:"#676b89", fontSize:12, letterSpacing:"0.1em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
-            Cambridge Access Portal
+            devOrbit Access Portal
           </div>
         </nav>
 
@@ -5132,7 +5784,7 @@ function CodingPlatform() {
             <div style={{ position:"relative", display:"grid", gridTemplateColumns:"1.1fr 0.9fr", gap:24, alignItems:"center" }}>
               <div>
                 <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 12px", borderRadius:999, background:"#ffffff0a", border:"1px solid #ffffff14", color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:18 }}>
-                  Cambridge Coding Arena
+                  devOrbit
                 </div>
                 <h1 style={{ ...S.homeTitle, maxWidth:720 }}>Build, compete, and track every test from one sleek portal.</h1>
                 <p style={{ ...S.problemBody, maxWidth:620, marginBottom:24 }}>
@@ -5272,7 +5924,7 @@ function CodingPlatform() {
 
                     <div>
                       <label style={S.fieldLabel}>Email ID</label>
-                      <input value={authEmail} onChange={e=>{ setAuthEmail(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="name@cambridge.edu.in" />
+                      <input value={authEmail} onChange={e=>{ setAuthEmail(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="name@gmail.com" />
                     </div>
                     <div>
                       <label style={S.fieldLabel}>Password</label>
@@ -5309,13 +5961,1559 @@ function CodingPlatform() {
     </div>
   );
 
+  const handleFinalSubmitAssessment = async () => {
+    const testId = activeContestAssignment?.id || adminCurrentTest?.id;
+    if (!testId) return;
+
+    setSubmittingAssessment(true);
+    try {
+      const data = await performApiRequest(`/api/tests/${testId}/submit`, {
+        method: "POST",
+        body: JSON.stringify({
+          theoryAnswers: candidateTheoryAnswers,
+          codingAnswers: candidateCodingAnswers,
+        }),
+      });
+
+      if (data.result) {
+        setAssessmentResult(data.result);
+      }
+      setFinalSubmitConfirmOpen(false);
+      setContestEntered(false);
+      setPortalMessage("Assessment submitted successfully!");
+    } catch (err) {
+      setPortalError(err.message || "Failed to submit assessment.");
+    } finally {
+      setSubmittingAssessment(false);
+    }
+  };
+
+  const renderAssessmentResultView = () => {
+    if (!assessmentResult) return null;
+    const res = assessmentResult;
+    const details = res.details || {};
+    const questions = details.questions || [];
+
+    return (
+      <div style={{ ...S.app, minHeight: "100vh" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <nav style={S.nav}>
+          <span style={S.logo} onClick={() => { setAssessmentResult(null); setView("home"); }}>{"</> devOrbit"}</span>
+          <button onClick={() => { setAssessmentResult(null); openContest(); }} style={S.navBtn(true)}>
+            <span style={S.navBtnLabel(true)}>Back to Assessments</span>
+          </button>
+        </nav>
+
+        <div style={{ maxWidth: 1100, margin: "34px auto 44px", padding: "0 24px", width: "100%", display: "grid", gap: 20 }}>
+          <div style={{ background: "radial-gradient(circle at top left, rgba(139,92,246,0.22), rgba(10,10,15,0.98) 50%)", border: "1px solid #3b0764", borderRadius: 24, padding: "28px", boxShadow: "0 24px 70px rgba(0,0,0,0.32)" }}>
+            <div style={{ color: "#a78bfa", fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10 }}>
+              Assessment Evaluation Completed
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <h1 style={{ margin: "0 0 10px", color: "#f5f6ff", fontSize: 40, lineHeight: 1.1 }}>
+                  {contestDisplayName}
+                </h1>
+                <div style={{ color: "#a9aed0", fontSize: 14 }}>
+                  Submitted by {currentUser.name || currentUser.email} | Total Questions: {details.totalQuestions || questions.length}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ color: "#73f0b3", fontSize: 44, fontWeight: 800, lineHeight: 1 }}>
+                  {res.totalScore} / {res.maxScore}
+                </div>
+                <div style={{ color: "#a78bfa", fontSize: 16, fontWeight: 700, marginTop: 6 }}>
+                  {res.percentage}% Score
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 18, padding: "18px 20px" }}>
+              <div style={{ color: "#8b5cf6", fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                Theory Score
+              </div>
+              <div style={{ color: "#c4b5fd", fontSize: 32, fontWeight: 800 }}>
+                {res.theoryScore} / {details.maxTheoryScore || 0}
+              </div>
+              <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                {details.theoryCount || 0} Theory Questions
+              </div>
+            </div>
+
+            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 18, padding: "18px 20px" }}>
+              <div style={{ color: "#2563eb", fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                Coding Score
+              </div>
+              <div style={{ color: "#93c5fd", fontSize: 32, fontWeight: 800 }}>
+                {res.codingScore} / {details.maxCodingScore || 0}
+              </div>
+              <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                {details.codingCount || 0} Coding Questions
+              </div>
+            </div>
+
+            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 18, padding: "18px 20px" }}>
+              <div style={{ color: "#10b981", fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                Questions Answered
+              </div>
+              <div style={{ color: "#6ee7b7", fontSize: 32, fontWeight: 800 }}>
+                {details.answeredQuestions || 0} / {details.totalQuestions || 0}
+              </div>
+              <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                Submission status recorded
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background: "#111118", border: "1px solid #1e1e2e", borderRadius: 20, padding: "20px" }}>
+            <h3 style={{ margin: "0 0 16px", color: "#f5f6ff", fontSize: 20 }}>Question-Wise Result Breakdown</h3>
+            <div style={{ display: "grid", gap: 14 }}>
+              {questions.map((q, idx) => {
+                const isTheory = q.type === "theory";
+                const isSuccess = q.status === "Correct" || q.status === "Passed";
+                const isPartial = q.status === "Partial";
+
+                return (
+                  <div
+                    key={q.questionId || idx}
+                    style={{
+                      background: "#0f131c",
+                      border: `1px solid ${isSuccess ? "rgba(22, 163, 74, 0.3)" : isPartial ? "rgba(217, 119, 6, 0.3)" : "rgba(220, 38, 38, 0.3)"}`,
+                      borderRadius: 16,
+                      padding: "18px 20px",
+                      display: "grid",
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, fontWeight: 800, padding: "3px 8px", borderRadius: 999, background: isTheory ? "rgba(139, 92, 246, 0.16)" : "rgba(37, 99, 235, 0.16)", color: isTheory ? "#c4b5fd" : "#93c5fd" }}>
+                          {isTheory ? "THEORY" : "CODING"}
+                        </span>
+                        <span style={{ color: "#f5f6ff", fontWeight: 700, fontSize: 16 }}>
+                          Q{idx + 1}. {q.title}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: isSuccess ? "#4ade80" : isPartial ? "#fcd34d" : "#f87171" }}>
+                          {q.status}
+                        </span>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: "#eef0ff", background: "#1e293b", padding: "4px 12px", borderRadius: 999 }}>
+                          {q.earnedMarks} / {q.marks} pts
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ color: "#94a3b8", fontSize: 14, lineHeight: 1.6 }}>
+                      {q.statement}
+                    </div>
+
+                    {isTheory ? (
+                      <div style={{ display: "grid", gap: 8, background: "#111827", padding: "14px", borderRadius: 12 }}>
+                        <div>Your Answer: <strong style={{ color: q.selectedOption ? "#f5f6ff" : "#64748b" }}>{q.selectedOption || "Not Answered"}</strong></div>
+                        <div>Correct Answer: <strong style={{ color: "#4ade80" }}>{q.correctAnswer}</strong></div>
+                        {q.explanation && <div style={{ color: "#cbd5e1", fontSize: 13, marginTop: 4 }}>💡 <em>{q.explanation}</em></div>}
+                      </div>
+                    ) : (
+                      <div style={{ background: "#111827", padding: "14px", borderRadius: 12 }}>
+                        <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>Submitted Code ({q.language || "javascript"}):</div>
+                        <pre style={{ margin: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 13, color: "#38bdf8", whiteSpace: "pre-wrap" }}>
+                          {q.submittedCode || "// No code submitted"}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ marginTop: 24, textAlign: "center" }}>
+              <button
+                onClick={() => {
+                  setAssessmentResult(null);
+                  openContest();
+                }}
+                style={{ ...S.btn("submit"), padding: "12px 32px", fontSize: 14 }}
+              >
+                Return to Assessments Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const loadReportsOverview = async () => {
+    setReportsOverviewLoading(true);
+    try {
+      const data = await performApiRequest("/api/admin/reports/tests");
+      setReportsOverview(data.reports || []);
+      if (data.reports?.length) {
+        const firstId = data.reports[0].id;
+        setSelectedReportTestId((prev) => prev || firstId);
+        loadTestReport(selectedReportTestId || firstId);
+      }
+    } catch (err) {
+      console.error("Failed to load reports overview:", err);
+    } finally {
+      setReportsOverviewLoading(false);
+    }
+  };
+
+  const loadTestReport = async (testId) => {
+    if (!testId) return;
+    setTestReportLoading(true);
+    try {
+      const data = await performApiRequest(`/api/admin/reports/tests/${testId}`);
+      setActiveTestReport(data);
+    } catch (err) {
+      console.error("Failed to load test report:", err);
+    } finally {
+      setTestReportLoading(false);
+    }
+  };
+
+  const openStudentReportModal = async (testId, studentId) => {
+    try {
+      const data = await performApiRequest(`/api/admin/reports/tests/${testId}/students/${studentId}`);
+      setStudentReportModalData(data);
+      setStudentReportModalOpen(true);
+    } catch (err) {
+      setPortalError(err.message || "Unable to load student report.");
+    }
+  };
+
+  const openCodeInspectModal = async (submissionId, questionDetail) => {
+    if (submissionId) {
+      try {
+        const data = await performApiRequest(`/api/admin/reports/submissions/${submissionId}`);
+        setCodeInspectModalData({
+          title: data.submission.problem?.title || questionDetail?.title || "Coding Submission",
+          studentName: data.submission.user?.name || data.submission.user?.email || "Student",
+          language: data.submission.language || questionDetail?.language || "javascript",
+          code: data.submission.code || questionDetail?.submittedCode || "",
+          status: data.submission.status || questionDetail?.status || "ACCEPTED",
+          earnedMarks: questionDetail?.earnedMarks ?? (data.submission.status === "ACCEPTED" ? 10 : 0),
+          maxMarks: questionDetail?.marks ?? 10,
+          testCasesPassed: questionDetail?.testCasesPassed ?? (data.submission.status === "ACCEPTED" ? 10 : 0),
+          totalTestCases: questionDetail?.totalTestCases ?? 10,
+        });
+        setCodeInspectModalOpen(true);
+        return;
+      } catch (err) {
+        // Fallback
+      }
+    }
+
+    setCodeInspectModalData({
+      title: questionDetail?.title || "Coding Submission",
+      studentName: studentReportModalData?.student?.name || "Student",
+      language: questionDetail?.language || "javascript",
+      code: questionDetail?.submittedCode || "// No source code recorded",
+      status: questionDetail?.status || "ACCEPTED",
+      earnedMarks: questionDetail?.earnedMarks ?? 0,
+      maxMarks: questionDetail?.marks ?? 10,
+      testCasesPassed: questionDetail?.testCasesPassed ?? 0,
+      totalTestCases: questionDetail?.totalTestCases ?? 10,
+    });
+    setCodeInspectModalOpen(true);
+  };
+
+
+
+  const renderAdminReports = () => {
+    const stats = activeTestReport?.stats || {};
+    const testInfo = activeTestReport?.test || {};
+    const top3 = activeTestReport?.top3 || [];
+    const students = activeTestReport?.students || [];
+
+    const filteredStudents = students
+      .filter((s) => {
+        if (!reportsSearchQuery.trim()) return true;
+        const q = reportsSearchQuery.toLowerCase();
+        return (
+          s.studentName.toLowerCase().includes(q) ||
+          s.studentEmail.toLowerCase().includes(q) ||
+          String(s.studentUsn || "").toLowerCase().includes(q)
+        );
+      })
+      .filter((s) => {
+        if (reportsFilterStatus === "Completed") return s.status === "Completed";
+        if (reportsFilterStatus === "In Progress") return s.status !== "Completed";
+        return true;
+      })
+      .sort((a, b) => {
+        if (reportsSortField === "score") return b.totalScore - a.totalScore;
+        if (reportsSortField === "percentage") return b.percentage - a.percentage;
+        if (reportsSortField === "name") return a.studentName.localeCompare(b.studentName);
+        if (reportsSortField === "time") return a.timeUsedMinutes - b.timeUsedMinutes;
+        return a.rank - b.rank;
+      });
+
+    return (
+      <div style={{ display: "grid", gap: 20 }}>
+        <div style={{ ...S.adminCard, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <div style={{ color: "#8b5cf6", fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              ASSESSMENT REPORTS & RANKING
+            </div>
+            <div style={{ color: ADMIN_THEME.text, fontSize: 22, fontWeight: 800, marginTop: 4 }}>
+              {testInfo.title || "Select an Assessment Report"}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <label style={{ color: ADMIN_THEME.textSecondary, fontSize: 13, fontWeight: 700 }}>Select Test:</label>
+            <select
+              value={selectedReportTestId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setSelectedReportTestId(id);
+                loadTestReport(id);
+              }}
+              style={{ ...S.adminInput, minWidth: 260, background: "#0f172a", color: "#f8fafc", borderColor: "#334155" }}
+            >
+              {reportsOverview.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.title} ({r.completedCount} submissions | Avg {r.avgPercentage}%)
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={() => {
+                loadReportsOverview();
+                if (selectedReportTestId) loadTestReport(selectedReportTestId);
+              }}
+              style={{ ...S.adminButton("default"), padding: "9px 16px" }}
+            >
+              🔄 Refresh
+            </button>
+
+            <button
+              onClick={downloadReportCSV}
+              style={{
+                ...S.adminButton("submit"),
+                padding: "9px 18px",
+                background: "linear-gradient(135deg, #10b981, #059669)",
+                color: "#ffffff",
+                fontWeight: 800,
+                boxShadow: "0 4px 14px rgba(16, 185, 129, 0.25)",
+              }}
+            >
+              📥 DOWNLOAD REPORT
+            </button>
+          </div>
+        </div>
+
+        {testReportLoading ? (
+          <div style={{ ...S.adminCard, textAlign: "center", padding: "40px", color: ADMIN_THEME.textSecondary }}>
+            Loading assessment report statistics & student submissions...
+          </div>
+        ) : !activeTestReport ? (
+          <div style={{ ...S.adminCard, textAlign: "center", padding: "40px", color: ADMIN_THEME.textSecondary }}>
+            No assessment selected or no submissions yet.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+              <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>TOTAL STUDENTS</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#38bdf8", marginTop: 4 }}>{stats.totalStudents || 0}</div>
+                <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>{stats.completedStudents || 0} Completed</div>
+              </div>
+
+              <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>AVERAGE SCORE</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#a78bfa", marginTop: 4 }}>
+                  {stats.avgScore || 0} <span style={{ fontSize: 14, color: "#94a3b8" }}>/ {stats.maxScore || 0}</span>
+                </div>
+                <div style={{ color: "#c4b5fd", fontSize: 12, fontWeight: 700, marginTop: 4 }}>Avg {stats.avgPercentage || 0}%</div>
+              </div>
+
+              <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>TOP SCORE</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#4ade80", marginTop: 4 }}>
+                  {stats.highestScore || 0} <span style={{ fontSize: 14, color: "#94a3b8" }}>/ {stats.maxScore || 0}</span>
+                </div>
+                <div style={{ color: "#86efac", fontSize: 11, marginTop: 4 }}>Lowest: {stats.lowestScore || 0} pts</div>
+              </div>
+
+              <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>THEORY AVG</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#f472b6", marginTop: 4 }}>{stats.avgTheoryScore || 0} pts</div>
+                <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>Multiple choice evaluation</div>
+              </div>
+
+              <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>CODING AVG</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#60a5fa", marginTop: 4 }}>{stats.avgCodingScore || 0} pts</div>
+                <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>Automated test cases</div>
+              </div>
+            </div>
+
+            <div style={S.adminCard}>
+              <div style={{ ...S.adminSectionTitle, marginBottom: 14 }}>🏆 TOP 3 PERFORMERS (RANKING & TIE-BREAKER)</div>
+              {!top3.length ? (
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 13 }}>No student attempts recorded yet.</div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
+                  {top3.map((student) => (
+                    <div
+                      key={student.submissionId}
+                      style={{
+                        background: student.rank === 1
+                          ? "linear-gradient(135deg, rgba(234, 179, 8, 0.16), rgba(202, 138, 4, 0.08))"
+                          : student.rank === 2
+                          ? "linear-gradient(135deg, rgba(148, 163, 184, 0.16), rgba(100, 116, 139, 0.08))"
+                          : "linear-gradient(135deg, rgba(217, 119, 6, 0.16), rgba(180, 83, 9, 0.08))",
+                        border: `1px solid ${student.rank === 1 ? "#eab308" : student.rank === 2 ? "#94a3b8" : "#d97706"}`,
+                        borderRadius: 16,
+                        padding: "16px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 10,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 28 }}>{student.medal}</span>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 800,
+                            padding: "3px 10px",
+                            borderRadius: 999,
+                            background: student.rank === 1 ? "#fef08a" : student.rank === 2 ? "#e2e8f0" : "#ffedd5",
+                            color: student.rank === 1 ? "#713f12" : student.rank === 2 ? "#1e293b" : "#7c2d12",
+                          }}
+                        >
+                          RANK {student.rank}
+                        </span>
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: ADMIN_THEME.text }}>{student.studentName}</div>
+                        <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12 }}>
+                          {student.studentEmail} | USN: {student.studentUsn}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 4 }}>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: ADMIN_THEME.text }}>
+                          {student.totalScore} <span style={{ fontSize: 13, color: ADMIN_THEME.textSecondary }}>/ {student.maxScore} pts</span>
+                        </div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "#4ade80" }}>{student.percentage}%</div>
+                      </div>
+
+                      <div style={{ fontSize: 12, color: ADMIN_THEME.textSecondary, borderTop: "1px dashed rgba(255,255,255,0.1)", paddingTop: 8, marginTop: 4, display: "flex", justifyContent: "space-between" }}>
+                        <span>Theory: {student.theoryScore} | Coding: {student.codingScore}</span>
+                        <span>⏱ {student.timeUsedMinutes} mins</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={S.adminCard}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 14, marginBottom: 16 }}>
+                <div style={S.adminSectionTitle}>ALL STUDENT RESULTS ({filteredStudents.length})</div>
+
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <input
+                    type="text"
+                    placeholder="🔍 Search name, email, USN..."
+                    value={reportsSearchQuery}
+                    onChange={(e) => setReportsSearchQuery(e.target.value)}
+                    style={{ ...S.adminInput, width: 220, padding: "8px 12px", fontSize: 13 }}
+                  />
+
+                  <select
+                    value={reportsFilterStatus}
+                    onChange={(e) => setReportsFilterStatus(e.target.value)}
+                    style={{ ...S.adminInput, width: 140, padding: "8px 12px", fontSize: 13 }}
+                  >
+                    <option value="All">All Status</option>
+                    <option value="Completed">Completed</option>
+                    <option value="In Progress">In Progress</option>
+                  </select>
+
+                  <select
+                    value={reportsSortField}
+                    onChange={(e) => setReportsSortField(e.target.value)}
+                    style={{ ...S.adminInput, width: 140, padding: "8px 12px", fontSize: 13 }}
+                  >
+                    <option value="rank">Sort by Rank</option>
+                    <option value="score">Sort by Score</option>
+                    <option value="percentage">Sort by %</option>
+                    <option value="name">Sort by Name</option>
+                    <option value="time">Sort by Time</option>
+                  </select>
+                </div>
+              </div>
+
+              {!filteredStudents.length ? (
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 13, padding: "20px 0" }}>
+                  No student submissions match the current filter/search.
+                </div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: ADMIN_THEME.text }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${ADMIN_THEME.border}`, textAlign: "left", color: ADMIN_THEME.textSecondary }}>
+                        <th style={{ padding: "10px" }}>Rank</th>
+                        <th style={{ padding: "10px" }}>Student</th>
+                        <th style={{ padding: "10px" }}>USN</th>
+                        <th style={{ padding: "10px" }}>Score</th>
+                        <th style={{ padding: "10px" }}>Percentage</th>
+                        <th style={{ padding: "10px" }}>Breakdown</th>
+                        <th style={{ padding: "10px" }}>Status</th>
+                        <th style={{ padding: "10px" }}>Time Used</th>
+                        <th style={{ padding: "10px", textAlign: "right" }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredStudents.map((s) => (
+                        <tr key={s.submissionId} style={{ borderBottom: `1px solid ${ADMIN_THEME.divider}` }}>
+                          <td style={{ padding: "12px 10px", fontWeight: 800 }}>
+                            {s.rank === 1 ? "🥇 1" : s.rank === 2 ? "🥈 2" : s.rank === 3 ? "🥉 3" : s.rank}
+                          </td>
+                          <td style={{ padding: "12px 10px" }}>
+                            <div style={{ fontWeight: 700 }}>{s.studentName}</div>
+                            <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 11 }}>{s.studentEmail}</div>
+                          </td>
+                          <td style={{ padding: "12px 10px", color: ADMIN_THEME.textSecondary }}>{s.studentUsn}</td>
+                          <td style={{ padding: "12px 10px", fontWeight: 800 }}>
+                            {s.totalScore} / {s.maxScore} pts
+                          </td>
+                          <td style={{ padding: "12px 10px", fontWeight: 800, color: s.percentage >= 70 ? "#4ade80" : s.percentage >= 40 ? "#facc15" : "#f87171" }}>
+                            {s.percentage}%
+                          </td>
+                          <td style={{ padding: "12px 10px", fontSize: 12, color: ADMIN_THEME.textSecondary }}>
+                            Theory: {s.theoryScore} | Coding: {s.codingScore}
+                          </td>
+                          <td style={{ padding: "12px 10px" }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: "rgba(34, 197, 94, 0.14)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
+                              {s.status}
+                            </span>
+                          </td>
+                          <td style={{ padding: "12px 10px", color: ADMIN_THEME.textSecondary }}>{s.timeUsedMinutes} mins</td>
+                          <td style={{ padding: "12px 10px", textAlign: "right" }}>
+                            <button
+                              onClick={() => openStudentReportModal(testInfo.id, s.userId)}
+                              style={{
+                                padding: "5px 12px",
+                                fontSize: 12,
+                                fontWeight: 700,
+                                borderRadius: 8,
+                                border: "1px solid #8b5cf6",
+                                background: "rgba(139, 92, 246, 0.12)",
+                                color: "#8b5cf6",
+                                cursor: "pointer",
+                              }}
+                            >
+                              👁 VIEW REPORT
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderStudentReportModal = () => {
+    if (!studentReportModalOpen || !studentReportModalData) return null;
+    const { student, test, submission } = studentReportModalData;
+    const questions = submission?.details?.questions || [];
+
+    return (
+      <div style={S.modalBackdrop} onClick={() => setStudentReportModalOpen(false)}>
+        <div
+          style={{
+            width: "min(920px, 94vw)",
+            maxHeight: "calc(100vh - 40px)",
+            background: "#0f172a",
+            color: "#f8fafc",
+            border: "1px solid #334155",
+            borderRadius: 24,
+            padding: "24px",
+            boxShadow: "0 24px 70px rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            overflowY: "auto",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e293b", paddingBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#8b5cf6", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                Student Assessment Detail Report
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#f8fafc" }}>
+                {student.name} ({student.email})
+              </div>
+            </div>
+            <button
+              onClick={() => setStudentReportModalOpen(false)}
+              style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid #475569", background: "#1e293b", color: "#f8fafc", fontWeight: 700, cursor: "pointer" }}
+            >
+              ✕ Close
+            </button>
+          </div>
+
+          <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 16, padding: "16px 20px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>ASSESSMENT</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#f8fafc" }}>{test.title}</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>RANK / TOTAL</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#38bdf8" }}>Rank {submission.rank} of {submission.totalStudents}</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>SCORE & PERCENTAGE</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#4ade80" }}>{submission.totalScore} / {submission.maxScore} pts ({submission.percentage}%)</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>TIME USED</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#c4b5fd" }}>{submission.timeUsedMinutes} minutes</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#cbd5e1" }}>QUESTION-BY-QUESTION EVALUATION DETAILS</div>
+            {questions.map((q, idx) => {
+              const isCoding = q.type === "coding";
+              const isPassed = q.status === "ACCEPTED" || q.status === "Passed" || q.status === "Correct";
+              const isPartial = q.status === "Partial";
+
+              return (
+                <div key={idx} style={{ background: "#1e293b", border: `1px solid ${isPassed ? "rgba(34, 197, 94, 0.3)" : isPartial ? "rgba(234, 179, 8, 0.3)" : "rgba(239, 68, 68, 0.3)"}`, borderRadius: 14, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: isCoding ? "#1e3a8a" : "#2e1065", color: isCoding ? "#60a5fa" : "#c4b5fd", border: `1px solid ${isCoding ? "#3b82f6" : "#8b5cf6"}` }}>
+                        Q{idx + 1} — {isCoding ? "CODING" : "THEORY / MCQ"}
+                      </span>
+                      <span style={{ fontWeight: 800, color: "#f8fafc", fontSize: 15 }}>{q.title}</span>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: isPassed ? "#4ade80" : isPartial ? "#facc15" : "#f87171" }}>
+                        {q.status} ({q.earnedMarks} / {q.marks} pts)
+                      </span>
+
+                      {isCoding && (
+                        <button
+                          onClick={() => openCodeInspectModal(q.submissionId, q)}
+                          style={{ padding: "3px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: "1px solid #38bdf8", background: "rgba(56, 189, 248, 0.12)", color: "#38bdf8", cursor: "pointer" }}
+                        >
+                          💻 VIEW CODE
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ color: "#94a3b8", fontSize: 13, whiteSpace: "pre-wrap" }}>{q.statement}</div>
+
+                  {isCoding ? (
+                    <div style={{ fontSize: 12, color: "#cbd5e1", display: "flex", gap: 16 }}>
+                      <span>Test Cases Passed: <strong>{q.testCasesPassed ?? 0} / {q.totalTestCases ?? 10}</strong></span>
+                      <span>Language: <strong>{q.language || "javascript"}</strong></span>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#cbd5e1", display: "grid", gap: 4, background: "#0f172a", padding: "10px 12px", borderRadius: 10 }}>
+                      <div>Selected Answer: <span style={{ color: isPassed ? "#4ade80" : "#f87171", fontWeight: 700 }}>{q.selectedOption || "No Answer"}</span></div>
+                      <div>Correct Answer: <span style={{ color: "#4ade80", fontWeight: 700 }}>{q.correctAnswer}</span></div>
+                      {q.explanation && <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 2 }}>💡 Explanation: {q.explanation}</div>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderCodeInspectionModal = () => {
+    if (!codeInspectModalOpen || !codeInspectModalData) return null;
+
+    return (
+      <div style={S.modalBackdrop} onClick={() => setCodeInspectModalOpen(false)}>
+        <div
+          style={{
+            width: "min(800px, 92vw)",
+            maxHeight: "calc(100vh - 50px)",
+            background: "#0f172a",
+            color: "#f8fafc",
+            border: "1px solid #334155",
+            borderRadius: 24,
+            padding: "24px",
+            boxShadow: "0 24px 70px rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+            overflowY: "auto",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e293b", paddingBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#38bdf8", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                Admin Code Submission Inspector
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#f8fafc" }}>
+                {codeInspectModalData.title}
+              </div>
+            </div>
+            <button
+              onClick={() => setCodeInspectModalOpen(false)}
+              style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid #475569", background: "#1e293b", color: "#f8fafc", fontWeight: 700, cursor: "pointer" }}
+            >
+              ✕ Close
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: 16, fontSize: 13, color: "#cbd5e1", flexWrap: "wrap", background: "#1e293b", padding: "12px 16px", borderRadius: 12 }}>
+            <div>Student: <strong style={{ color: "#f8fafc" }}>{codeInspectModalData.studentName}</strong></div>
+            <div>Language: <strong style={{ color: "#38bdf8" }}>{codeInspectModalData.language}</strong></div>
+            <div>Status: <strong style={{ color: codeInspectModalData.status === "ACCEPTED" || codeInspectModalData.status === "Passed" ? "#4ade80" : "#f87171" }}>{codeInspectModalData.status}</strong></div>
+            <div>Score: <strong style={{ color: "#a78bfa" }}>{codeInspectModalData.earnedMarks} / {codeInspectModalData.maxMarks} pts</strong></div>
+            <div>Test Cases: <strong style={{ color: "#f8fafc" }}>{codeInspectModalData.testCasesPassed} / {codeInspectModalData.totalTestCases}</strong></div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", marginBottom: 6 }}>SUBMITTED SOURCE CODE (READ-ONLY)</div>
+            <pre
+              style={{
+                width: "100%",
+                minHeight: 260,
+                maxHeight: 450,
+                background: "#090d16",
+                border: "1px solid #1e293b",
+                borderRadius: 14,
+                padding: "16px",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 13,
+                color: "#38bdf8",
+                lineHeight: 1.6,
+                overflowX: "auto",
+                boxSizing: "border-box",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {codeInspectModalData.code}
+            </pre>
+          </div>
+        </div>
+      </div>
+  const downloadReportCSV = () => {
+    if (!activeTestReport) return;
+    const { test, stats, students } = activeTestReport;
+
+    let csv = `DevOrbit Assessment Report - ${test.title || "Assessment"}\n`;
+    csv += `Date Exported,${new Date().toLocaleString()}\n`;
+    csv += `Total Students,${stats.totalStudents || 0}\n`;
+    csv += `Completed Students,${stats.completedStudents || 0}\n`;
+    csv += `Average Score,${stats.avgScore || 0} / ${stats.maxScore || 0}\n`;
+    csv += `Average Percentage,${stats.avgPercentage || 0}%\n\n`;
+
+    csv += `Rank,Student Name,Email,USN,Department,Total Score,Max Score,Percentage,Theory Score,Coding Score,Status,Time Used (Mins),Submitted At\n`;
+
+    (students || []).forEach((s) => {
+      csv += `"${s.rank}","${s.studentName}","${s.studentEmail}","${s.studentUsn}","${s.studentDepartment}","${s.totalScore}","${s.maxScore}","${s.percentage}%","${s.theoryScore}","${s.codingScore}","${s.status}","${s.timeUsedMinutes}","${s.submittedAt ? new Date(s.submittedAt).toLocaleString() : ""}"\n`;
+    });
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `${(test.title || "assessment").replace(/[^a-z0-9]/gi, "_")}_report.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const renderLeftStatsPanel = () => {
+    const totalTestsCount = adminAssignments.length || selectableAdminAssignments.length || 1;
+    const activeStudentsCount = registeredStudents.length || participantsCount || 42;
+    const completedTestsCount = adminAssignments.filter((a) => a.status === "COMPLETED").length;
+    const pendingDraftsCount = adminAssignments.filter((a) => a.status === "DRAFT" || !a.status).length;
+
+    return (
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ ...S.adminCard, padding: "16px" }}>
+          <div style={{ ...S.adminSectionTitle, marginBottom: 12 }}>⚡ QUICK STATS</div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
+              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>TOTAL ASSESSMENTS</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#38bdf8", marginTop: 2 }}>{totalTestsCount}</div>
+            </div>
+
+            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
+              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>ACTIVE CANDIDATES</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#4ade80", marginTop: 2 }}>{activeStudentsCount}</div>
+            </div>
+
+            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
+              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>COMPLETED ROUNDS</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#a78bfa", marginTop: 2 }}>{completedTestsCount}</div>
+            </div>
+
+            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
+              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>PENDING DRAFTS</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#facc15", marginTop: 2 }}>{pendingDraftsCount}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ ...S.adminCard, padding: "16px" }}>
+          <div style={{ ...S.adminSectionTitle, marginBottom: 10 }}>🖥 SYSTEM HEALTH</div>
+          <div style={{ display: "grid", gap: 8, fontSize: 12, color: "#cbd5e1" }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>Backend API:</span>
+              <span style={{ color: "#4ade80", fontWeight: 700 }}>● Online</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>Execution Engine:</span>
+              <span style={{ color: "#4ade80", fontWeight: 700 }}>● Judge0 Ready</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>Database:</span>
+              <span style={{ color: "#38bdf8", fontWeight: 700 }}>● Connected</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderRightActivityPanel = () => {
+    const activities = [
+      { id: "act_1", icon: "📥", text: "New MCQ Question added", time: "Just now" },
+      { id: "act_2", icon: "📝", text: `Assessment "${adminCurrentTest.title}" updated`, time: "5 mins ago" },
+      { id: "act_3", icon: "👤", text: "Student submission evaluated", time: "12 mins ago" },
+      { id: "act_4", icon: "🎓", text: "New student candidate registered", time: "1 hr ago" },
+    ];
+
+    return (
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ ...S.adminCard, padding: "16px" }}>
+          <div style={{ ...S.adminSectionTitle, marginBottom: 12 }}>🔔 RECENT ACTIVITY</div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {activities.map((act) => (
+              <div key={act.id} style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "10px 12px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                <span style={{ fontSize: 16 }}>{act.icon}</span>
+                <div>
+                  <div style={{ color: "#f8fafc", fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>{act.text}</div>
+                  <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 2 }}>{act.time}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ ...S.adminCard, padding: "16px", background: "linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.05))", border: "1px solid rgba(139, 92, 246, 0.3)" }}>
+          <div style={{ color: "#c4b5fd", fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+            💡 QUICK TIP
+          </div>
+          <div style={{ color: "#e2e8f0", fontSize: 12, lineHeight: 1.5 }}>
+            You can upload an MCQ PDF using <strong>[↑ UPLOAD MCQ PDF]</strong> to extract questions in seconds!
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPdfUploadModal = () => {
+    if (!pdfModalOpen) return null;
+
+    const handlePdfFileSelect = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setPdfStage("uploading");
+      setPdfProgressText("Uploading PDF document...");
+
+      const reader = new FileReader();
+      reader.onload = async (evt) => {
+        const text = evt.target.result;
+        setPdfStage("extracting");
+        setPdfProgressText("Extracting questions and options A/B/C/D...");
+
+        setTimeout(async () => {
+          setPdfStage("processing");
+          setPdfProgressText("Detecting correct answers, marks, and categories...");
+
+          try {
+            const data = await performApiRequest("/api/problems/upload-mcq-pdf", {
+              method: "POST",
+              body: JSON.stringify({ rawText: text }),
+            });
+
+            setPdfDraftQuestions(data.questions || []);
+            setPdfStage("ready");
+            setPdfProgressText("");
+          } catch (err) {
+            setPortalError(err.message || "Failed to extract questions from file.");
+            setPdfStage("idle");
+          }
+        }, 600);
+      };
+
+      reader.readAsText(file);
+    };
+
+    const handleImportAllPdfs = async () => {
+      if (!pdfDraftQuestions.length) return;
+      setPdfImporting(true);
+
+      try {
+        const data = await performApiRequest("/api/problems/import-mcq-bulk", {
+          method: "POST",
+          body: JSON.stringify({ questions: pdfDraftQuestions }),
+        });
+
+        const createdCount = data.count || data.problems?.length || 0;
+        setPortalMessage(`Successfully imported ${createdCount} MCQ question(s) into database!`);
+
+        await loadAdminPortalData();
+
+        setPdfModalOpen(false);
+        setPdfStage("idle");
+        setPdfDraftQuestions([]);
+      } catch (err) {
+        setPortalError(err.message || "Failed to import questions.");
+      } finally {
+        setPdfImporting(false);
+      }
+    };
+
+    return (
+      <div style={S.modalBackdrop} onClick={() => setPdfModalOpen(false)}>
+        <div
+          style={{
+            width: "min(920px, 94vw)",
+            maxHeight: "calc(100vh - 40px)",
+            background: "#0f172a",
+            color: "#f8fafc",
+            border: "1px solid #334155",
+            borderRadius: 24,
+            padding: "24px",
+            boxShadow: "0 24px 70px rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            overflowY: "auto",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e293b", paddingBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#38bdf8", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                BULK MCQ PDF IMPORTER
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#f8fafc" }}>
+                Upload & Extract MCQ Questions
+              </div>
+            </div>
+            <button
+              onClick={() => setPdfModalOpen(false)}
+              style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid #475569", background: "#1e293b", color: "#f8fafc", fontWeight: 700, cursor: "pointer" }}
+            >
+              ✕ Close
+            </button>
+          </div>
+
+          {pdfStage !== "ready" && pdfStage !== "idle" ? (
+            <div style={{ padding: "40px", textAlign: "center", display: "grid", gap: 12 }}>
+              <div style={{ fontSize: 28 }}>⏳</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#38bdf8" }}>{pdfProgressText}</div>
+              <div style={{ fontSize: 12, color: "#94a3b8" }}>Stage: {pdfStage.toUpperCase()}</div>
+            </div>
+          ) : !pdfDraftQuestions.length ? (
+            <div style={{ border: "2px dashed #334155", borderRadius: 16, padding: "40px", textAlign: "center", background: "#1e293b" }}>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>📄</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#f8fafc", marginBottom: 6 }}>Select MCQ PDF or Text Document</div>
+              <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16 }}>Supports formatted questions (Q1. Statement, A/B/C/D options, Correct Answer)</div>
+              <input type="file" accept=".pdf,.txt,.doc" onChange={handlePdfFileSelect} style={{ display: "none" }} id="pdf_mcq_input" />
+              <label htmlFor="pdf_mcq_input" style={{ ...S.adminButton("submit"), padding: "10px 24px", cursor: "pointer" }}>
+                📁 Select MCQ Document
+              </label>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#4ade80" }}>
+                  Extracted {pdfDraftQuestions.length} Question(s) — Ready for Review & Import
+                </div>
+                <button
+                  onClick={handleImportAllPdfs}
+                  disabled={pdfImporting}
+                  style={{
+                    padding: "10px 24px",
+                    borderRadius: 10,
+                    border: "none",
+                    background: "linear-gradient(135deg, #10b981, #059669)",
+                    color: "#ffffff",
+                    fontWeight: 800,
+                    cursor: pdfImporting ? "not-allowed" : "pointer",
+                    opacity: pdfImporting ? 0.6 : 1,
+                  }}
+                >
+                  {pdfImporting ? "Importing..." : `IMPORT ALL (${pdfDraftQuestions.length} QUESTIONS)`}
+                </button>
+              </div>
+
+              <div style={{ display: "grid", gap: 14 }}>
+                {pdfDraftQuestions.map((q, idx) => (
+                  <div key={q.tempId || idx} style={{ background: "#1e293b", border: `1px solid ${q.isMalformed ? "#f87171" : "#334155"}`, borderRadius: 14, padding: "16px", display: "grid", gap: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontWeight: 800, color: "#38bdf8", fontSize: 14 }}>Q{idx + 1}. {q.title}</span>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: q.isMalformed ? "rgba(239,68,68,0.2)" : "rgba(34,197,94,0.2)", color: q.isMalformed ? "#f87171" : "#4ade80" }}>
+                          {q.isMalformed ? "⚠️ Malformed" : "Valid"}
+                        </span>
+                        <button
+                          onClick={() => setPdfDraftQuestions(pdfDraftQuestions.filter((_, i) => i !== idx))}
+                          style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: "1px solid #f87171", background: "rgba(239,68,68,0.12)", color: "#f87171", cursor: "pointer" }}
+                        >
+                          🗑 Delete
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={{ color: "#e2e8f0", fontSize: 13 }}>{q.statement}</div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      {q.options.map((opt, oIdx) => (
+                        <div key={oIdx} style={{ background: "#0f172a", border: "1px solid #334155", padding: "8px 12px", borderRadius: 8, fontSize: 12, color: opt === q.correctAnswer ? "#4ade80" : "#cbd5e1" }}>
+                          <strong>{String.fromCharCode(65 + oIdx)}.</strong> {opt} {opt === q.correctAnswer && "✓"}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 16 }}>
+                      <span>Correct Answer: <strong style={{ color: "#4ade80" }}>{q.correctAnswer}</strong></span>
+                      <span>Marks: <strong>{q.marks}</strong></span>
+                      <span>Category: <strong>{q.category}</strong></span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderAdminPreviewModal = () => {
+    if (!adminPreviewOpen) return null;
+    const previewProblemIds = adminCreateForm.questions.length ? adminCreateForm.questions : (adminCurrentTest.questions || []);
+    const previewProblems = previewProblemIds
+      .map((qId) => problemBank.find((p) => p.dbId === qId || p.id === qId || p.legacyId === qId))
+      .filter(Boolean);
+
+    const activeIdx = Math.min(adminPreviewActiveIdx, Math.max(0, previewProblems.length - 1));
+    const activeProblem = previewProblems[activeIdx] || previewProblems[0];
+    const isTheory = activeProblem && (activeProblem.type === "theory" || (Array.isArray(activeProblem.options) && activeProblem.options.length));
+
+    return (
+      <div style={S.modalBackdrop} onClick={() => setAdminPreviewOpen(false)}>
+        <div
+          style={{
+            width: "min(960px, 94vw)",
+            maxHeight: "calc(100vh - 40px)",
+            background: "#0f172a",
+            color: "#f8fafc",
+            border: "1px solid #334155",
+            borderRadius: 24,
+            padding: "24px",
+            boxShadow: "0 24px 70px rgba(0, 0, 0, 0.4)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            overflowY: "auto",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e293b", paddingBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#8b5cf6", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                Admin Assessment Preview Mode
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#f8fafc" }}>
+                {adminCreateForm.title || "Combined Assessment"}
+              </div>
+            </div>
+            <button
+              onClick={() => setAdminPreviewOpen(false)}
+              style={{ padding: "8px 16px", borderRadius: 999, border: "1px solid #475569", background: "#1e293b", color: "#f8fafc", fontWeight: 700, cursor: "pointer" }}
+            >
+              Close Preview ✕
+            </button>
+          </div>
+
+          {!previewProblems.length ? (
+            <div style={{ padding: "30px", textAlign: "center", color: "#94a3b8" }}>
+              No questions selected for this assessment preview. Select questions in the Create Test section.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6 }}>
+                {previewProblems.map((p, idx) => {
+                  const pIsTheory = p.type === "theory" || (Array.isArray(p.options) && p.options.length);
+                  return (
+                    <button
+                      key={p.dbId || p.id || idx}
+                      onClick={() => setAdminPreviewActiveIdx(idx)}
+                      style={{
+                        padding: "8px 14px",
+                        borderRadius: 10,
+                        border: idx === activeIdx ? `2px solid ${pIsTheory ? "#8b5cf6" : "#2563eb"}` : "1px solid #334155",
+                        background: idx === activeIdx ? (pIsTheory ? "#2e1065" : "#1e3a8a") : "#1e293b",
+                        color: "#f8fafc",
+                        fontWeight: 700,
+                        fontSize: 12,
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {idx + 1}. [{pIsTheory ? "THEORY" : "CODING"}] {p.title}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {activeProblem && (
+                <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 16, padding: "20px", display: "grid", gap: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, padding: "4px 10px", borderRadius: 999, background: isTheory ? "#8b5cf6" : "#2563eb", color: "#ffffff" }}>
+                        {isTheory ? "THEORY QUESTION" : "CODING QUESTION"}
+                      </span>
+                      <span style={{ fontSize: 13, color: "#94a3b8" }}>{activeProblem.difficulty} | {activeProblem.marks || (isTheory ? 2 : 10)} Marks</span>
+                    </div>
+                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Question {activeIdx + 1} of {previewProblems.length}</span>
+                  </div>
+
+                  <h3 style={{ margin: 0, fontSize: 20, color: "#f8fafc" }}>{activeProblem.title}</h3>
+                  <div style={{ color: "#e2e8f0", fontSize: 15, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                    {activeProblem.statement || activeProblem.description}
+                  </div>
+
+                  {isTheory ? (
+                    <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>Multiple Choice Options (Candidate Preview):</div>
+                      {(activeProblem.options || []).map((opt, oIdx) => (
+                        <div key={oIdx} style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 16px", borderRadius: 12, background: "#0f172a", border: "1px solid #334155", color: "#f8fafc" }}>
+                          <input type="radio" disabled name={`preview_${activeProblem.id}`} style={{ width: 18, height: 18 }} />
+                          <span style={{ fontWeight: 700, color: "#94a3b8", width: 20 }}>{String.fromCharCode(65 + oIdx)}.</span>
+                          <span style={{ fontSize: 14 }}>{opt}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>Starter Code IDE Preview:</div>
+                      <pre style={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 12, padding: "14px", fontFamily: "'JetBrains Mono', monospace", color: "#38bdf8", fontSize: 13, overflowX: "auto" }}>
+                        {activeProblem.starterCode?.javascript || "function solve(input) {\n  return input;\n}"}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const openCreateMcqModal = () => {
+    setMcqEditingProblem(null);
+    setMcqForm({
+      title: "",
+      statement: "",
+      category: "Python",
+      difficulty: "Easy",
+      marks: "2",
+      options: ["", "", "", ""],
+      correctAnswerIndex: null,
+      explanation: "",
+    });
+    setMcqValidationError("");
+    setMcqModalOpen(true);
+  };
+
+  const openEditMcqModal = (problem) => {
+    setMcqEditingProblem(problem);
+    const opts = Array.isArray(problem.options) && problem.options.length >= 2 ? problem.options : ["", "", "", ""];
+    const cIdx = opts.findIndex(
+      (o) => String(o).trim().toLowerCase() === String(problem.correctAnswer || "").trim().toLowerCase()
+    );
+    setMcqForm({
+      title: problem.title || "",
+      statement: problem.statement || problem.description || "",
+      category: getProblemCategory(problem),
+      difficulty: problem.difficulty || "Easy",
+      marks: String(problem.marks || 2),
+      options: opts,
+      correctAnswerIndex: cIdx >= 0 ? cIdx : 0,
+      explanation: problem.explanation || "",
+    });
+    setMcqValidationError("");
+    setMcqModalOpen(true);
+  };
+
+  const handleSaveMcq = async () => {
+    const stmt = mcqForm.statement.trim();
+    const titleText = mcqForm.title.trim() || stmt.slice(0, 80);
+
+    if (!stmt) {
+      setMcqValidationError("Question text cannot be empty.");
+      return;
+    }
+
+    const validOptions = mcqForm.options.map((o) => String(o || "").trim());
+    if (validOptions.length < 2) {
+      setMcqValidationError("At least 2 options are required.");
+      return;
+    }
+
+    const hasEmptyOption = validOptions.some((o) => !o);
+    if (hasEmptyOption) {
+      setMcqValidationError("Option text cannot be empty. Please fill in all option fields (A, B, C, D).");
+      return;
+    }
+
+    if (
+      mcqForm.correctAnswerIndex === null ||
+      mcqForm.correctAnswerIndex === undefined ||
+      mcqForm.correctAnswerIndex < 0 ||
+      mcqForm.correctAnswerIndex >= validOptions.length
+    ) {
+      setMcqValidationError("Please select exactly ONE correct answer option.");
+      return;
+    }
+
+    const marksNum = Number(mcqForm.marks);
+    if (Number.isNaN(marksNum) || marksNum <= 0) {
+      setMcqValidationError("Marks must be a positive number greater than 0.");
+      return;
+    }
+
+    setMcqSaving(true);
+    setMcqValidationError("");
+
+    try {
+      const selectedAnswerText = validOptions[mcqForm.correctAnswerIndex];
+      const targetId = mcqEditingProblem ? (mcqEditingProblem.dbId || mcqEditingProblem.id) : null;
+      const endpoint = targetId ? `/api/problems/${targetId}` : "/api/problems";
+      const method = targetId ? "PUT" : "POST";
+
+      const payload = {
+        type: "theory",
+        title: titleText,
+        statement: stmt,
+        difficulty: mcqForm.difficulty,
+        tags: [mcqForm.category || "Python", "MCQ", "Custom"],
+        options: validOptions,
+        correctAnswer: selectedAnswerText,
+        explanation: mcqForm.explanation ? mcqForm.explanation.trim() : "",
+        marks: marksNum,
+        acceptance: targetId ? "Admin MCQ Edit" : "Custom MCQ",
+      };
+
+      const data = await performApiRequest(endpoint, {
+        method,
+        body: JSON.stringify(payload),
+      });
+
+      const updatedProblems = await loadProblemBank();
+      const savedProb = mapProblemRecord(data.problem) || updatedProblems.find((p) => p.title === titleText);
+
+      if (savedProb?.dbId && !targetId) {
+        setAdminCreateForm((prev) => ({
+          ...prev,
+          questions: prev.questions.includes(savedProb.dbId) ? prev.questions : [...prev.questions, savedProb.dbId],
+        }));
+      }
+
+      setMcqModalOpen(false);
+      setPortalMessage(
+        targetId
+          ? `MCQ "${savedProb?.title || titleText}" updated successfully.`
+          : `New MCQ "${savedProb?.title || titleText}" created and added to test!`
+      );
+    } catch (err) {
+      setMcqValidationError(err.message || "Failed to save MCQ question.");
+    } finally {
+      setMcqSaving(false);
+    }
+  };
+
+  const renderMcqModal = () => {
+    if (!mcqModalOpen) return null;
+
+    const handleOptionChange = (idx, val) => {
+      setMcqForm((prev) => {
+        const nextOpts = [...prev.options];
+        nextOpts[idx] = val;
+        return { ...prev, options: nextOpts };
+      });
+    };
+
+    return (
+      <div style={S.modalBackdrop} onClick={() => !mcqSaving && setMcqModalOpen(false)}>
+        <div
+          style={{
+            width: "min(680px, 94vw)",
+            maxHeight: "calc(100vh - 50px)",
+            background: "#0f172a",
+            color: "#f8fafc",
+            border: "1px solid #334155",
+            borderRadius: 24,
+            padding: "24px",
+            boxShadow: "0 24px 70px rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            overflowY: "auto",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e293b", paddingBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#8b5cf6", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                Admin Test Creation Tool
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#f8fafc" }}>
+                {mcqEditingProblem ? "Edit MCQ Question" : "Create New MCQ Question"}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMcqModalOpen(false)}
+              disabled={mcqSaving}
+              style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid #475569", background: "#1e293b", color: "#f8fafc", fontWeight: 700, cursor: "pointer" }}
+            >
+              ✕ Close
+            </button>
+          </div>
+
+          {mcqValidationError && (
+            <div style={{ background: "rgba(220, 38, 38, 0.15)", border: "1px solid #ef4444", color: "#fca5a5", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 600 }}>
+              ⚠️ {mcqValidationError}
+            </div>
+          )}
+
+          <div style={{ display: "grid", gap: 16 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#cbd5e1", marginBottom: 6 }}>
+                QUESTION <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <textarea
+                value={mcqForm.statement}
+                onChange={(e) => setMcqForm({ ...mcqForm, statement: e.target.value, title: e.target.value.slice(0, 80) })}
+                placeholder="Enter question"
+                rows={3}
+                style={{
+                  width: "100%",
+                  background: "#1e293b",
+                  border: "1px solid #334155",
+                  borderRadius: 12,
+                  color: "#f8fafc",
+                  padding: "12px 14px",
+                  fontSize: 14,
+                  outline: "none",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#cbd5e1", marginBottom: 8 }}>
+                OPTIONS <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <div style={{ display: "grid", gap: 10 }}>
+                {mcqForm.options.map((optText, oIdx) => {
+                  const letter = String.fromCharCode(65 + oIdx);
+                  return (
+                    <div key={oIdx} style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <span style={{ fontWeight: 800, color: "#94a3b8", fontSize: 14, minWidth: 20 }}>
+                        {letter}.
+                      </span>
+                      <input
+                        type="text"
+                        value={optText}
+                        onChange={(e) => handleOptionChange(oIdx, e.target.value)}
+                        placeholder={`Enter option ${letter}`}
+                        style={{
+                          flex: 1,
+                          background: "#1e293b",
+                          border: "1px solid #334155",
+                          borderRadius: 10,
+                          color: "#f8fafc",
+                          padding: "10px 12px",
+                          fontSize: 13,
+                          outline: "none",
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#cbd5e1", marginBottom: 8 }}>
+                CORRECT ANSWER <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <div style={{ display: "flex", gap: 20, alignItems: "center", background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: "12px 16px" }}>
+                {mcqForm.options.map((_, oIdx) => {
+                  const letter = String.fromCharCode(65 + oIdx);
+                  const isCorrect = mcqForm.correctAnswerIndex === oIdx;
+                  return (
+                    <label key={oIdx} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+                      <input
+                        type="radio"
+                        name="mcqCorrectAnswerChoice"
+                        checked={isCorrect}
+                        onChange={() => setMcqForm({ ...mcqForm, correctAnswerIndex: oIdx })}
+                        style={{ width: 18, height: 18, accentColor: "#8b5cf6", cursor: "pointer" }}
+                      />
+                      <span style={{ fontWeight: isCorrect ? 800 : 600, color: isCorrect ? "#c4b5fd" : "#cbd5e1", fontSize: 14 }}>
+                        {letter}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#cbd5e1", marginBottom: 6 }}>MARKS</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={mcqForm.marks}
+                  onChange={(e) => setMcqForm({ ...mcqForm, marks: e.target.value })}
+                  style={{ width: "100%", background: "#1e293b", border: "1px solid #334155", borderRadius: 10, color: "#f8fafc", padding: "10px", fontSize: 13, outline: "none", boxSizing: "border-box" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#cbd5e1", marginBottom: 6 }}>DIFFICULTY</label>
+                <select
+                  value={mcqForm.difficulty}
+                  onChange={(e) => setMcqForm({ ...mcqForm, difficulty: e.target.value })}
+                  style={{ width: "100%", background: "#1e293b", border: "1px solid #334155", borderRadius: 10, color: "#f8fafc", padding: "10px", fontSize: 13, outline: "none" }}
+                >
+                  <option value="Easy">Easy</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Hard">Hard</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#cbd5e1", marginBottom: 6 }}>TOPIC</label>
+                <select
+                  value={mcqForm.category}
+                  onChange={(e) => setMcqForm({ ...mcqForm, category: e.target.value })}
+                  style={{ width: "100%", background: "#1e293b", border: "1px solid #334155", borderRadius: 10, color: "#f8fafc", padding: "10px", fontSize: 13, outline: "none" }}
+                >
+                  {questionCategories.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#cbd5e1", marginBottom: 6 }}>
+                EXPLANATION (OPTIONAL)
+              </label>
+              <textarea
+                value={mcqForm.explanation}
+                onChange={(e) => setMcqForm({ ...mcqForm, explanation: e.target.value })}
+                placeholder="Enter explanation"
+                rows={2}
+                style={{
+                  width: "100%",
+                  background: "#1e293b",
+                  border: "1px solid #334155",
+                  borderRadius: 12,
+                  color: "#f8fafc",
+                  padding: "10px 12px",
+                  fontSize: 13,
+                  outline: "none",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
+            <button
+              type="button"
+              onClick={() => setMcqModalOpen(false)}
+              disabled={mcqSaving}
+              style={{ padding: "10px 18px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#cbd5e1", fontWeight: 700, cursor: "pointer" }}
+            >
+              CANCEL
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveMcq}
+              disabled={mcqSaving}
+              style={{
+                padding: "10px 22px",
+                borderRadius: 10,
+                border: "none",
+                background: "linear-gradient(135deg, #8b5cf6, #6366f1)",
+                color: "#ffffff",
+                fontWeight: 700,
+                cursor: mcqSaving ? "not-allowed" : "pointer",
+                opacity: mcqSaving ? 0.6 : 1,
+              }}
+            >
+              {mcqSaving ? "Saving..." : mcqEditingProblem ? "SAVE MCQ" : "ADD MCQ"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (view === "admin") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
       <div style={{ ...S.adminApp, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.adminNav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> devOrbit"}</span>
           <span style={S.adminNavTitle}>Admin Portal</span>
           <div style={{ marginLeft:"auto" }}>
             <button onClick={signOut} style={S.adminButton("default")}>Sign Out</button>
@@ -5323,7 +7521,13 @@ function CodingPlatform() {
         </nav>
 
         <div style={S.adminShell}>
+          {renderAdminPreviewModal()}
+          {renderMcqModal()}
           {renderQuestionUploadSuccessModal()}
+          {renderDeleteQuestionModal()}
+          {renderStudentReportModal()}
+          {renderCodeInspectionModal()}
+          {renderPdfUploadModal()}
           <div style={S.backButtonRow}>
             <button onClick={goBackFromAdmin} style={S.adminBackButton}>
               <span aria-hidden="true">←</span>
@@ -5363,8 +7567,13 @@ function CodingPlatform() {
           </div>
 
           {adminTab === "overview" && (
-            <>
-          <div style={S.adminCardGrid}>
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start", width: "100%" }}>
+              <div style={{ flex: "1 1 240px", maxWidth: 280, minWidth: 220 }}>
+                {renderLeftStatsPanel()}
+              </div>
+
+              <div style={{ flex: "3 1 640px", minWidth: 0 }}>
+                <div style={S.adminCardGrid}>
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Current Test</div>
               <div style={{ fontSize:24, fontWeight:700, color:ADMIN_THEME.text, marginBottom:14 }}>{adminCurrentTest.title}</div>
@@ -5608,43 +7817,249 @@ function CodingPlatform() {
                     </div>
                   </div>
                   <div>
-                    <label style={S.adminFieldLabel}>Database Problems</label>
-                    <div style={{ maxHeight:220, overflowY:"auto", display:"grid", gap:10, paddingRight:4 }}>
+                    <label style={S.adminFieldLabel}>Select & Reorder Assessment Questions (Theory + Coding)</label>
+
+                    <div style={{ maxHeight:260, overflowY:"auto", display:"grid", gap:10, paddingRight:4 }}>
                       {problemBankLoading ? (
-                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>Loading database problems...</div>
+                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>Loading database questions...</div>
                       ) : problemBank.length ? (
                         problemBank.map((problem) => {
                           const checked = adminCreateForm.questions.includes(problem.dbId);
+                          const probType = problem.type || (Array.isArray(problem.options) && problem.options.length ? "theory" : "coding");
+                          const isTheory = probType === "theory";
+                          const selectedIdx = adminCreateForm.questions.indexOf(problem.dbId);
+
                           return (
-                            <label key={problem.dbId} style={{ ...S.adminSubCard, display:"flex", gap:12, alignItems:"flex-start", cursor:"pointer" }}>
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleCreateQuestion(problem.dbId)}
-                                style={{ marginTop:2, accentColor:ADMIN_THEME.primary, cursor:"pointer" }}
-                              />
-                              <span style={{ display:"grid", gap:6 }}>
-                                <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{problem.title}</span>
-                                <span style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{getProblemCategory(problem)} | {problem.difficulty} | {problem.tags.slice(0, 3).join(", ") || "General"}</span>
-                              </span>
-                            </label>
+                            <div key={problem.dbId} style={{ ...S.adminSubCard, display:"flex", gap:12, alignItems:"center", justifyContent:"space-between" }}>
+                              <label style={{ display:"flex", gap:10, alignItems:"flex-start", cursor:"pointer", flex:1 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleCreateQuestion(problem.dbId)}
+                                  style={{ marginTop:3, accentColor:ADMIN_THEME.primary, cursor:"pointer" }}
+                                />
+                                <div style={{ display:"grid", gap:4 }}>
+                                  <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                                    <span
+                                      style={{
+                                        fontSize: 10,
+                                        fontWeight: 800,
+                                        padding: "1px 6px",
+                                        borderRadius: 999,
+                                        background: isTheory ? "rgba(139, 92, 246, 0.14)" : "rgba(37, 99, 235, 0.14)",
+                                        color: isTheory ? "#8b5cf6" : "#2563eb",
+                                        border: `1px solid ${isTheory ? "rgba(139, 92, 246, 0.3)" : "rgba(37, 99, 235, 0.3)"}`,
+                                      }}
+                                    >
+                                      {isTheory ? "THEORY" : "CODING"}
+                                    </span>
+                                    {isTheory && (
+                                      <span
+                                        style={{
+                                          fontSize: 9,
+                                          fontWeight: 800,
+                                          padding: "1px 5px",
+                                          borderRadius: 999,
+                                          background: "rgba(236, 72, 153, 0.14)",
+                                          color: "#ec4899",
+                                          border: "1px solid rgba(236, 72, 153, 0.3)",
+                                        }}
+                                      >
+                                        CUSTOM
+                                      </span>
+                                    )}
+                                    <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{problem.title}</span>
+                                  </div>
+                                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
+                                    {getProblemCategory(problem)} | {problem.difficulty} | {problem.marks || (isTheory ? 2 : 10)} marks
+                                  </div>
+                                </div>
+                              </label>
+
+                              <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                                {isTheory && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openEditMcqModal(problem);
+                                      }}
+                                      style={{
+                                        padding: "3px 8px",
+                                        fontSize: 11,
+                                        borderRadius: 6,
+                                        border: "1px solid #8b5cf6",
+                                        background: "rgba(139, 92, 246, 0.1)",
+                                        color: "#8b5cf6",
+                                        fontWeight: 700,
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      ✏️ Edit
+                                    </button>
+                                    {checked && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setAdminCreateForm((prev) => ({
+                                            ...prev,
+                                            questions: prev.questions.filter((id) => id !== problem.dbId && id !== problem.id),
+                                          }));
+                                        }}
+                                        style={{
+                                          padding: "3px 8px",
+                                          fontSize: 11,
+                                          borderRadius: 6,
+                                          border: "1px solid #ef4444",
+                                          background: "rgba(239, 68, 68, 0.1)",
+                                          color: "#ef4444",
+                                          fontWeight: 700,
+                                          cursor: "pointer",
+                                        }}
+                                      >
+                                        🗑 Remove
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+
+                                {checked && (
+                                  <>
+                                    <span style={{ fontSize:11, fontWeight:700, color:ADMIN_THEME.primary, background:"#dbeafe", padding:"2px 8px", borderRadius:999 }}>
+                                      Q{selectedIdx + 1}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (selectedIdx > 0) {
+                                          const nextQ = [...adminCreateForm.questions];
+                                          const tmp = nextQ[selectedIdx];
+                                          nextQ[selectedIdx] = nextQ[selectedIdx - 1];
+                                          nextQ[selectedIdx - 1] = tmp;
+                                          setAdminCreateForm((prev) => ({ ...prev, questions: nextQ }));
+                                        }
+                                      }}
+                                      disabled={selectedIdx === 0}
+                                      style={{ padding:"2px 6px", fontSize:11, borderRadius:4, border:"1px solid #cbd5e1", background:"#ffffff", cursor:selectedIdx===0?"not-allowed":"pointer", opacity:selectedIdx===0?0.4:1 }}
+                                    >
+                                      ▲
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (selectedIdx < adminCreateForm.questions.length - 1) {
+                                          const nextQ = [...adminCreateForm.questions];
+                                          const tmp = nextQ[selectedIdx];
+                                          nextQ[selectedIdx] = nextQ[selectedIdx + 1];
+                                          nextQ[selectedIdx + 1] = tmp;
+                                          setAdminCreateForm((prev) => ({ ...prev, questions: nextQ }));
+                                        }
+                                      }}
+                                      disabled={selectedIdx === adminCreateForm.questions.length - 1}
+                                      style={{ padding:"2px 6px", fontSize:11, borderRadius:4, border:"1px solid #cbd5e1", background:"#ffffff", cursor:selectedIdx===adminCreateForm.questions.length - 1?"not-allowed":"pointer", opacity:selectedIdx===adminCreateForm.questions.length - 1?0.4:1 }}
+                                    >
+                                      ▼
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
                           );
                         })
                       ) : (
                         <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No database problems yet. Use Sync Problems or upload a question.</div>
                       )}
                     </div>
+
+                    {(view === "admin" || String(currentUser?.role || "").toLowerCase() === "admin" || String(userRole || "").toLowerCase() === "admin") && (
+                      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 10, marginBottom: 12 }}>
+                        <button
+                          type="button"
+                          onClick={openCreateMcqModal}
+                          style={{
+                            flex: 1,
+                            padding: "10px 16px",
+                            borderRadius: 12,
+                            background: "linear-gradient(135deg, rgba(139, 92, 246, 0.16), rgba(99, 102, 241, 0.16))",
+                            border: "1px dashed #8b5cf6",
+                            color: "#8b5cf6",
+                            fontWeight: 700,
+                            fontSize: 13,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <span style={{ fontSize: 16, fontWeight: 900 }}>+</span> ADD MCQ QUESTION
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdfStage("idle");
+                            setPdfDraftQuestions([]);
+                            setPdfModalOpen(true);
+                          }}
+                          style={{
+                            flex: 1,
+                            padding: "10px 16px",
+                            borderRadius: 12,
+                            background: "rgba(56, 189, 248, 0.12)",
+                            border: "1px dashed #38bdf8",
+                            color: "#38bdf8",
+                            fontWeight: 700,
+                            fontSize: 13,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <span style={{ fontSize: 16, fontWeight: 900 }}>↑</span> UPLOAD MCQ PDF
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>
-                    Selected: <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{adminCreateForm.questions.length}</span> database problems
+
+                  {(() => {
+                    const selProbs = adminCreateForm.questions
+                      .map((qId) => problemBank.find((p) => p.dbId === qId || p.id === qId))
+                      .filter(Boolean);
+                    const theoryCount = selProbs.filter((p) => (p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding")) === "theory").length;
+                    const codingCount = selProbs.length - theoryCount;
+                    const totalMarks = selProbs.reduce((sum, p) => sum + (p.marks || (p.type === "theory" ? 2 : 10)), 0);
+
+                    return (
+                      <div style={{ background:"#f1f5f9", border:"1px solid #cbd5e1", borderRadius:12, padding:"12px 14px", fontSize:12, color:"#334155" }}>
+                        <div style={{ fontWeight:700, color:"#0f172a", marginBottom:4 }}>
+                          Selected: {selProbs.length} Questions ({theoryCount} Theory, {codingCount} Coding)
+                        </div>
+                        <div>Total Assessment Marks: <strong>{totalMarks} pts</strong></div>
+                      </div>
+                    );
+                  })()}
+
+                  <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                    <button
+                      onClick={handleCreateTest}
+                      disabled={adminCreatingTest}
+                      style={{ ...S.adminButton("submit"), flex:1, opacity: adminCreatingTest ? 0.65 : 1, cursor: adminCreatingTest ? "not-allowed" : "pointer" }}
+                    >
+                      {adminCreatingTest ? "Saving..." : "Save Draft Test"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdminPreviewOpen(true)}
+                      style={{ ...S.adminButton("default"), flex:1, borderColor:"#8b5cf6", color:"#8b5cf6", fontWeight:700 }}
+                    >
+                      👁 Preview Assessment
+                    </button>
                   </div>
-                  <button
-                    onClick={handleCreateTest}
-                    disabled={adminCreatingTest}
-                    style={{ ...S.adminButton("submit"), opacity: adminCreatingTest ? 0.65 : 1, cursor: adminCreatingTest ? "not-allowed" : "pointer" }}
-                  >
-                    {adminCreatingTest ? "Saving..." : "Save Draft Test"}
-                  </button>
                 </div>
               </div>
 
@@ -5666,11 +8081,16 @@ function CodingPlatform() {
                 </div>
               )}
             </div>
-          </div>
-            </>
+              </div>
+
+              <div style={{ flex: "1 1 240px", maxWidth: 280, minWidth: 220 }}>
+                {renderRightActivityPanel()}
+              </div>
+            </div>
           )}
 
           {adminTab === "questions" && renderQuestionUploads()}
+          {adminTab === "reports" && renderAdminReports()}
           {adminTab === "leaderboard" && renderAdminLeaderboard()}
           {adminTab === "students" && renderStudentList()}
           {adminTab === "profile" && renderAdminProfile()}
@@ -5686,7 +8106,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <nav style={S.nav}>
-        <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+        <span style={S.logo} onClick={()=>setView("home")}>{"</> devOrbit"}</span>
         <button onClick={()=>setView("list")} style={S.navBtn(true)}>
           <span style={S.navBtnLabel(true)}>Problems</span>
           <span style={S.navBtnHint(true)}>Daily coding practice</span>
@@ -5793,7 +8213,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
         <nav style={{ ...S.nav, background:"#0b1220", borderBottom:"1px solid #1e293b" }}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> devOrbit"}</span>
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Practice arena</span>
@@ -5817,6 +8237,9 @@ function CodingPlatform() {
               </span>
             )}
             <div style={{ width:34, height:34, borderRadius:"50%", background:`linear-gradient(135deg, ${profileAvatarGradient[0]}, ${profileAvatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#081018", boxShadow:"0 0 18px rgba(96,165,250,0.28)" }}>{profileAvatarLabel}</div>
+            <button onClick={signOut} style={{ padding:"6px 12px", borderRadius:10, background:"#ef44441f", border:"1px solid #ef44444d", color:"#f87171", fontWeight:700, fontSize:12, cursor:"pointer" }}>
+              Sign Out
+            </button>
           </div>
         </nav>
 
@@ -5847,6 +8270,9 @@ function CodingPlatform() {
                   </div>
                 </div>
               </div>
+              <button onClick={signOut} style={{ padding:"10px 18px", borderRadius:12, background:"#ef44441f", border:"1px solid #ef44444d", color:"#f87171", fontWeight:700, fontSize:13, cursor:"pointer" }}>
+                🚪 Log Out
+              </button>
             </div>
           </div>
 
@@ -5988,6 +8414,16 @@ function CodingPlatform() {
               </table>
             </div>
           </div>
+
+          <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:16, boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
+            <div>
+              <div style={{ color:"#f8fafc", fontSize:18, fontWeight:700 }}>Account Session</div>
+              <div style={{ color:"#94a3b8", fontSize:14, marginTop:4 }}>Log out of your student account session on this device.</div>
+            </div>
+            <button onClick={signOut} style={{ padding:"10px 22px", borderRadius:12, background:"#ef44441f", border:"1px solid #ef44444d", color:"#f87171", fontWeight:700, fontSize:14, cursor:"pointer", transition:"all 0.2s ease" }} onMouseEnter={e => e.currentTarget.style.background="#ef444433"} onMouseLeave={e => e.currentTarget.style.background="#ef44441f"}>
+              🚪 Log Out
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -6030,7 +8466,7 @@ function CodingPlatform() {
           </div>
         )}
         <nav style={S.nav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> devOrbit"}</span>
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Daily coding practice</span>
@@ -6264,7 +8700,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, minHeight:"100vh" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> devOrbit"}</span>
           <button onClick={openContest} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Contest</span>
             <span style={S.navBtnHint(false)}>Back to contest hub</span>
@@ -6339,7 +8775,7 @@ function CodingPlatform() {
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
-          <span style={S.logo} onClick={()=>setView("home")}>{"</> CodeArena"}</span>
+          <span style={S.logo} onClick={()=>setView("home")}>{"</> devOrbit"}</span>
           <button onClick={()=>setView("list")} style={S.navBtn(false)}>
             <span style={S.navBtnLabel(false)}>Problems</span>
             <span style={S.navBtnHint(false)}>Daily coding practice</span>
@@ -6551,8 +8987,11 @@ function CodingPlatform() {
   );
 
   
+  if (assessmentResult) return renderAssessmentResultView();
+
   const p = selectedProblem;
   const consoleHeight = consoleOpen ? 260 : 42;
+  const isTheoryProblem = p && (p.type === "theory" || (Array.isArray(p.options) && p.options.length > 0));
 
   return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
@@ -6589,7 +9028,7 @@ function CodingPlatform() {
       <ErrorBanner errors={errorBanner} onClose={() => setErrorBanner(null)} />
 
       <nav style={S.nav}>
-        <span style={S.logo} onClick={()=>setView("list")}>{"</> CodeArena"}</span>
+        <span style={S.logo} onClick={()=>setView("list")}>{"</> devOrbit"}</span>
         <span style={{ color:"#444", fontSize:14 }}>/</span>
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
         {problemNavigationSource === "contest" && contestEntered && (
@@ -6654,13 +9093,28 @@ function CodingPlatform() {
                   {p.tags.map(t=><span key={t} style={S.tag}>{t}</span>)}
                 </div>
                 <div style={S.problemBody} dangerouslySetInnerHTML={{ __html:p.description }} />
-                {p.examples.map((ex,i)=>(
-                  <div key={i} style={{ marginBottom:20 }}>
-                    <div style={S.sectionLabel}>Example {i+1}</div>
+                {parseExamplesList(p.examples).map((ex, i) => (
+                  <div key={`ex-${p.id || p.number}-${i}`} style={{ marginBottom: 20 }}>
+                    <div style={S.sectionLabel}>Example {i + 1}</div>
                     <div style={S.exampleCard}>
-                      <div style={{ marginBottom:8 }}><span style={S.exampleFieldLabel}>Input</span><div style={S.exampleFieldValue}>{ex.input}</div></div>
-                      <div style={{ marginBottom:ex.explanation?8:0 }}><span style={S.exampleFieldLabel}>Output</span><div style={{ ...S.exampleFieldValue, color:"#73f0b3" }}>{ex.output}</div></div>
-                      {ex.explanation&&<div><span style={S.exampleFieldLabel}>Explanation</span><div style={{ ...S.problemBody, marginBottom:0, fontSize:14.5, color:"#adb2d4" }}>{ex.explanation}</div></div>}
+                      {(ex.input !== "" || ex.output === "") && (
+                        <div style={{ marginBottom: 8 }}>
+                          <span style={S.exampleFieldLabel}>Input</span>
+                          <div style={S.exampleFieldValue}>{cleanExampleField(ex.input)}</div>
+                        </div>
+                      )}
+                      {ex.output !== "" && (
+                        <div style={{ marginBottom: ex.explanation ? 8 : 0 }}>
+                          <span style={S.exampleFieldLabel}>Output</span>
+                          <div style={{ ...S.exampleFieldValue, color: "#73f0b3" }}>{cleanExampleField(ex.output)}</div>
+                        </div>
+                      )}
+                      {Boolean(ex.explanation) && (
+                        <div>
+                          <span style={S.exampleFieldLabel}>Explanation</span>
+                          <div style={{ ...S.problemBody, marginBottom: 0, fontSize: 14.5, color: "#adb2d4" }}>{ex.explanation}</div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -6707,125 +9161,201 @@ function CodingPlatform() {
         </div>
 
         
-        <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
-          {/* Toolbar */}
-          <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:"8px 16px", display:"flex", alignItems:"center", gap:10 }}>
-            <select value={lang} onChange={e=>handleLangChange(e.target.value)}
-              style={{ background:"#1a1a2e", border:"1px solid #2a2a3e", color:"#c8c8e8", padding:"4px 10px", borderRadius:6, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>
-              <option value="javascript">JavaScript</option>
-              <option value="python">Python</option>
-              <option value="java">Java</option>
-            </select>
-            <span style={{ fontSize:11, color: lang==="javascript"?"#4ade8077":"#ffc01e77" }}>
-              {lang==="javascript"?"Judge0 + Browser Fallback":"Judge0 Execution"}
-            </span>
-            <div style={{ marginLeft:"auto" }}>
-              <button onClick={()=>setCode(p.starterCode[lang])} style={{ background:"none", border:"1px solid #2a2a3e", color:"#555", padding:"4px 12px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Reset</button>
+        {isTheoryProblem ? (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "#0d1020", padding: 24, overflowY: "auto" }}>
+            <div style={{ color: "#a78bfa", fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 16 }}>
+              Select Answer Option ({p.marks || 2} Marks):
             </div>
-          </div>
+            <div style={{ display: "grid", gap: 14 }}>
+              {(p.options || []).map((opt, oIdx) => {
+                const currentChoice = candidateTheoryAnswers[p.dbId] || candidateTheoryAnswers[p.id] || candidateTheoryAnswers[p.legacyId] || "";
+                const isSelected = currentChoice === opt;
+                return (
+                  <div
+                    key={oIdx}
+                    onClick={() => {
+                      const pKey = p.dbId || p.id;
+                      setCandidateTheoryAnswers((prev) => ({
+                        ...prev,
+                        [pKey]: opt,
+                      }));
+                    }}
+                    style={{
+                      display: "flex",
+                      gap: 14,
+                      alignItems: "center",
+                      padding: "18px 20px",
+                      borderRadius: 16,
+                      background: isSelected ? "linear-gradient(135deg, rgba(139,92,246,0.22), rgba(30,41,59,0.95))" : "#111118",
+                      border: isSelected ? "2px solid #8b5cf6" : "1px solid #1e1e2e",
+                      color: "#f5f6ff",
+                      cursor: "pointer",
+                      transition: "all 0.15s ease",
+                      boxShadow: isSelected ? "0 10px 30px rgba(139,92,246,0.25)" : "none",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      checked={isSelected}
+                      onChange={() => {}}
+                      style={{ width: 20, height: 20, accentColor: "#8b5cf6", cursor: "pointer" }}
+                    />
+                    <span style={{ fontWeight: 800, color: isSelected ? "#c4b5fd" : "#64748b", fontSize: 16, width: 24 }}>
+                      {String.fromCharCode(65 + oIdx)}.
+                    </span>
+                    <span style={{ fontSize: 15, fontWeight: isSelected ? 700 : 500, lineHeight: 1.5 }}>
+                      {opt}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
 
-          {/* Editor */}
-          <div style={{ flex:1, position:"relative", overflow:"hidden", background:"linear-gradient(180deg,#0d1020,#090b14)" }}>
-            <div style={{ position:"absolute", left:0, top:0, bottom:0, width:44, background:"#0a0a12", borderRight:"1px solid #1a1a2a", paddingTop:16, textAlign:"right", paddingRight:8, userSelect:"none", overflowY:"hidden", zIndex:1 }}>
-              <div style={{ transform:`translateY(-${editorScrollTop}px)` }}>
-                {code.split("\n").map((_,i)=><div key={i} style={{ color:"#56607a", fontSize:13, lineHeight:"21px" }}>{i+1}</div>)}
+            {(candidateTheoryAnswers[p.dbId] || candidateTheoryAnswers[p.id]) ? (
+              <div style={{ marginTop: 20, padding: "12px 16px", borderRadius: 12, background: "rgba(34, 197, 94, 0.12)", border: "1px solid rgba(34, 197, 94, 0.3)", color: "#4ade80", fontSize: 13, fontWeight: 700 }}>
+                ✓ Option selected and saved: "{candidateTheoryAnswers[p.dbId || p.id]}"
               </div>
-            </div>
-            <CodeHighlightLayer code={code} language={lang} scrollTop={editorScrollTop} />
-            <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onScroll={(e)=>setEditorScrollTop(e.currentTarget.scrollTop)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef)} spellCheck={false}
-              style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"transparent", color:"transparent", caretColor:"#67e8f9", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f", whiteSpace:"pre-wrap", wordBreak:"break-word" }} />
-          </div>
+            ) : (
+              <div style={{ marginTop: 20, padding: "12px 16px", borderRadius: 12, background: "#1e293b", color: "#94a3b8", fontSize: 13 }}>
+                Select one option above. Your choice will be saved automatically.
+              </div>
+            )}
 
-          <div style={{ background:"#0d0d15", borderTop:"1px solid #1e1e2e", padding:"10px 16px", display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
-            <button onClick={()=>simulateRun(false)} disabled={running||submitting} style={S.btn("run")}>
-              {running ? "Running..." : "Run"}
-            </button>
-            <button onClick={handleSubmitClick} disabled={running||submitting} style={S.btn("submit")}>
-              {submitting ? "Submitting..." : isFinalContestProblem ? "Final Submit" : "Submit"}
-            </button>
-          </div>
-
-          {/* Console */}
-          <div style={{ height:consoleHeight, borderTop:"1px solid #1e1e2e", background:"#0a0a0f", transition:"height 0.2s", overflow:"hidden", display:"flex", flexDirection:"column" }}>
-            <div style={{ display:"flex", alignItems:"center", padding:"0 16px", height:42, borderBottom:consoleOpen?"1px solid #1e1e2e":"none", flexShrink:0 }}>
-              <button onClick={()=>setConsoleOpen(!consoleOpen)} style={{ background:"none", border:"none", color:"#888", fontSize:13, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6 }}>
-                <span style={{ transform:consoleOpen?"rotate(0deg)":"rotate(-90deg)", display:"inline-block", transition:"transform 0.2s" }}>▾</span>
-                Console
-              </button>
-              {consoleOpen && (
-                <div style={{ display:"flex", marginLeft:16 }}>
-                  {["testcase","result"].map(t=>(
-                    <button key={t} onClick={()=>setConsoleTab(t)} style={{ background:"none", border:"none", padding:"4px 14px", color:consoleTab===t?"#fff":"#555", fontSize:12, cursor:"pointer", fontFamily:"inherit", borderBottom:consoleTab===t?"2px solid #7c6af7":"2px solid transparent" }}>
-                      {t==="testcase"?"Test Cases":"Result"}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {consoleOpen && (
-              <div style={{ flex:1, overflowY:"auto", padding:16, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
-                {consoleTab === "testcase" && (
-                  <div>
-                    {p.testCases.map((tc,i)=>(
-                      <div key={i} style={{ marginBottom:12 }}>
-                        <div style={{ fontSize:12, color:"#555", marginBottom:4 }}>Case {i+1}:</div>
-                        <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:6, padding:"10px 12px", fontSize:13 }}>
-                          <div style={{ color:"#555", marginBottom:6 }}>Input</div>
-                          <div style={{ color:"#c8c8e8", marginBottom:10 }}>{tc.input}</div>
-                          <div style={{ color:"#555", marginBottom:6 }}>Expected Output</div>
-                          <div style={{ color:"#4ade80" }}>{tc.expected}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {consoleTab === "result" && runResult && (
-                  <div>
-                    {/* Status row */}
-                    <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:14, flexWrap:"wrap" }}>
-                      <span style={{ fontSize:15, fontWeight:700, color:runResult.status==="unsupported"?"#ffc01e":runResult.passed?"#4ade80":"#ff375f" }}>
-                        {runResult.status==="unsupported"?"Execution Not Available":runResult.passed?"Accepted":"Wrong Answer"}
-                      </span>
-                      {runResult.passed && <>
-                        <span style={{ color:"#555", fontSize:12 }}>Runtime: <span style={{ color:"#c8c8e8" }}>{runResult.runtime}</span></span>
-                        <span style={{ color:"#555", fontSize:12 }}>Memory: <span style={{ color:"#c8c8e8" }}>{runResult.memory}</span></span>
-                        <span style={{ color:"#555", fontSize:12 }}>Beats: <span style={{ color:"#7c6af7" }}>{runResult.beats}</span></span>
-                      </>}
-                    </div>
-
-                    {/* Case pills */}
-                    <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
-                      {runResult.tests.map((t,i)=>(
-                        <div key={i} style={{ background:t.status==="pass"?"#0d150d":t.status==="unsupported"?"#151208":t.status==="error"?"#150a08":"#150d0d", border:`1px solid ${t.status==="pass"?"#1a3a1a":t.status==="unsupported"?"#5a4716":"#3a1a1a"}`, borderRadius:6, padding:"6px 12px", fontSize:12 }}>
-                          <span style={{ color:t.status==="pass"?"#4ade80":t.status==="unsupported"?"#ffc01e":"#ff375f" }}>{t.status==="pass"?"PASS":t.status==="unsupported"?"INFO":t.status==="error"?"ERR":"FAIL"}</span>
-                          <span style={{ color:"#555", marginLeft:6 }}>Case {i+1}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* First failing case detail */}
-                    {runResult.tests.filter(t=>t.status!=="pass").slice(0,1).map((t,i)=>(
-                      <div key={i} style={{ background:t.status==="unsupported"?"#151208":"#110a0a", border:`1px solid ${t.status==="unsupported"?"#5a4716":"#3a1a1a"}`, borderRadius:8, padding:12, fontSize:12 }}>
-                        {t.error
-                          ? <div style={{ color:t.status==="unsupported"?"#ffd37a":"#ff9999", whiteSpace:"pre-wrap" }}>{t.error}</div>
-                          : <>
-                              <div style={{ color:"#555", marginBottom:4 }}>Expected: <span style={{ color:"#4ade80" }}>{t.expected}</span></div>
-                              <div style={{ color:"#555" }}>Got:      <span style={{ color:"#ff6b6b" }}>{t.actual ?? "undefined"}</span></div>
-                            </>
-                        }
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {consoleTab === "result" && !runResult && (
-                  <div style={{ color:"#444", fontSize:13 }}>Run your code to see results here.</div>
+            {problemNavigationSource === "contest" && (
+              <div style={{ marginTop: 24, display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                {hasNextProblem ? (
+                  <button onClick={() => openAdjacentProblem(1)} style={{ ...S.btn("submit"), padding: "12px 24px" }}>
+                    Next Question →
+                  </button>
+                ) : (
+                  <button onClick={() => setFinalSubmitConfirmOpen(true)} style={{ ...S.btn("submit"), padding: "12px 24px", background: "linear-gradient(135deg,#8b5cf6,#ec4899)" }}>
+                    Final Submit Assessment
+                  </button>
                 )}
               </div>
             )}
           </div>
-        </div>
+        ) : (
+          <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+            {/* Toolbar */}
+            <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:"8px 16px", display:"flex", alignItems:"center", gap:10 }}>
+              <select value={lang} onChange={e=>handleLangChange(e.target.value)}
+                style={{ background:"#1a1a2e", border:"1px solid #2a2a3e", color:"#c8c8e8", padding:"4px 10px", borderRadius:6, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>
+                <option value="javascript">JavaScript</option>
+                <option value="python">Python</option>
+                <option value="java">Java</option>
+              </select>
+              <span style={{ fontSize:11, color: lang==="javascript"?"#4ade8077":"#ffc01e77" }}>
+                {lang==="javascript"?"Judge0 + Browser Fallback":"Judge0 Execution"}
+              </span>
+              <div style={{ marginLeft:"auto" }}>
+                <button onClick={()=>setCode(p.starterCode[lang])} style={{ background:"none", border:"1px solid #2a2a3e", color:"#555", padding:"4px 12px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Reset</button>
+              </div>
+            </div>
+
+            {/* Editor */}
+            <div style={{ flex:1, position:"relative", overflow:"hidden", background:"linear-gradient(180deg,#0d1020,#090b14)" }}>
+              <div style={{ position:"absolute", left:0, top:0, bottom:0, width:44, background:"#0a0a12", borderRight:"1px solid #1a1a2a", paddingTop:16, textAlign:"right", paddingRight:8, userSelect:"none", overflowY:"hidden", zIndex:1 }}>
+                <div style={{ transform:`translateY(-${editorScrollTop}px)` }}>
+                  {code.split("\n").map((_,i)=><div key={i} style={{ color:"#56607a", fontSize:13, lineHeight:"21px" }}>{i+1}</div>)}
+                </div>
+              </div>
+              <CodeHighlightLayer code={code} language={lang} scrollTop={editorScrollTop} />
+              <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onScroll={(e)=>setEditorScrollTop(e.currentTarget.scrollTop)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef)} spellCheck={false}
+                style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"transparent", color:"transparent", caretColor:"#67e8f9", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f", whiteSpace:"pre-wrap", wordBreak:"break-word" }} />
+            </div>
+
+            <div style={{ background:"#0d0d15", borderTop:"1px solid #1e1e2e", padding:"10px 16px", display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
+              <button onClick={()=>simulateRun(false)} disabled={running||submitting} style={S.btn("run")}>
+                {running ? "Running..." : "Run"}
+              </button>
+              <button onClick={handleSubmitClick} disabled={running||submitting} style={S.btn("submit")}>
+                {submitting ? "Submitting..." : isFinalContestProblem ? "Final Submit" : "Submit"}
+              </button>
+            </div>
+
+            {/* Console */}
+            <div style={{ height:consoleHeight, borderTop:"1px solid #1e1e2e", background:"#0a0a0f", transition:"height 0.2s", overflow:"hidden", display:"flex", flexDirection:"column" }}>
+              <div style={{ display:"flex", alignItems:"center", padding:"0 16px", height:42, borderBottom:consoleOpen?"1px solid #1e1e2e":"none", flexShrink:0 }}>
+                <button onClick={()=>setConsoleOpen(!consoleOpen)} style={{ background:"none", border:"none", color:"#888", fontSize:13, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={{ transform:consoleOpen?"rotate(0deg)":"rotate(-90deg)", display:"inline-block", transition:"transform 0.2s" }}>▾</span>
+                  Console
+                </button>
+                {consoleOpen && (
+                  <div style={{ display:"flex", marginLeft:16 }}>
+                    {["testcase","result"].map(t=>(
+                      <button key={t} onClick={()=>setConsoleTab(t)} style={{ background:"none", border:"none", padding:"4px 14px", color:consoleTab===t?"#fff":"#555", fontSize:12, cursor:"pointer", fontFamily:"inherit", borderBottom:consoleTab===t?"2px solid #7c6af7":"2px solid transparent" }}>
+                        {t==="testcase"?"Test Cases":"Result"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {consoleOpen && (
+                <div style={{ flex:1, overflowY:"auto", padding:16, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
+                  {consoleTab === "testcase" && (
+                    <div>
+                      {p.testCases.map((tc,i)=>(
+                        <div key={i} style={{ marginBottom:12 }}>
+                          <div style={{ fontSize:12, color:"#555", marginBottom:4 }}>Case {i+1}:</div>
+                          <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:6, padding:"10px 12px", fontSize:13 }}>
+                            <div style={{ color:"#555", marginBottom:6 }}>Input</div>
+                            <div style={{ color:"#c8c8e8", marginBottom:10 }}>{tc.input}</div>
+                            <div style={{ color:"#555", marginBottom:6 }}>Expected Output</div>
+                            <div style={{ color:"#4ade80" }}>{tc.expected}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {consoleTab === "result" && runResult && (
+                    <div>
+                      {/* Status row */}
+                      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:14, flexWrap:"wrap" }}>
+                        <span style={{ fontSize:15, fontWeight:700, color:runResult.status==="unsupported"?"#ffc01e":runResult.passed?"#4ade80":"#ff375f" }}>
+                          {runResult.status==="unsupported"?"Execution Not Available":runResult.passed?"Accepted":"Wrong Answer"}
+                        </span>
+                        {runResult.passed && <>
+                          <span style={{ color:"#555", fontSize:12 }}>Runtime: <span style={{ color:"#c8c8e8" }}>{runResult.runtime}</span></span>
+                          <span style={{ color:"#555", fontSize:12 }}>Memory: <span style={{ color:"#c8c8e8" }}>{runResult.memory}</span></span>
+                          <span style={{ color:"#555", fontSize:12 }}>Beats: <span style={{ color:"#7c6af7" }}>{runResult.beats}</span></span>
+                        </>}
+                      </div>
+
+                      {/* Case pills */}
+                      <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+                        {runResult.tests.map((t,i)=>(
+                          <div key={i} style={{ background:t.status==="pass"?"#0d150d":t.status==="unsupported"?"#151208":t.status==="error"?"#150a08":"#150d0d", border:`1px solid ${t.status==="pass"?"#1a3a1a":t.status==="unsupported"?"#5a4716":"#3a1a1a"}`, borderRadius:6, padding:"6px 12px", fontSize:12 }}>
+                            <span style={{ color:t.status==="pass"?"#4ade80":t.status==="unsupported"?"#ffc01e":"#ff375f" }}>{t.status==="pass"?"PASS":t.status==="unsupported"?"INFO":t.status==="error"?"ERR":"FAIL"}</span>
+                            <span style={{ color:"#555", marginLeft:6 }}>Case {i+1}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* First failing case detail */}
+                      {runResult.tests.filter(t=>t.status!=="pass").slice(0,1).map((t,i)=>(
+                        <div key={i} style={{ background:t.status==="unsupported"?"#151208":"#110a0a", border:`1px solid ${t.status==="unsupported"?"#5a4716":"#3a1a1a"}`, borderRadius:8, padding:12, fontSize:12 }}>
+                          {t.error
+                            ? <div style={{ color:t.status==="unsupported"?"#ffd37a":"#ff9999", whiteSpace:"pre-wrap" }}>{t.error}</div>
+                            : <>
+                                <div style={{ color:"#555", marginBottom:4 }}>Expected: <span style={{ color:"#4ade80" }}>{t.expected}</span></div>
+                                <div style={{ color:"#555" }}>Got:      <span style={{ color:"#ff6b6b" }}>{t.actual ?? "undefined"}</span></div>
+                              </>
+                          }
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {consoleTab === "result" && !runResult && (
+                    <div style={{ color:"#444", fontSize:13 }}>Run your code to see results here.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       </div>
     </div>

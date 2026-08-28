@@ -33,7 +33,7 @@ async function closeExpiredAssignments() {
   });
 }
 
-async function loadAssignmentsWithProblems(where = {}) {
+async function loadAssignmentsWithProblems(where = {}, options = {}) {
   const assignments = await prisma.testAssignment.findMany({
     where,
     orderBy: [{ createdAt: 'desc' }],
@@ -49,7 +49,7 @@ async function loadAssignmentsWithProblems(where = {}) {
     const orderedProblems = (assignment.problemIds || [])
       .map((problemId) => problemsById.get(problemId))
       .filter(Boolean)
-      .map((problem) => serializeProblem(problem, { includeContent: true }));
+      .map((problem) => serializeProblem(problem, { includeContent: true, isCandidate: Boolean(options.isCandidate) }));
 
     return serializeAssignment(assignment, orderedProblems);
   });
@@ -58,7 +58,8 @@ async function loadAssignmentsWithProblems(where = {}) {
 exports.list = async (req, res) => {
   try {
     await closeExpiredAssignments();
-    const assignments = await loadAssignmentsWithProblems();
+    const isCandidate = req.user?.role !== 'ADMIN' && req.user?.role !== 'SETTER';
+    const assignments = await loadAssignmentsWithProblems({}, { isCandidate });
     return res.json({ assignments });
   } catch (err) {
     console.error(err);
@@ -69,7 +70,8 @@ exports.list = async (req, res) => {
 exports.active = async (req, res) => {
   try {
     await closeExpiredAssignments();
-    const assignments = await loadAssignmentsWithProblems({ status: 'LIVE' });
+    const isCandidate = req.user?.role !== 'ADMIN' && req.user?.role !== 'SETTER';
+    const assignments = await loadAssignmentsWithProblems({ status: 'LIVE' }, { isCandidate });
     return res.json({ assignment: assignments[0] || null, assignments });
   } catch (err) {
     console.error(err);
