@@ -289,7 +289,7 @@ function parseMcqText(rawText) {
     let currentMode = 'statement';
     let statementLines = [statement];
     let optionMap = {};
-    let correctAnswer = '';
+    let rawCorrectAnswer = '';
     let marks = 2;
     let category = 'Python';
     let difficulty = 'Easy';
@@ -297,20 +297,28 @@ function parseMcqText(rawText) {
 
     for (let i = 1; i < lines.length; i += 1) {
       const line = lines[i];
-      const optMatch = line.match(/^([A-D])[\.\:\)\-]\s*(.*)/i);
+
+      // Match options like A. Foo, B) Bar, or single-line A. X B. Y C. Z D. W
+      const inlineOptMatches = [...line.matchAll(/(?:^|\s+)([A-D])[\.\:\)\-]\s*([^A-D\.\:\)\-]+?)(?=(?:\s+[A-D][\.\:\)\-]|$))/gi)];
+      const singleOptMatch = line.match(/^([A-D])[\.\:\)\-]\s*(.*)/i);
       const ansMatch = line.match(/^(?:Correct\s*Answer|Answer|Ans)[\:\=]\s*([A-D]|.+)/i);
-      const marksMatch = line.match(/^Marks[\:\=]\s*(\d+)/i);
+      const marksMatch = line.match(/^(?:Marks|Points)[\:\=]\s*(\d+)/i);
       const catMatch = line.match(/^(?:Category|Topic)[\:\=]\s*(.+)/i);
       const diffMatch = line.match(/^Difficulty[\:\=]\s*(Easy|Medium|Hard)/i);
       const expMatch = line.match(/^(?:Explanation)[\:\=]\s*(.+)/i);
 
-      if (optMatch) {
+      if (inlineOptMatches.length >= 2) {
         currentMode = 'options';
-        const key = optMatch[1].toUpperCase();
-        optionMap[key] = optMatch[2].trim();
+        inlineOptMatches.forEach((m) => {
+          const key = m[1].toUpperCase();
+          optionMap[key] = m[2].trim();
+        });
+      } else if (singleOptMatch) {
+        currentMode = 'options';
+        const key = singleOptMatch[1].toUpperCase();
+        optionMap[key] = singleOptMatch[2].trim();
       } else if (ansMatch) {
-        const val = ansMatch[1].trim();
-        correctAnswer = val.length === 1 && ['A', 'B', 'C', 'D'].includes(val.toUpperCase()) ? val.toUpperCase() : val;
+        rawCorrectAnswer = ansMatch[1].trim();
       } else if (marksMatch) {
         marks = parseInt(marksMatch[1], 10) || 2;
       } else if (catMatch) {
@@ -328,23 +336,36 @@ function parseMcqText(rawText) {
     const optionKeys = ['A', 'B', 'C', 'D'];
     const options = optionKeys.map((k) => optionMap[k] || `Option ${k}`);
 
-    if (correctAnswer && ['A', 'B', 'C', 'D'].includes(correctAnswer)) {
-      const idx = optionKeys.indexOf(correctAnswer);
-      if (idx !== -1 && options[idx]) {
-        correctAnswer = options[idx];
+    let correctAnswerIndex = 0;
+    let correctAnswerText = options[0];
+
+    if (rawCorrectAnswer) {
+      const upper = rawCorrectAnswer.toUpperCase().trim();
+      if (['A', 'B', 'C', 'D'].includes(upper)) {
+        correctAnswerIndex = optionKeys.indexOf(upper);
+        correctAnswerText = options[correctAnswerIndex] || options[0];
+      } else {
+        // Try matching text directly
+        const cleanRaw = rawCorrectAnswer.replace(/^[A-D][\.\:\)\-]\s*/i, '').trim().toLowerCase();
+        const matchedIdx = options.findIndex((opt) => opt.toLowerCase() === cleanRaw || opt.toLowerCase().includes(cleanRaw));
+        if (matchedIdx !== -1) {
+          correctAnswerIndex = matchedIdx;
+          correctAnswerText = options[matchedIdx];
+        } else {
+          correctAnswerText = rawCorrectAnswer;
+        }
       }
-    } else if (!correctAnswer && options[0]) {
-      correctAnswer = options[0];
     }
 
-    const isMalformed = !fullStatement || Object.keys(optionMap).length < 2 || !correctAnswer;
+    const isMalformed = !fullStatement || Object.keys(optionMap).length < 2 || !rawCorrectAnswer;
 
     extracted.push({
-      tempId: `pdf_q_${index + 1}_${Date.now()}`,
+      tempId: `pdf_q_${index + 1}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       title: fullStatement.length > 80 ? `${fullStatement.slice(0, 80)}...` : fullStatement,
       statement: fullStatement || `Extracted Question ${index + 1}`,
       options,
-      correctAnswer: correctAnswer || options[0] || 'Option A',
+      correctAnswerIndex,
+      correctAnswer: correctAnswerText,
       marks: Number(marks) || 2,
       category: category || 'Python',
       difficulty: difficulty || 'Easy',
