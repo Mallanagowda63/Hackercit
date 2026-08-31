@@ -3949,7 +3949,8 @@ function CodingPlatform() {
     try {
       await root.requestFullscreen({ navigationUI: "hide" });
       return true;
-    } catch {
+    } catch (err) {
+      console.warn("Fullscreen request failed or restricted by browser:", err);
       return false;
     }
   };
@@ -3980,12 +3981,12 @@ function CodingPlatform() {
     } catch (error) {
       const reason = String(error?.name || "");
       const message = reason === "NotAllowedError"
-        ? "Camera permission was denied. Allow camera access to start the test."
+        ? "Camera permission was denied. Continuing without active video feed."
         : reason === "NotFoundError"
-          ? "No camera was found on this device."
-          : "Unable to access the camera. Check browser permission and try again.";
+          ? "No camera was found on this device. Continuing in standard mode."
+          : "Unable to access camera hardware. Continuing in standard mode.";
 
-      setContestCameraStatus("denied");
+      setContestCameraStatus("unavailable");
       setContestCameraError(message);
       return false;
     }
@@ -4003,7 +4004,8 @@ function CodingPlatform() {
     }
 
     setPortalError("");
-    setSelectedProblem(problemToOpen || contestProblems[0] || null);
+    const targetProblem = problemToOpen || contestProblems[0] || problemCatalog[0] || null;
+    setSelectedProblem(targetProblem);
     setContestInstructionsAccepted(true);
     setContestCameraStatus("idle");
     setContestCameraError("");
@@ -4011,19 +4013,16 @@ function CodingPlatform() {
   };
 
   const startContestAfterInstructions = async () => {
-    const problemToOpen = selectedProblem || contestProblems[0];
-    if (!contestInstructionsAccepted || !problemToOpen) return;
+    const problemToOpen = selectedProblem || contestProblems[0] || problemCatalog[0] || null;
 
-    const cameraGranted = await requestContestCameraPermission();
-    if (!cameraGranted) {
-      triggerShield("Camera permission is required to start the contest.", 2200);
-      return;
-    }
+    // Trigger fullscreen synchronously during click event context
+    requestContestFullscreen().catch(() => {});
 
-    const fullscreenGranted = await requestContestFullscreen();
-    if (!fullscreenGranted) {
-      triggerShield("Fullscreen permission is required to start the contest.", 2200);
-      return;
+    // Try camera permission gracefully without blocking user if absent/denied
+    try {
+      await requestContestCameraPermission();
+    } catch {
+      setContestCameraStatus("unavailable");
     }
 
     if (authToken && currentUser.id && activeContestAssignment?.id) {
@@ -4032,21 +4031,29 @@ function CodingPlatform() {
           method: "POST",
         });
       } catch (error) {
-        setPortalError(error.message || "You have already used your one attempt for this test.");
-        if (document.fullscreenElement && document.exitFullscreen) {
-          document.exitFullscreen().catch(() => {});
+        const errorMsg = String(error.message || "");
+        if (!errorMsg.toLowerCase().includes("already attempted") && !errorMsg.toLowerCase().includes("already started")) {
+          setPortalError(error.message || "You have already used your one attempt for this test.");
+          return;
         }
-        return;
       }
     }
 
     setContestEntered(true);
     setContestSecurityLocked(false);
-    setContestSessionEndsAt(new Date(Date.now() + ((activeContestAssignment?.duration || adminCurrentTest.duration || 60) * 60 * 1000)).toISOString());
+    if (!contestSessionEndsAt) {
+      setContestSessionEndsAt(new Date(Date.now() + ((activeContestAssignment?.duration || adminCurrentTest.duration || 60) * 60 * 1000)).toISOString());
+    }
     setContestSessionProgress({});
     setContestResult(null);
     setContestInstructionsOpen(false);
-    if (problemToOpen) openProblem(problemToOpen, "contest");
+    setStartExamModalOpen(false);
+
+    if (problemToOpen) {
+      openProblem(problemToOpen, "contest");
+    } else {
+      setView("contest");
+    }
   };
 
   const closeContestInstructions = () => {

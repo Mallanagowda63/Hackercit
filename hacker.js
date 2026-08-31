@@ -22,6 +22,7 @@ const contentTypes = {
 };
 
 function sendJson(res, statusCode, payload) {
+  if (res.headersSent) return;
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
 }
@@ -43,7 +44,6 @@ function startBackendServer() {
     if (code === 0 || signal) return;
     console.error(`Backend process exited with code ${code}. Database API routes will be unavailable until it is restarted.`);
   });
-
 }
 
 function stopBackendServer() {
@@ -69,16 +69,6 @@ function readRequestBody(req, limit = 1024 * 1024) {
     });
 
     req.on("error", reject);
-  });
-}
-
-function readJsonBody(req) {
-  return readRequestBody(req).then((body) => {
-    try {
-      return body ? JSON.parse(body) : {};
-    } catch {
-      throw new Error("Invalid JSON body.");
-    }
   });
 }
 
@@ -128,8 +118,10 @@ async function proxyBackendRequest(req, res, requestUrl) {
       responseHeaders[key] = value;
     });
 
-    res.writeHead(upstreamResponse.status, responseHeaders);
-    res.end(responseBody);
+    if (!res.headersSent) {
+      res.writeHead(upstreamResponse.status, responseHeaders);
+      res.end(responseBody);
+    }
   } catch (error) {
     sendJson(res, 502, {
       error: "Unable to reach backend API. Start the backend with npm start --prefix backend.",
@@ -149,7 +141,22 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception in server process:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection in server process:", reason);
+});
+
 createServer(async (req, res) => {
+  req.on("error", (err) => {
+    console.error("Request socket error:", err?.message || err);
+  });
+  res.on("error", (err) => {
+    console.error("Response socket error:", err?.message || err);
+  });
+
   const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const pathname = requestUrl.pathname;
 
@@ -185,15 +192,30 @@ createServer(async (req, res) => {
     if (!extname(filePath)) {
       filePath = join(rootDir, "index.html");
     } else {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("Not found");
+      if (!res.headersSent) {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Not found");
+      }
       return;
     }
   }
 
   const contentType = contentTypes[extname(filePath)] || "application/octet-stream";
-  res.writeHead(200, { "Content-Type": contentType });
-  createReadStream(filePath).pipe(res);
+  if (!res.headersSent) {
+    res.writeHead(200, { "Content-Type": contentType });
+  }
+  const fileStream = createReadStream(filePath);
+  fileStream.on("error", (err) => {
+    console.error("File stream error:", err?.message || err);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Internal Server Error");
+    }
+  });
+  res.on("error", () => {
+    fileStream.destroy();
+  });
+  fileStream.pipe(res);
 }).listen(port, host, () => {
   const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
   console.log(`DevOrbit is running at http://${displayHost}:${port}`);
