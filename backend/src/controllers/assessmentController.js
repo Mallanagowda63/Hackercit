@@ -1,14 +1,58 @@
 const prisma = require('../prismaClient');
 
+async function attachRankToResult(result, assignmentId) {
+  if (!result || !assignmentId) return result;
+
+  const allSubmissions = await prisma.assessmentSubmission.findMany({
+    where: { assignmentId },
+    orderBy: [
+      { totalScore: 'desc' },
+      { createdAt: 'asc' },
+    ],
+  });
+
+  const index = allSubmissions.findIndex((sub) => sub.id === result.id || sub.userId === result.userId);
+  const rank = index !== -1 ? index + 1 : 1;
+
+  return {
+    ...result,
+    rank,
+    userRank: rank,
+    totalParticipants: allSubmissions.length,
+  };
+}
+
 exports.submitAssessment = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { theoryAnswers = {}, codingAnswers = {} } = req.body || {};
+    const { theoryAnswers = {}, codingAnswers = {}, isAutoSubmit = false } = req.body || {};
 
-    const assignment = await prisma.testAssignment.findUnique({ where: { id } });
+    let assignment = await prisma.testAssignment.findUnique({ where: { id } });
+    if (!assignment && id === 'active') {
+      assignment = await prisma.testAssignment.findFirst({
+        where: { status: 'LIVE' },
+        orderBy: { startsAt: 'desc' },
+      });
+    }
     if (!assignment) {
       return res.status(404).json({ error: 'assignment not found' });
+    }
+
+    // Duplicate submission protection: if student already submitted this exam, return existing result
+    const existingSubmission = await prisma.assessmentSubmission.findFirst({
+      where: { assignmentId: assignment.id, userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (existingSubmission) {
+      const rankedExisting = await attachRankToResult(existingSubmission, assignment.id);
+      return res.status(200).json({
+        ok: true,
+        alreadySubmitted: true,
+        message: 'Exam already submitted.',
+        result: rankedExisting,
+      });
     }
 
     const problemIds = assignment.problemIds || [];
@@ -23,7 +67,7 @@ exports.submitAssessment = async (req, res) => {
     const problemsById = new Map(problems.map((p) => [p.id, p]));
     const orderedProblems = problemIds.map((pId) => problemsById.get(pId)).filter(Boolean);
 
-    // Fetch candidate's coding submissions for coding questions in this test
+    // Fetch candidate's persisted coding submissions from database
     const codingSubmissions = await prisma.submission.findMany({
       where: {
         userId,
@@ -47,7 +91,7 @@ exports.submitAssessment = async (req, res) => {
     let codingCount = 0;
     let answeredCount = 0;
 
-    const details = orderedProblems.map((problem) => {
+    const details = await Promise.all(orderedProblems.map(async (problem) => {
       const type = problem.type || (Array.isArray(problem.options) && problem.options.length ? 'theory' : 'coding');
       const maxMarks = problem.marks || (type === 'theory' ? 2 : 10);
 
@@ -90,11 +134,37 @@ exports.submitAssessment = async (req, res) => {
       codingCount += 1;
       maxCodingScore += maxMarks;
 
-      const clientCodingPayload = codingAnswers[problem.id] || codingAnswers[problem.legacyId] || {};
-      const dbSub = latestSubmissionByProblem.get(problem.id);
+      const clientCodingPayload = (
+        codingAnswers[problem.id] ||
+        codingAnswers[problem.legacyId] ||
+        codingAnswers[String(problem.id)] ||
+        {}
+      );
+      let dbSub = latestSubmissionByProblem.get(problem.id);
 
-      const code = dbSub?.code || clientCodingPayload.code || '';
+      // If DB submission missing but client supplied code, persist it to DB
+      const code = dbSub?.code || clientCodingPayload.code || clientCodingPayload.submittedCode || '';
       const language = dbSub?.language || clientCodingPayload.language || 'javascript';
+
+      if (!dbSub && code) {
+        try {
+          const clientStatus = clientCodingPayload.status === 'passed' || clientCodingPayload.status === 'ACCEPTED'
+            ? 'ACCEPTED'
+            : (clientCodingPayload.status || 'WRONG_ANSWER');
+          dbSub = await prisma.submission.create({
+            data: {
+              userId,
+              problemId: problem.id,
+              language,
+              code,
+              status: clientStatus === 'ACCEPTED' ? 'ACCEPTED' : 'WRONG_ANSWER',
+              results: Array.isArray(clientCodingPayload.tests) ? clientCodingPayload.tests : [],
+            },
+          });
+        } catch (e) {
+          console.error('Error auto-creating submission:', e);
+        }
+      }
 
       const isAnswered = Boolean(String(code || '').trim());
       if (isAnswered) answeredCount += 1;
@@ -102,33 +172,42 @@ exports.submitAssessment = async (req, res) => {
       let status = 'No Submission';
       let earnedMarks = 0;
       let passCount = 0;
-      let totalTests = Array.isArray(problem.testCases) && problem.testCases.length ? problem.testCases.length : 10;
+      let totalTests = Array.isArray(problem.testCases) && problem.testCases.length ? problem.testCases.length : 3;
 
       if (dbSub) {
-        if (dbSub.status === 'ACCEPTED') {
-          earnedMarks = maxMarks;
+        const results = Array.isArray(dbSub.results) ? dbSub.results : [];
+        if (results.length > 0) {
+          passCount = results.filter((t) => t.status === 'pass').length;
+          totalTests = results.length;
+        } else if (dbSub.status === 'ACCEPTED') {
+          passCount = totalTests;
+        }
+
+        const ratio = totalTests > 0 ? passCount / totalTests : 0;
+        earnedMarks = Math.round(ratio * maxMarks * 100) / 100;
+
+        if (dbSub.status === 'ACCEPTED' || passCount === totalTests) {
           status = 'ACCEPTED';
-          passCount = Array.isArray(dbSub.results) && dbSub.results.length ? dbSub.results.filter((t) => t.status === 'pass').length : totalTests;
-          totalTests = Array.isArray(dbSub.results) && dbSub.results.length ? dbSub.results.length : totalTests;
-        } else if (dbSub.results && Array.isArray(dbSub.results) && dbSub.results.length) {
-          passCount = dbSub.results.filter((t) => t.status === 'pass').length;
-          totalTests = dbSub.results.length;
-          const ratio = passCount / totalTests;
-          earnedMarks = Math.round(ratio * maxMarks * 100) / 100;
-          if (passCount === totalTests) {
-            status = 'ACCEPTED';
-          } else if (passCount > 0) {
-            status = 'PARTIAL';
-          } else {
-            status = dbSub.status || 'WRONG_ANSWER';
-          }
+          earnedMarks = maxMarks;
+        } else if (passCount > 0) {
+          status = 'PARTIAL';
+        } else if (dbSub.status === 'COMPILE_ERROR') {
+          status = 'COMPILE_ERROR';
+        } else if (dbSub.status === 'RUNTIME_ERROR') {
+          status = 'RUNTIME_ERROR';
         } else {
           status = dbSub.status || 'WRONG_ANSWER';
         }
-      } else if (clientCodingPayload.status === 'passed' || clientCodingPayload.status === 'ACCEPTED') {
-        earnedMarks = maxMarks;
-        status = 'ACCEPTED';
-        passCount = totalTests;
+      } else if (clientCodingPayload.testCasesPassed !== undefined && clientCodingPayload.totalTestCases !== undefined) {
+        passCount = Number(clientCodingPayload.testCasesPassed || 0);
+        totalTests = Number(clientCodingPayload.totalTestCases || totalTests);
+        const ratio = totalTests > 0 ? passCount / totalTests : 0;
+        earnedMarks = Math.round(ratio * maxMarks * 100) / 100;
+        status = passCount === totalTests ? 'ACCEPTED' : passCount > 0 ? 'PARTIAL' : (clientCodingPayload.status || 'WRONG_ANSWER');
+      } else if (isAnswered) {
+        status = 'WRONG_ANSWER';
+        earnedMarks = 0;
+        passCount = 0;
       }
 
       codingScore += earnedMarks;
@@ -147,7 +226,7 @@ exports.submitAssessment = async (req, res) => {
         testCasesPassed: passCount,
         totalTestCases: totalTests,
       };
-    });
+    }));
 
     const totalScore = Math.round((theoryScore + codingScore) * 100) / 100;
     const maxScore = maxTheoryScore + maxCodingScore;
@@ -161,10 +240,14 @@ exports.submitAssessment = async (req, res) => {
         codingSubmissions: Object.fromEntries(
           orderedProblems
             .filter((p) => (p.type || 'coding') === 'coding')
-            .map((p) => [p.id, {
-              code: latestSubmissionByProblem.get(p.id)?.code || codingAnswers[p.id]?.code || '',
-              language: latestSubmissionByProblem.get(p.id)?.language || codingAnswers[p.id]?.language || 'javascript',
-            }])
+            .map((p) => {
+              const sub = latestSubmissionByProblem.get(p.id);
+              const payload = codingAnswers[p.id] || codingAnswers[p.legacyId] || {};
+              return [p.id, {
+                code: sub?.code || payload.code || payload.submittedCode || '',
+                language: sub?.language || payload.language || 'javascript',
+              }];
+            })
         ),
         theoryScore,
         codingScore,
@@ -183,9 +266,42 @@ exports.submitAssessment = async (req, res) => {
       },
     });
 
+    // Update TestAttempt status in database to SUBMITTED or AUTO_SUBMITTED
+    const attemptStatus = isAutoSubmit ? 'AUTO_SUBMITTED' : 'SUBMITTED';
+    await prisma.testAttempt.upsert({
+      where: {
+        userId_assignmentId: {
+          userId,
+          assignmentId: assignment.id,
+        },
+      },
+      update: {
+        status: attemptStatus,
+        submittedAt: new Date(),
+        finishedAt: new Date(),
+        score: totalScore,
+        maxScore,
+        percentage,
+      },
+      create: {
+        userId,
+        assignmentId: assignment.id,
+        status: attemptStatus,
+        startsAt: new Date(),
+        endsAt: new Date(),
+        submittedAt: new Date(),
+        finishedAt: new Date(),
+        score: totalScore,
+        maxScore,
+        percentage,
+      },
+    }).catch(() => {});
+
+    const rankedResult = await attachRankToResult(assessmentSubmission, assignment.id);
+
     return res.status(201).json({
       ok: true,
-      result: assessmentSubmission,
+      result: rankedResult,
     });
   } catch (error) {
     console.error('Error submitting assessment:', error);
@@ -195,12 +311,22 @@ exports.submitAssessment = async (req, res) => {
 
 exports.getAssessmentResult = async (req, res) => {
   try {
-    const { id } = req.params;
+    let { id } = req.params;
     const userId = req.user.id;
+
+    if (id === 'active') {
+      const activeAssignment = await prisma.testAssignment.findFirst({
+        where: { status: 'LIVE' },
+        orderBy: { startsAt: 'desc' },
+      });
+      if (activeAssignment) {
+        id = activeAssignment.id;
+      }
+    }
 
     const result = await prisma.assessmentSubmission.findFirst({
       where: {
-        assignmentId: id,
+        ...(id && id !== 'active' ? { assignmentId: id } : {}),
         userId,
       },
       orderBy: { createdAt: 'desc' },
@@ -210,7 +336,8 @@ exports.getAssessmentResult = async (req, res) => {
       return res.status(404).json({ error: 'result not found' });
     }
 
-    return res.json({ result });
+    const rankedResult = await attachRankToResult(result, result.assignmentId);
+    return res.json({ result: rankedResult });
   } catch (error) {
     console.error('Error fetching assessment result:', error);
     return res.status(500).json({ error: 'server error' });

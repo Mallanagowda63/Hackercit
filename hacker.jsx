@@ -3166,6 +3166,11 @@ function CodingPlatform() {
   const [contestSessionProgress, setContestSessionProgress] = useState({});
   const [contestResult, setContestResult] = useState(null);
   const [finalSubmitConfirmOpen, setFinalSubmitConfirmOpen] = useState(false);
+  const [cameraMinimized, setCameraMinimized] = useState(false);
+  const [startExamModalOpen, setStartExamModalOpen] = useState(false);
+  const [exitExamConfirmModalOpen, setExitExamConfirmModalOpen] = useState(false);
+  const [pendingNavigationAction, setPendingNavigationAction] = useState(null);
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [userSubmissions, setUserSubmissions] = useState([]);
   const [consoleOpen, setConsoleOpen]         = useState(false);
   const [editorScrollTop, setEditorScrollTop] = useState(0);
@@ -3682,6 +3687,30 @@ function CodingPlatform() {
   }, [contestEntered, contestSessionEndsAt, contestTimerSeconds]);
 
   useEffect(() => {
+    if (!contestEntered || assessmentResult) return undefined;
+
+    const handleBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = "Are you sure you want to exit the exam? Your progress may be lost.";
+      return e.returnValue;
+    };
+
+    const handlePopState = (e) => {
+      window.history.pushState(null, "", window.location.href);
+      setExitExamConfirmModalOpen(true);
+    };
+
+    window.history.pushState(null, "", window.location.href);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [contestEntered, assessmentResult]);
+
+  useEffect(() => {
     if (!contestEntered) {
       setContestSecurityLocked(false);
       return undefined;
@@ -3802,7 +3831,15 @@ function CodingPlatform() {
   const openProblem = (p, navigationSource = "catalog") => {
     setSelectedProblem(p);
     setProblemNavigationSource(navigationSource);
-    setCode(p.starterCode?.[lang] || "");
+
+    const savedAns = candidateCodingAnswers[p.dbId] || candidateCodingAnswers[p.id] || candidateCodingAnswers[p.legacyId];
+    if (savedAns && savedAns.code) {
+      setCode(savedAns.code);
+      if (savedAns.language) setLang(savedAns.language);
+    } else {
+      setCode(p.starterCode?.[lang] || "");
+    }
+
     setRunResult(null);
     setActiveTab("description");
     setConsoleTab("testcase");
@@ -3895,8 +3932,9 @@ function CodingPlatform() {
   };
 
   const goBackFromProblem = () => {
-    if (problemNavigationSource === "contest" && contestEntered) {
-      finishContest("Ended because you left the test screen.");
+    if (problemNavigationSource === "contest" && contestEntered && !assessmentResult) {
+      setPendingNavigationAction(() => () => setView("contest"));
+      setExitExamConfirmModalOpen(true);
       return;
     }
     setView(problemNavigationSource === "contest" ? "contest" : "list");
@@ -3966,10 +4004,10 @@ function CodingPlatform() {
 
     setPortalError("");
     setSelectedProblem(problemToOpen || contestProblems[0] || null);
-    setContestInstructionsAccepted(false);
+    setContestInstructionsAccepted(true);
     setContestCameraStatus("idle");
     setContestCameraError("");
-    setContestInstructionsOpen(true);
+    setStartExamModalOpen(true);
   };
 
   const startContestAfterInstructions = async () => {
@@ -4029,7 +4067,15 @@ function CodingPlatform() {
 
   const handleLangChange = (l) => {
     setLang(l);
-    if (selectedProblem) setCode(selectedProblem.starterCode?.[l] || "");
+    if (selectedProblem) {
+      const pKey = selectedProblem.dbId || selectedProblem.id;
+      const savedAns = candidateCodingAnswers[pKey] || candidateCodingAnswers[selectedProblem.id] || candidateCodingAnswers[selectedProblem.legacyId];
+      if (savedAns && savedAns.language === l && savedAns.code) {
+        setCode(savedAns.code);
+      } else {
+        setCode(selectedProblem.starterCode?.[l] || "");
+      }
+    }
   };
 
   const openAuthFlow = () => {
@@ -4094,8 +4140,13 @@ function CodingPlatform() {
       return;
     }
 
-    if (!email || !password) {
-      setAuthError("Enter both email ID and password.");
+    if (!email) {
+      setAuthError("Please enter your email/username.");
+      return;
+    }
+
+    if (!password) {
+      setAuthError("Please enter your password.");
       return;
     }
 
@@ -4137,7 +4188,7 @@ function CodingPlatform() {
 
       const data = await readJsonSafely(response);
       if (!response.ok) {
-        throw new Error(data.error || "Authentication failed.");
+        throw new Error(data.error || "Invalid email/username or password.");
       }
 
       const user = data.user || {
@@ -4175,11 +4226,11 @@ function CodingPlatform() {
       setView(resolvedRole === "admin" ? "admin" : "list");
     } catch (error) {
       const message = String(error?.message || "");
-      setAuthError(
-        message.includes("Failed to fetch")
-          ? `Cannot reach backend API at ${BACKEND_API_TARGET}. Start the backend with "npm start --prefix backend" and try again.`
-          : message || "Unable to complete authentication right now."
-      );
+      if (message.includes("Failed to fetch") || message.includes("Cannot reach backend")) {
+        setAuthError("Unable to connect to the server. Please try again.");
+      } else {
+        setAuthError(message.includes("Invalid") ? message : "Invalid email/username or password.");
+      }
     } finally {
       setAuthSubmitting(false);
     }
@@ -4736,6 +4787,30 @@ function CodingPlatform() {
       nextAttemptedSet.add(p.id);
       setAttemptedProblems(new Set(nextAttemptedSet));
     }
+
+    const passCount = results.filter((r) => r.status === "pass").length;
+    const totalTests = results.length || (Array.isArray(p.testCases) ? p.testCases.length : 3);
+    const maxMarks = p.marks || 10;
+    const earnedMarks = Math.round((passCount / (totalTests || 1)) * maxMarks * 100) / 100;
+    const statusStr = allPassed ? "ACCEPTED" : passCount > 0 ? "PARTIAL" : "WRONG_ANSWER";
+
+    setCandidateCodingAnswers((prev) => {
+      const updated = { ...prev };
+      const entry = {
+        code,
+        language: lang,
+        status: statusStr,
+        testCasesPassed: passCount,
+        totalTestCases: totalTests,
+        marks: earnedMarks,
+        submitted: isSubmit ? true : Boolean(prev[p.id]?.submitted),
+      };
+      if (p.id) updated[p.id] = entry;
+      if (p.dbId) updated[p.dbId] = entry;
+      if (p.legacyId) updated[p.legacyId] = entry;
+      return updated;
+    });
+
     const nextContestSessionProgress = {
       ...contestSessionProgress,
       ...(isSubmit && isContestProblem ? { [p.id]: allPassed ? "accepted" : "rejected" } : {}),
@@ -4759,9 +4834,6 @@ function CodingPlatform() {
     }
 
     if (isSubmit) setSubmitting(false); else setRunning(false);
-    if (isSubmit && isFinalContestProblem) {
-      finishContest("Final submission completed.", nextContestSessionProgress);
-    }
   };
   const indentUnit = "  ";
   const handleEditorIndentation = (e, value, setter, ref, language = lang) => {
@@ -4883,10 +4955,15 @@ function CodingPlatform() {
     .map((problem, index) => {
       if (!problem) return null;
 
-      const status = solved.has(problem.id)
+      const pKey = problem.id || problem.dbId;
+      const savedAns = candidateCodingAnswers[pKey] || candidateCodingAnswers[problem.id] || candidateCodingAnswers[problem.legacyId];
+      const savedTheory = candidateTheoryAnswers[pKey] || candidateTheoryAnswers[problem.id] || candidateTheoryAnswers[problem.legacyId];
+      const isSubmitted = Boolean(savedAns?.submitted || savedTheory || solved.has(problem.id));
+
+      const status = isSubmitted
         ? {
             icon: "✔",
-            label: "Solved",
+            label: savedAns?.status === "ACCEPTED" || solved.has(problem.id) ? "Submitted" : (savedAns?.status || "Submitted"),
             color: "#73f0b3",
             background: "#0f1c15",
             border: "#1f4e3a",
@@ -4901,10 +4978,10 @@ function CodingPlatform() {
             }
           : {
               icon: "⏳",
-              label: "Not Tried",
-              color: "#ffc86b",
+              label: "No Submission",
+              color: "#94a3b8",
               background: "#191309",
-              border: "#5d4722",
+              border: "#334155",
             };
 
       return {
@@ -4963,7 +5040,15 @@ function CodingPlatform() {
     : leaderboardScope === "Global"
       ? "global"
       : "overall";
-  const leaderboardRows = leaderboard
+
+  const filteredLeaderboard = leaderboard.filter((entry) => {
+    if (leaderboardScope === "This Contest") {
+      return entry.hasContestSubmission;
+    }
+    return true;
+  });
+
+  const leaderboardRows = filteredLeaderboard
     .map((entry) => ({
       ...entry,
       stats: entry[leaderboardMode],
@@ -4971,7 +5056,15 @@ function CodingPlatform() {
     .filter((entry) =>
       entry.username.toLowerCase().includes(leaderboardSearch.trim().toLowerCase())
     )
-    .sort((a, b) => a.stats.rank - b.stats.rank);
+    .sort((a, b) => {
+      const aRank = a.stats?.rank || 999999;
+      const bRank = b.stats?.rank || 999999;
+      return aRank - bRank;
+    })
+    .map((entry, idx) => ({
+      ...entry,
+      displayRank: idx + 1,
+    }));
   const leaderboardPageSize = 5;
   const leaderboardPageCount = Math.max(1, Math.ceil(leaderboardRows.length / leaderboardPageSize));
   const safeLeaderboardPage = Math.min(leaderboardPage, leaderboardPageCount);
@@ -6262,7 +6355,34 @@ function CodingPlatform() {
                     </div>
                     <div>
                       <label style={S.fieldLabel}>Password</label>
-                      <input type="password" value={authPassword} onChange={e=>{ setAuthPassword(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="Enter password" />
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={showAuthPassword ? "text" : "password"}
+                          value={authPassword}
+                          onChange={e=>{ setAuthPassword(e.target.value); if (authError) setAuthError(""); }}
+                          style={{ ...S.input, paddingRight: 44 }}
+                          placeholder="Enter password"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAuthPassword(!showAuthPassword)}
+                          style={{
+                            position: "absolute",
+                            right: 12,
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                            background: "none",
+                            border: "none",
+                            color: "#94a3b8",
+                            cursor: "pointer",
+                            fontSize: 16,
+                            padding: 4,
+                          }}
+                          title={showAuthPassword ? "Hide password" : "Show password"}
+                        >
+                          {showAuthPassword ? "🙈" : "👁"}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -6284,7 +6404,9 @@ function CodingPlatform() {
                     cursor: authSubmitting || (authMode === "signup" && !authPoliciesAccepted) ? "not-allowed" : "pointer",
                   }}
                 >
-                  {authSubmitting ? "Please wait..." : authMode === "signup" ? "Create Access" : "Enter Portal"}
+                  {authSubmitting
+                    ? (authMode === "signup" ? "⏳ CREATING ACCOUNT..." : "⏳ LOGGING IN...")
+                    : (authMode === "signup" ? "Create Access" : "LOGIN")}
                 </button>
                 <button onClick={closeAuthFlow} style={{ ...S.btn("default"), color:"#c8c8e8" }}>Cancel</button>
               </div>
@@ -6397,6 +6519,18 @@ function CodingPlatform() {
               </div>
               <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
                 Submission status recorded
+              </div>
+            </div>
+
+            <div style={{ background: "#0f172a", border: "1px solid #3b82f6", borderRadius: 18, padding: "18px 20px" }}>
+              <div style={{ color: "#38bdf8", fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                Official Rank
+              </div>
+              <div style={{ color: "#38bdf8", fontSize: 32, fontWeight: 800 }}>
+                #{res.rank || res.userRank || 1}
+              </div>
+              <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                {res.totalParticipants ? `Out of ${res.totalParticipants} completed submissions` : "Recalculated on database"}
               </div>
             </div>
           </div>
@@ -9381,6 +9515,29 @@ function CodingPlatform() {
               </select>
             </div>
 
+            {(() => {
+              const myEntry = leaderboard.find((e) => e.userId === currentUser.id || e.email === currentUser.email);
+              if (myEntry && myEntry.hasContestSubmission) {
+                return (
+                  <div style={{ marginBottom: 16, background: "rgba(16, 185, 129, 0.1)", border: "1px solid #10b981", borderRadius: 16, padding: "14px 18px", color: "#6ee7b7", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 16 }}>✓</span>
+                      <span><strong>Your Exam Status:</strong> Submitted & Evaluated. Official Rank: <strong>#{myEntry.contest?.rank || 1}</strong></span>
+                    </div>
+                    <div>
+                      <strong>Score: {myEntry.contest?.score} / {myEntry.contest?.maxScore || 10} ({myEntry.contest?.percentage ?? 100}%)</strong>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div style={{ marginBottom: 16, background: "rgba(59, 130, 246, 0.1)", border: "1px solid #3b82f6", borderRadius: 16, padding: "14px 18px", color: "#93c5fd", fontSize: 14, display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 16 }}>💡</span>
+                  <span>You have not submitted this exam yet. Complete and submit your exam to appear as a ranked participant on the official contest leaderboard.</span>
+                </div>
+              );
+            })()}
+
             <div style={{ background:"#0d1017", border:"1px solid #202437", borderRadius:22, padding:"14px", boxShadow:"inset 0 1px 0 rgba(255,255,255,0.03)" }}>
               <div style={{ maxHeight:520, overflowY:"auto", paddingRight:4 }}>
                 <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 10px" }}>
@@ -9411,7 +9568,7 @@ function CodingPlatform() {
                   </thead>
                   <tbody>
                     {visibleLeaderboardRows.length ? visibleLeaderboardRows.map((entry, index) => {
-                      const accent = getLeaderboardAccent(entry.stats.rank);
+                      const accent = getLeaderboardAccent(entry.displayRank || entry.stats.rank);
                       const submissionLevel = entry.stats.submissionLevel || "No Submission";
                       const levelMeta = getSubmissionLevelMeta(submissionLevel);
                       const trend = getTrendMeta(entry.stats.trend);
@@ -9445,7 +9602,7 @@ function CodingPlatform() {
                             <div style={{ display:"flex", alignItems:"center", gap:10, color:"#eef0ff", fontWeight:700 }}>
                               <span style={{ fontSize:18 }}>{accent.badge || "#"}</span>
                               <div>
-                                <div style={{ color:"#eef0ff", fontSize:18, lineHeight:1 }}>{entry.stats.rank}</div>
+                                <div style={{ color:"#eef0ff", fontSize:18, lineHeight:1 }}>{entry.displayRank || entry.stats.rank}</div>
                                 <div style={{ color:trend.color, fontSize:12, marginTop:4 }}>{trend.icon} {trend.label}</div>
                               </div>
                             </div>
@@ -9481,8 +9638,8 @@ function CodingPlatform() {
                       <tr>
                         <td colSpan="5" style={{ padding:"38px 18px", textAlign:"center", color:"#8f93b4", background:"#0d1017" }}>
                           {leaderboardSearch.trim()
-                            ? "No leaderboard entries matched that username."
-                            : "No logged-in students have leaderboard data yet."}
+                            ? "No submitted leaderboard entries matched that username."
+                            : "No students have submitted this contest yet. Complete and submit your exam to appear on the official leaderboard."}
                         </td>
                       </tr>
                     )}
@@ -9540,27 +9697,137 @@ function CodingPlatform() {
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
-      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+      {exitExamConfirmModalOpen && (
+        <div style={S.modalBackdrop} onClick={() => setExitExamConfirmModalOpen(false)}>
+          <div style={{ ...S.modalCard, width: "min(520px, 92vw)", padding: "28px", border: "1px solid #7f1d1d" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+              <span>⚠</span>
+              <span>Accidental Exit Protection</span>
+            </div>
+            <h2 style={{ margin: "0 0 12px", color: "#f5f6ff", fontSize: 26, lineHeight: 1.2 }}>Leave Exam?</h2>
+            <div style={{ color: "#94a3b8", fontSize: 14, lineHeight: 1.7, marginBottom: 20 }}>
+              Are you sure you want to exit the exam?
+              <div style={{ marginTop: 8, color: "#cbd5e1" }}>
+                Your exam is still in progress. Saved progress will remain stored in the database, but leaving may interrupt your exam session.
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, flexWrap: "wrap" }}>
+              <button
+                onClick={() => {
+                  setExitExamConfirmModalOpen(false);
+                  setPendingNavigationAction(null);
+                }}
+                style={{ ...S.btn("submit"), padding: "10px 24px", background: "linear-gradient(135deg,#3b82f6,#2563eb)" }}
+              >
+                STAY ON EXAM
+              </button>
+              <button
+                onClick={() => {
+                  setExitExamConfirmModalOpen(false);
+                  setContestEntered(false);
+                  if (pendingNavigationAction) {
+                    pendingNavigationAction();
+                    setPendingNavigationAction(null);
+                  } else {
+                    setView("list");
+                  }
+                }}
+                style={{ ...S.btn("default"), border: "1px solid #ef4444", color: "#ef4444", background: "rgba(239,68,68,0.1)", padding: "10px 20px" }}
+              >
+                EXIT EXAM
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {startExamModalOpen && (
+        <div style={S.modalBackdrop} onClick={() => setStartExamModalOpen(false)}>
+          <div style={{ ...S.modalCard, width: "min(560px, 92vw)", padding: "28px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ color: "#a78bfa", fontSize: 12, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10 }}>
+              Exam Confirmation
+            </div>
+            <h2 style={{ margin: "0 0 12px", color: "#f5f6ff", fontSize: 28, lineHeight: 1.2 }}>Ready to Start the Exam?</h2>
+            <div style={{ color: "#94a3b8", fontSize: 14, lineHeight: 1.7, marginBottom: 20 }}>
+              Once you start the exam, the timer will begin.
+              <ul style={{ margin: "10px 0 0", paddingLeft: 20, color: "#cbd5e1", display: "grid", gap: 6 }}>
+                <li>Do not refresh the page.</li>
+                <li>Do not close the browser.</li>
+                <li>Keep your internet connection stable.</li>
+                <li>Camera/proctoring monitoring must remain active if required.</li>
+              </ul>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+              <button onClick={() => setStartExamModalOpen(false)} style={S.btn("default")}>Cancel</button>
+              <button
+                onClick={() => {
+                  setStartExamModalOpen(false);
+                  startContestAfterInstructions();
+                }}
+                style={{ ...S.btn("submit"), padding: "10px 24px" }}
+              >
+                ▶ Start Exam Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {finalSubmitConfirmOpen && (
-        <div style={S.modalBackdrop} onClick={() => !submitting && setFinalSubmitConfirmOpen(false)}>
-          <div style={{ ...S.modalCard, width:"min(560px, 100%)" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>
-              Final Submission
+        <div style={S.modalBackdrop} onClick={() => !submittingAssessment && setFinalSubmitConfirmOpen(false)}>
+          <div style={{ ...S.modalCard, width: "min(580px, 92vw)", padding: "28px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ color: "#7a7f9e", fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", fontFamily: "'Space Grotesk',sans-serif", marginBottom: 10 }}>
+              Final Exam Submission
             </div>
-            <h2 style={{ margin:"0 0 12px", color:"#f5f6ff", fontSize:30, lineHeight:1.1 }}>Finish and submit your test?</h2>
-            <div style={{ color:"#a9aed0", fontSize:14, lineHeight:1.8, marginBottom:18 }}>
-              This will submit your answer for the last problem and end the test immediately. After that, your result screen will open.
+            <h2 style={{ margin: "0 0 12px", color: "#f5f6ff", fontSize: 30, lineHeight: 1.1 }}>Finish and submit your exam?</h2>
+            <div style={{ color: "#a9aed0", fontSize: 14, lineHeight: 1.7, marginBottom: 18 }}>
+              You will not be able to modify your answers after final submission.
             </div>
-            <div style={{ display:"grid", gap:10, background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 16px", color:"#d9dcf7", fontSize:14, lineHeight:1.7, marginBottom:20 }}>
-              <div>Problem: <strong>{p.title}</strong></div>
-              <div>Time left: <strong>{formatCountdown(contestTimerSeconds)}</strong></div>
-              <div>This action cannot be resumed from the contest screen.</div>
-            </div>
-            <div style={{ display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
-              <button onClick={() => setFinalSubmitConfirmOpen(false)} disabled={submitting} style={S.btn("default")}>Cancel</button>
-              <button onClick={confirmFinalSubmit} disabled={submitting} style={{ ...S.btn("submit"), opacity:submitting ? 0.65 : 1 }}>
-                {submitting ? "Submitting..." : "Submit and Finish"}
+            {(() => {
+              const totalContestQuestions = contestProblems.length || 1;
+              let answeredCount = 0;
+              contestProblems.forEach((cp) => {
+                const isTheory = cp.type === "theory" || (Array.isArray(cp.options) && cp.options.length > 0);
+                if (isTheory) {
+                  if (candidateTheoryAnswers[cp.dbId] || candidateTheoryAnswers[cp.id] || candidateTheoryAnswers[cp.legacyId]) {
+                    answeredCount += 1;
+                  }
+                } else {
+                  const ans = candidateCodingAnswers[cp.dbId] || candidateCodingAnswers[cp.id] || candidateCodingAnswers[cp.legacyId];
+                  if (ans?.submitted || Boolean(String(ans?.code || "").trim())) {
+                    answeredCount += 1;
+                  }
+                }
+              });
+              const unansweredCount = Math.max(0, totalContestQuestions - answeredCount);
+              return (
+                <div style={{ margin: "0 0 20px", padding: "16px 20px", borderRadius: 16, background: "#0f131c", border: "1px solid #24283a", display: "grid", gap: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", color: "#f8fafc", fontSize: 14 }}>
+                    <span>Answered Questions:</span>
+                    <strong style={{ color: "#4ade80" }}>{answeredCount} / {totalContestQuestions}</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", color: "#f8fafc", fontSize: 14 }}>
+                    <span>Unanswered Questions:</span>
+                    <strong style={{ color: unansweredCount > 0 ? "#f87171" : "#94a3b8" }}>{unansweredCount} / {totalContestQuestions}</strong>
+                  </div>
+                  {unansweredCount > 0 && (
+                    <div style={{ color: "#fbbf24", fontSize: 13, display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                      <span>⚠ You have {unansweredCount} unanswered question{unansweredCount > 1 ? "s" : ""}. Review your answers before submitting.</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, flexWrap: "wrap" }}>
+              <button onClick={() => setFinalSubmitConfirmOpen(false)} disabled={submittingAssessment} style={S.btn("default")}>
+                Cancel & Review Answers
+              </button>
+              <button
+                onClick={confirmFinalSubmit}
+                disabled={submittingAssessment}
+                style={{ ...S.btn("submit"), background: "linear-gradient(135deg,#8b5cf6,#ec4899)", opacity: submittingAssessment ? 0.65 : 1, padding: "10px 24px" }}
+              >
+                {submittingAssessment ? "⏳ SUBMITTING EXAM..." : "FINAL SUBMIT"}
               </button>
             </div>
           </div>
@@ -9580,30 +9847,6 @@ function CodingPlatform() {
             <span style={{ color:contestTimerSeconds <= 60 ? "#ff9b9b" : "#eef0ff", fontFamily:"'JetBrains Mono',monospace", fontSize:13 }}>{formatCountdown(contestTimerSeconds)}</span>
           </div>
         )}
-        {showProblemNavigation && (
-          <div style={{ marginLeft:"auto", display:"flex", gap:10, alignItems:"center" }}>
-            {hasPreviousProblem && (
-              <button onClick={() => openAdjacentProblem(-1)} style={S.btn("default")}>
-                Previous
-              </button>
-            )}
-            <button
-              onClick={() => openAdjacentProblem(1)}
-              disabled={!hasNextProblem}
-              style={{ ...S.btn("default"), opacity:hasNextProblem ? 1 : 0.45 }}
-            >
-              Next
-            </button>
-          </div>
-        )}
-        {false && <div style={{ marginLeft:"auto", display:"flex", gap:10 }}>
-          <button onClick={()=>simulateRun(false)} disabled={running||submitting} style={S.btn("run")}>
-            {running?"⟳ Running...":"▶  Run"}
-          </button>
-          <button onClick={()=>simulateRun(true)} disabled={running||submitting} style={S.btn("submit")}>
-            {submitting?"⟳ Submitting...":"↑  Submit"}
-          </button>
-        </div>}
       </nav>
 
       <div style={{ padding:`16px ${pageGutter}px 0`, maxWidth:"100%", boxSizing:"border-box" }}>
@@ -9628,10 +9871,17 @@ function CodingPlatform() {
           <div style={{ flex:1, overflowY:"auto", padding:isPhone ? 16 : 24, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
             {activeTab === "description" && (
               <>
-                <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
                   <h1 style={S.problemTitle}>{p.id}. {p.title}</h1>
                   <span style={S.badge(p.difficulty)}>{p.difficulty}</span>
                 </div>
+                {candidateCodingAnswers[p.dbId || p.id]?.submitted && (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px", borderRadius: 999, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.4)", color: "#4ade80", fontSize: 12, fontWeight: 800, marginBottom: 16 }}>
+                    <span>✓ Submitted</span>
+                    <span style={{ color: "#93c5fd" }}>({candidateCodingAnswers[p.dbId || p.id].marks || 10} / {p.marks || 10} pts)</span>
+                    <span style={{ color: "#cbd5e1" }}>— Test Cases Passed: {candidateCodingAnswers[p.dbId || p.id].testCasesPassed || 0} / {candidateCodingAnswers[p.dbId || p.id].totalTestCases || 3}</span>
+                  </div>
+                )}
                 <div style={{ display:"flex", gap:8, marginBottom:20, flexWrap:"wrap" }}>
                   {p.tags.map(t=><span key={t} style={S.tag}>{t}</span>)}
                 </div>
@@ -9763,20 +10013,6 @@ function CodingPlatform() {
                 Select one option above. Your choice will be saved automatically.
               </div>
             )}
-
-            {problemNavigationSource === "contest" && (
-              <div style={{ marginTop: 24, display: "flex", gap: 12, justifyContent: "flex-end" }}>
-                {hasNextProblem ? (
-                  <button onClick={() => openAdjacentProblem(1)} style={{ ...S.btn("submit"), padding: "12px 24px" }}>
-                    Next Question →
-                  </button>
-                ) : (
-                  <button onClick={() => setFinalSubmitConfirmOpen(true)} style={{ ...S.btn("submit"), padding: "12px 24px", background: "linear-gradient(135deg,#8b5cf6,#ec4899)" }}>
-                    Final Submit Assessment
-                  </button>
-                )}
-              </div>
-            )}
           </div>
         ) : (
           <div style={editorPanelStyle}>
@@ -9806,15 +10042,6 @@ function CodingPlatform() {
               <CodeHighlightLayer code={code} language={lang} scrollTop={editorScrollTop} />
               <textarea ref={textareaRef} value={code} onChange={e=>setCode(e.target.value)} onScroll={(e)=>setEditorScrollTop(e.currentTarget.scrollTop)} onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef, lang)} spellCheck={false}
                 style={{ position:"absolute", inset:0, paddingLeft:56, paddingTop:16, paddingRight:16, paddingBottom:16, background:"transparent", color:"transparent", caretColor:"#67e8f9", border:"none", outline:"none", resize:"none", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", width:"100%", height:"100%", boxSizing:"border-box", scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f", whiteSpace:"pre-wrap", wordBreak:"break-word" }} />
-            </div>
-
-            <div style={{ background:"#0d0d15", borderTop:"1px solid #1e1e2e", padding:"10px 16px", display:"flex", justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
-              <button onClick={()=>simulateRun(false)} disabled={running||submitting} style={S.btn("run")}>
-                {running ? "Running..." : "Run"}
-              </button>
-              <button onClick={handleSubmitClick} disabled={running||submitting} style={S.btn("submit")}>
-                {submitting ? "Submitting..." : isFinalContestProblem ? "Final Submit" : "Submit"}
-              </button>
             </div>
 
             {/* Console */}
@@ -9901,39 +10128,109 @@ function CodingPlatform() {
         )}
       </div>
 
-      {problemNavigationSource === "contest" && contestEntered && contestCameraStream && (
+      {/* Sticky Bottom Action Bar */}
+      <div style={{ background: "#0d0d15", borderTop: "1px solid #1e1e2e", padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, position: "sticky", bottom: 0, zIndex: 80, width: "100%", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {showProblemNavigation && (
+            <>
+              <button
+                onClick={() => openAdjacentProblem(-1)}
+                disabled={!hasPreviousProblem}
+                style={{ ...S.btn("default"), opacity: hasPreviousProblem ? 1 : 0.45, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
+              >
+                ← PREVIOUS
+              </button>
+              <button
+                onClick={() => openAdjacentProblem(1)}
+                disabled={!hasNextProblem}
+                style={{ ...S.btn("default"), opacity: hasNextProblem ? 1 : 0.45, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
+              >
+                NEXT →
+              </button>
+            </>
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          {!isTheoryProblem && (
+            <>
+              <button
+                onClick={() => simulateRun(false)}
+                disabled={running || submitting}
+                style={{ ...S.btn("run"), padding: "10px 20px" }}
+              >
+                {running ? "⏳ RUNNING..." : "▶ RUN CODE"}
+              </button>
+              <button
+                onClick={handleSubmitClick}
+                disabled={running || submitting}
+                style={{ ...S.btn("submit"), padding: "10px 22px" }}
+              >
+                {submitting ? "⏳ EVALUATING..." : "✓ SUBMIT CODE"}
+              </button>
+            </>
+          )}
+          {(problemNavigationSource === "contest" || contestEntered) && (
+            <button
+              onClick={() => setFinalSubmitConfirmOpen(true)}
+              style={{ ...S.btn("submit"), background: "linear-gradient(135deg, #ef4444, #dc2626)", padding: "10px 22px" }}
+            >
+              🏁 FINISH EXAM
+            </button>
+          )}
+        </div>
+      </div>
+
+      {problemNavigationSource === "contest" && contestEntered && (
         <div
           style={{
-            position:"fixed",
-            right:isPhone ? 12 : 18,
-            bottom:isPhone ? 12 : 18,
-            width:isPhone ? 150 : 190,
-            background:"#090b14",
-            border:"1px solid #2a3550",
-            borderRadius:16,
-            overflow:"hidden",
-            boxShadow:"0 18px 40px rgba(0,0,0,0.42)",
-            zIndex:40,
+            position: "fixed",
+            right: isPhone ? 12 : 20,
+            bottom: cameraMinimized ? 20 : 80,
+            width: cameraMinimized ? 160 : (isPhone ? 150 : 200),
+            background: "#090b14",
+            border: "1px solid #2a3550",
+            borderRadius: 16,
+            overflow: "hidden",
+            boxShadow: "0 18px 40px rgba(0,0,0,0.42)",
+            zIndex: 99,
+            transition: "all 0.2s ease",
           }}
         >
-          <div style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", background:"#0f1727", borderBottom:"1px solid #22304a", color:"#cbd5e1", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase" }}>
-            <span style={{ width:8, height:8, borderRadius:"50%", background:"#22c55e", boxShadow:"0 0 0 4px rgba(34,197,94,0.14)" }} />
-            Camera On
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#0f1727", borderBottom: "1px solid #22304a", color: "#cbd5e1", fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: contestCameraStream ? "#22c55e" : "#eab308", boxShadow: contestCameraStream ? "0 0 0 4px rgba(34,197,94,0.14)" : "none" }} />
+              <span>{contestCameraStream ? "Camera On" : "Standby"}</span>
+            </div>
+            <button
+              onClick={() => setCameraMinimized(!cameraMinimized)}
+              style={{ background: "none", border: "none", color: "#93c5fd", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: 0 }}
+            >
+              {cameraMinimized ? "Expand" : "Minimize"}
+            </button>
           </div>
-          <video
-            ref={contestCameraPreviewRef}
-            autoPlay
-            muted
-            playsInline
-            style={{
-              display:"block",
-              width:"100%",
-              height:isPhone ? 110 : 140,
-              objectFit:"cover",
-              transform:"scaleX(-1)",
-              background:"#020617",
-            }}
-          />
+          {!cameraMinimized && (
+            contestCameraStream ? (
+              <video
+                ref={contestCameraPreviewRef}
+                autoPlay
+                muted
+                playsInline
+                style={{
+                  display: "block",
+                  width: "100%",
+                  height: isPhone ? 110 : 140,
+                  objectFit: "cover",
+                  transform: "scaleX(-1)",
+                  background: "#020617",
+                }}
+              />
+            ) : (
+              <div style={{ padding: "12px 10px", textAlign: "center", color: "#94a3b8", fontSize: 11 }}>
+                ⚠ Camera preview unavailable. Proctoring monitoring active.
+              </div>
+            )
+          )}
         </div>
       )}
     </div>

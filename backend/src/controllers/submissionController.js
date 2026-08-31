@@ -165,7 +165,7 @@ function calculateScopeMetrics(submissions, problemsById, options = {}) {
   };
 }
 
-function buildScoreCard(student, submissions, problemsById, activeAssignment) {
+function buildScoreCard(student, submissions, problemsById, activeAssignment, assessmentSub = null, testAttempt = null) {
   const overallMetrics = calculateScopeMetrics(submissions, problemsById);
   const contestMetrics = activeAssignment?.problemIds?.length
     ? calculateScopeMetrics(submissions, problemsById, {
@@ -173,11 +173,26 @@ function buildScoreCard(student, submissions, problemsById, activeAssignment) {
       assignmentStartAt: activeAssignment.startsAt || null,
     })
     : overallMetrics;
-  // Database-only scoring:
-  // - every accepted unique problem contributes points based on the stored DB difficulty
-  // - Easy: 20, Medium: 35, Hard: 50
-  // - rating is the student's all-time earned points from accepted submissions
-  const contestScore = contestMetrics.acceptedWeight;
+
+  const maxScore = assessmentSub?.maxScore || testAttempt?.maxScore || (activeAssignment?.problemIds?.length ? activeAssignment.problemIds.length * 10 : 10);
+  const contestScore = assessmentSub ? Number(assessmentSub.totalScore || 0) : (testAttempt ? Number(testAttempt.score || 0) : contestMetrics.acceptedWeight);
+  const percentage = assessmentSub ? Number(assessmentSub.percentage || 0) : (testAttempt ? Number(testAttempt.percentage || 0) : 0);
+  const contestSolved = assessmentSub?.details?.questions
+    ? assessmentSub.details.questions.filter((q) => q.status === 'ACCEPTED' || q.status === 'Correct' || q.status === 'Passed' || (q.earnedMarks && q.earnedMarks > 0)).length
+    : contestMetrics.solved;
+
+  const startRef = testAttempt?.startsAt || activeAssignment?.startsAt || activeAssignment?.createdAt;
+  const endRef = assessmentSub?.createdAt || testAttempt?.submittedAt || testAttempt?.finishedAt;
+  const contestPenaltyMs = (startRef && endRef)
+    ? Math.max(0, new Date(endRef).getTime() - new Date(startRef).getTime())
+    : contestMetrics.penaltyMs;
+
+  const contestTimePenalty = (startRef && endRef)
+    ? formatPenalty(contestPenaltyMs)
+    : contestMetrics.timePenalty;
+
+  const contestLastActivityAt = assessmentSub ? new Date(assessmentSub.createdAt).getTime() : (testAttempt ? new Date(testAttempt.submittedAt || testAttempt.startedAt).getTime() : contestMetrics.lastActivityAt);
+
   const overallScore = overallMetrics.acceptedWeight;
   const globalScore = overallMetrics.acceptedWeight;
   const earnedBadge = resolveBadgeForSolvedCount(overallMetrics.solved);
@@ -196,13 +211,16 @@ function buildScoreCard(student, submissions, problemsById, activeAssignment) {
     contest: {
       rank: 0,
       score: contestScore,
-      problemsSolved: contestMetrics.solved,
-      timePenalty: contestMetrics.timePenalty,
+      maxScore,
+      percentage,
+      problemsSolved: contestSolved,
+      timePenalty: contestTimePenalty,
       trend: contestMetrics.trend,
-      timePenaltyMs: contestMetrics.penaltyMs,
+      timePenaltyMs: contestPenaltyMs,
       submissionLevel: contestMetrics.submissionLevel,
       submissionLevelPriority: contestMetrics.submissionLevelPriority,
-      lastActivityAt: contestMetrics.lastActivityAt,
+      lastActivityAt: contestLastActivityAt,
+      submittedAt: assessmentSub ? assessmentSub.createdAt : (testAttempt ? testAttempt.submittedAt : null),
     },
     overall: {
       rank: 0,
@@ -413,10 +431,14 @@ exports.listByUser = async (req, res) => {
 
 exports.leaderboard = async (req, res) => {
   try {
+    const activeAssignment = await prisma.testAssignment.findFirst({
+      where: { status: 'LIVE' },
+      orderBy: { startsAt: 'desc' },
+    });
+
     const students = await prisma.user.findMany({
       where: {
-        role: 'USER',
-        loginCount: { gt: 0 },
+        role: { in: ['USER', 'STUDENT', 'user', 'student'] },
       },
       orderBy: [{ lastLoginAt: 'desc' }, { createdAt: 'desc' }],
     });
@@ -424,21 +446,50 @@ exports.leaderboard = async (req, res) => {
     if (!students.length) {
       return res.json({
         leaderboard: [],
-        activeAssignmentId: null,
-        activeAssignmentTitle: null,
+        contestLeaderboard: [],
+        activeAssignmentId: activeAssignment?.id || null,
+        activeAssignmentTitle: activeAssignment?.title || null,
+        submittedCount: 0,
+        totalRegisteredCount: 0,
       });
     }
 
-    const [activeAssignment, submissions] = await Promise.all([
-      prisma.testAssignment.findFirst({
-        where: { status: 'LIVE' },
-        orderBy: { startsAt: 'desc' },
-      }),
+    const [submissions, assessmentSubmissions, testAttempts] = await Promise.all([
       prisma.submission.findMany({
         where: { userId: { in: students.map((student) => student.id) } },
         include: { problem: true },
         orderBy: { createdAt: 'asc' },
       }),
+      prisma.assessmentSubmission.findMany({
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.testAttempt.findMany({
+        where: { status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    const assessmentSubmissionByUserId = new Map();
+    assessmentSubmissions.forEach((sub) => {
+      if (!assessmentSubmissionByUserId.has(sub.userId)) {
+        if (!activeAssignment || sub.assignmentId === activeAssignment.id) {
+          assessmentSubmissionByUserId.set(sub.userId, sub);
+        }
+      }
+    });
+
+    const testAttemptByUserId = new Map();
+    testAttempts.forEach((att) => {
+      if (!testAttemptByUserId.has(att.userId)) {
+        if (!activeAssignment || att.assignmentId === activeAssignment.id) {
+          testAttemptByUserId.set(att.userId, att);
+        }
+      }
+    });
+
+    const completedUserIdsForContest = new Set([
+      ...assessmentSubmissionByUserId.keys(),
+      ...testAttemptByUserId.keys(),
     ]);
 
     const problemsById = new Map();
@@ -464,18 +515,43 @@ exports.leaderboard = async (req, res) => {
       groupedSubmissions.set(submission.userId, bucket);
     });
 
-    let leaderboard = students.map((student) => (
-      buildScoreCard(student, groupedSubmissions.get(student.id) || [], problemsById, activeAssignment)
-    ));
-    leaderboard = applyRanks(leaderboard, 'contest');
+    let leaderboard = students
+      .map((student) => {
+        const assessmentSub = assessmentSubmissionByUserId.get(student.id) || null;
+        const testAttempt = testAttemptByUserId.get(student.id) || null;
+        const card = buildScoreCard(student, groupedSubmissions.get(student.id) || [], problemsById, activeAssignment, assessmentSub, testAttempt);
+        const hasContestSubmission = completedUserIdsForContest.has(student.id);
+        const attemptStatus = testAttempt?.status || (assessmentSub ? 'SUBMITTED' : 'NOT_STARTED');
+        return {
+          ...card,
+          hasContestSubmission,
+          attemptStatus,
+        };
+      });
+
+    // Only students who have submitted the contest appear in contest rankings
+    const contestEligible = leaderboard.filter((entry) => entry.hasContestSubmission);
+    const contestRanked = applyRanks(contestEligible, 'contest');
+    const contestRankMap = new Map(contestRanked.map((item) => [item.userId, item.contest.rank]));
+
+    leaderboard = leaderboard.map((entry) => ({
+      ...entry,
+      contest: {
+        ...entry.contest,
+        rank: contestRankMap.get(entry.userId) || 0,
+      },
+    }));
+
     leaderboard = applyRanks(leaderboard, 'overall');
     leaderboard = applyRanks(leaderboard, 'global');
-    leaderboard.sort(compareEntries('contest'));
 
     return res.json({
       leaderboard,
+      contestLeaderboard: contestRanked,
       activeAssignmentId: activeAssignment?.id || null,
       activeAssignmentTitle: activeAssignment?.title || null,
+      submittedCount: contestRanked.length,
+      totalRegisteredCount: students.length,
     });
   } catch (error) {
     console.error(error);

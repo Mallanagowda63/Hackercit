@@ -174,8 +174,8 @@ exports.getTestReport = async (req, res) => {
 
       highestScore = Math.max(...rankedSubmissions.map((s) => s.totalScore));
       lowestScore = Math.min(...rankedSubmissions.map((s) => s.totalScore));
-      maxTheoryScore = Math.max(...rankedSubmissions.map((s) => sub => sub.details?.maxTheoryScore || 0));
-      maxCodingScore = Math.max(...rankedSubmissions.map((s) => sub => sub.details?.maxCodingScore || 0));
+      maxTheoryScore = Math.max(0, ...uniqueUserSubmissions.map((s) => s.details?.maxTheoryScore || 0));
+      maxCodingScore = Math.max(0, ...uniqueUserSubmissions.map((s) => s.details?.maxCodingScore || 0));
     }
 
     return res.json({
