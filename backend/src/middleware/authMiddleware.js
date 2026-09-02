@@ -21,7 +21,9 @@ async function requireAuth(req, res, next) {
 function requireRole(role) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'auth required' });
-    if (req.user.role !== role && req.user.role !== 'ADMIN') return res.status(403).json({ error: 'forbidden' });
+    const targetRole = String(role || '').toUpperCase();
+    const userRole = String(req.user.role || '').toUpperCase();
+    if (userRole !== targetRole && userRole !== 'ADMIN') return res.status(403).json({ error: 'forbidden' });
     next();
   };
 }

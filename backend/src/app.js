@@ -13,12 +13,16 @@ app.use(cors());
 app.use(pinoHttp({ logger }));
 
 const authRoutes = require('./routes/auth');
+const { ensureDefaultAdmin } = require('./controllers/authController');
+
+ensureDefaultAdmin().catch((err) => console.error('Admin seed error:', err));
 const notificationRoutes = require('./routes/notification');
 const problemRoutes = require('./routes/problem');
 const runRoutes = require('./routes/run');
 const submissionRoutes = require('./routes/submission');
 const testRoutes = require('./routes/test');
 const reportsRoutes = require('./routes/reports');
+const proctoringRoutes = require('./routes/proctoring');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -27,6 +31,7 @@ app.use('/api/run', runRoutes);
 app.use('/api/submissions', submissionRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/admin/reports', reportsRoutes);
+app.use('/api/proctoring', proctoringRoutes);
 
 async function health(req, res) {
   const database = await prisma.$ping()

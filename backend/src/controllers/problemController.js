@@ -99,7 +99,22 @@ async function createProblemWithAutoNumber(data, options = {}) {
 exports.list = async (req, res) => {
   try {
     const includeContent = ['1', 'true', 'full'].includes(String(req.query.includeContent || req.query.full || '').toLowerCase());
+    const typeParam = String(req.query.type || '').trim().toLowerCase();
+    const includeAll = ['1', 'true', 'all'].includes(String(req.query.includeAll || req.query.all || '').toLowerCase());
+
+    const where = {};
+    if (typeParam === 'theory') {
+      where.type = 'theory';
+    } else if (typeParam === 'coding') {
+      where.type = 'coding';
+    } else if (!includeAll && typeParam !== 'all') {
+      // Default for student practice problems API: ONLY return coding practice problems
+      // Admin/Exam MCQs (type === 'theory') are excluded from student practice listing
+      where.type = 'coding';
+    }
+
     const problems = await prisma.problem.findMany({
+      where,
       orderBy: [
         { legacyId: 'asc' },
         { createdAt: 'asc' },

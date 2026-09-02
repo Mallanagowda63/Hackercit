@@ -262,15 +262,22 @@ exports.startAttempt = async (req, res) => {
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
     if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (assignment.status !== 'LIVE') {
+      return res.status(400).json({ error: 'test assignment is not currently live' });
+    }
+
+    const now = new Date();
+    const durationMs = (assignment.durationMinutes || 60) * 60 * 1000;
+    const endsAt = assignment.endsAt ? new Date(assignment.endsAt).toISOString() : new Date(now.getTime() + durationMs).toISOString();
 
     const existing = await getAttemptOrNull(id, req.user.id);
     if (existing) {
       if (existing.status === 'IN_PROGRESS') {
-        return res.json({ attempt: existing });
+        return res.json({ attempt: { ...existing, endsAt } });
       }
       return res.status(409).json({
         error: 'test already attempted by this user',
-        attempt: existing,
+        attempt: { ...existing, endsAt },
       });
     }
 
@@ -278,10 +285,11 @@ exports.startAttempt = async (req, res) => {
       data: {
         assignmentId: id,
         userId: req.user.id,
-        startedAt: new Date(),
+        startedAt: now,
+        status: 'IN_PROGRESS',
       },
     });
-    return res.status(201).json({ attempt });
+    return res.status(201).json({ attempt: { ...attempt, endsAt } });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'server error' });

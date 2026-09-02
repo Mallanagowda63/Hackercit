@@ -268,34 +268,39 @@ exports.submitAssessment = async (req, res) => {
 
     // Update TestAttempt status in database to SUBMITTED or AUTO_SUBMITTED
     const attemptStatus = isAutoSubmit ? 'AUTO_SUBMITTED' : 'SUBMITTED';
-    await prisma.testAttempt.upsert({
-      where: {
-        userId_assignmentId: {
+    const existingAttempt = await prisma.testAttempt.findFirst({
+      where: { assignmentId: assignment.id, userId },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    if (existingAttempt) {
+      await prisma.testAttempt.update({
+        where: { id: existingAttempt.id },
+        data: {
+          status: attemptStatus,
+          submittedAt: new Date(),
+          finishedAt: new Date(),
+          score: totalScore,
+          maxScore,
+          percentage,
+        },
+      });
+    } else {
+      await prisma.testAttempt.create({
+        data: {
           userId,
           assignmentId: assignment.id,
+          status: attemptStatus,
+          startedAt: new Date(),
+          endsAt: new Date(),
+          submittedAt: new Date(),
+          finishedAt: new Date(),
+          score: totalScore,
+          maxScore,
+          percentage,
         },
-      },
-      update: {
-        status: attemptStatus,
-        submittedAt: new Date(),
-        finishedAt: new Date(),
-        score: totalScore,
-        maxScore,
-        percentage,
-      },
-      create: {
-        userId,
-        assignmentId: assignment.id,
-        status: attemptStatus,
-        startsAt: new Date(),
-        endsAt: new Date(),
-        submittedAt: new Date(),
-        finishedAt: new Date(),
-        score: totalScore,
-        maxScore,
-        percentage,
-      },
-    }).catch(() => {});
+      });
+    }
 
     const rankedResult = await attachRankToResult(assessmentSubmission, assignment.id);
 

@@ -47,6 +47,7 @@ async function getSolvedProblemCount(userId) {
       userId,
       status: 'ACCEPTED',
     },
+    select: { problemId: true },
   });
 
   return new Set(

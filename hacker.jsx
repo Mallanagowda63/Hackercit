@@ -2853,6 +2853,12 @@ function ScreenShield({ active, message }) {
   );
 }
 
+const SUPPORTED_LANGUAGES = [
+  { id: "python", label: "Python" },
+  { id: "javascript", label: "JavaScript" },
+  { id: "java", label: "Java" },
+];
+
 function escapeRegExp(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -3004,6 +3010,7 @@ function CodingPlatform() {
     { id: "overview", label: "Overview" },
     { id: "questions", label: "Question Uploads" },
     { id: "reports", label: "📊 Reports" },
+    { id: "malpractice", label: "🚨 Malpractice Reports" },
     { id: "leaderboard", label: "Leaderboard" },
     { id: "students", label: "Student List" },
     { id: "profile", label: "Profile" },
@@ -3078,6 +3085,7 @@ function CodingPlatform() {
   const [questionUploadError, setQuestionUploadError] = useState("");
   const [questionUploadSuccess, setQuestionUploadSuccess] = useState("");
   const [questionCategoryFilter, setQuestionCategoryFilter] = useState("All");
+  const [questionTypeFilter, setQuestionTypeFilter] = useState("All");
   const [editingProblemId, setEditingProblemId] = useState(null);
   const [deletingProblem, setDeletingProblem] = useState(null);
   const [deletingQuestion, setDeletingQuestion] = useState(false);
@@ -3101,6 +3109,55 @@ function CodingPlatform() {
   const [reportsFilterStatus, setReportsFilterStatus] = useState("All");
   const [reportsSortField, setReportsSortField] = useState("rank");
 
+  const [proctoringReports, setProctoringReports] = useState([]);
+  const [proctoringStats, setProctoringStats] = useState({});
+  const [proctoringSearch, setProctoringSearch] = useState("");
+  const [proctoringFilterStatus, setProctoringFilterStatus] = useState("ALL");
+  const [selectedProctoringAttempt, setSelectedProctoringAttempt] = useState(null);
+  const [selectedReviewAttempt, setSelectedReviewAttempt] = useState(null);
+  const [reviewStatusInput, setReviewStatusInput] = useState("REVIEW_REQUIRED");
+  const [reviewNoteInput, setReviewNoteInput] = useState("");
+
+  const loadProctoringReports = async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch("/api/admin/reports/proctoring", {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (data.reports) {
+        setProctoringReports(data.reports);
+        setProctoringStats(data.stats || {});
+      }
+    } catch (err) {
+      console.error("Failed to load proctoring reports:", err);
+    }
+  };
+
+  const handleReviewSubmit = async () => {
+    if (!selectedReviewAttempt || !authToken) return;
+    try {
+      const res = await fetch(`/api/admin/reports/proctoring/attempts/${selectedReviewAttempt.attemptId}/review`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          newStatus: reviewStatusInput,
+          note: reviewNoteInput,
+        }),
+      });
+      if (res.ok) {
+        setSelectedReviewAttempt(null);
+        setReviewNoteInput("");
+        await loadProctoringReports();
+      }
+    } catch (err) {
+      console.error("Failed to review attempt:", err);
+    }
+  };
+
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [pdfStage, setPdfStage] = useState("idle");
   const [pdfProgressText, setPdfProgressText] = useState("");
@@ -3123,6 +3180,7 @@ function CodingPlatform() {
   });
   const [mcqValidationError, setMcqValidationError] = useState("");
   const [mcqSaving, setMcqSaving] = useState(false);
+  const [mcqCardSearchQuery, setMcqCardSearchQuery] = useState("");
   const [adminCreateForm, setAdminCreateForm] = useState({
     title: "Fresh Challenge",
     level: "Hard",
@@ -3248,7 +3306,7 @@ function CodingPlatform() {
     setProblemBankLoading(true);
 
     try {
-      const data = await performApiRequest("/api/problems?includeContent=1");
+      const data = await performApiRequest("/api/problems?includeContent=1&includeAll=1");
       const mappedProblems = Array.isArray(data.problems)
         ? data.problems.map(mapProblemRecord).filter(Boolean)
         : [];
@@ -3798,6 +3856,8 @@ function CodingPlatform() {
   useEffect(() => {
     if (adminTab === "reports") {
       loadReportsOverview();
+    } else if (adminTab === "malpractice") {
+      loadProctoringReports();
     }
   }, [adminTab]);
 
@@ -3816,7 +3876,14 @@ function CodingPlatform() {
       }
 
       const loadedProblems = await loadProblemBank().catch(() => []);
-      await loadStudentPortalData(loadedProblems.length ? loadedProblems : PROBLEMS);
+      const codingOnlyProblems = (loadedProblems.length ? loadedProblems : PROBLEMS).filter((p) => {
+        const probType = p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding");
+        const hasMcqTag = Array.isArray(p.tags) && p.tags.some((t) => String(t).toUpperCase() === "MCQ");
+        const isMcqAcceptance = String(p.acceptance || "").toLowerCase().includes("mcq");
+        const isTheory = probType === "theory" || (Array.isArray(p.options) && p.options.length > 0) || hasMcqTag || isMcqAcceptance;
+        return !isTheory;
+      });
+      await loadStudentPortalData(codingOnlyProblems);
     };
 
     loadPortal();
@@ -4009,7 +4076,8 @@ function CodingPlatform() {
     setContestInstructionsAccepted(true);
     setContestCameraStatus("idle");
     setContestCameraError("");
-    setStartExamModalOpen(true);
+
+    startContestAfterInstructions();
   };
 
   const startContestAfterInstructions = async () => {
@@ -4160,16 +4228,6 @@ function CodingPlatform() {
     if (authMode === "signup") {
       if (!name || !department) {
         setAuthError("Enter name and department to sign up.");
-        return;
-      }
-
-      if (authRole === "student" && !usn) {
-        setAuthError("Enter USN for student sign up.");
-        return;
-      }
-
-      if (!authPoliciesAccepted) {
-        setAuthError("Accept the Terms and Conditions and Privacy Policy to create an account.");
         return;
       }
     }
@@ -4712,8 +4770,6 @@ function CodingPlatform() {
     setRunResult(null);
     setErrorBanner(null);
 
-    await new Promise((r) => setTimeout(r, 700));
-
     const p        = selectedProblem;
     let   results  = [];
     let   runtime  = Math.floor(60 + Math.random() * 60) + " ms";
@@ -4849,13 +4905,83 @@ function CodingPlatform() {
 
     const start = ta.selectionStart;
     const end = ta.selectionEnd;
+    const selectedText = value.slice(start, end);
 
+    // ── 1. BACKSPACE PAIR CLEANUP ──────────────────────────────────────────
+    if (e.key === "Backspace" && start === end && start > 0 && end < value.length) {
+      const charBefore = value[start - 1];
+      const charAfter = value[start];
+      const isPair = (
+        (charBefore === "(" && charAfter === ")") ||
+        (charBefore === "[" && charAfter === "]") ||
+        (charBefore === "{" && charAfter === "}") ||
+        (charBefore === '"' && charAfter === '"') ||
+        (charBefore === "'" && charAfter === "'") ||
+        (charBefore === "`" && charAfter === "`")
+      );
+      if (isPair) {
+        e.preventDefault();
+        const nextValue = `${value.slice(0, start - 1)}${value.slice(end + 1)}`;
+        setter(nextValue);
+        setTimeout(() => {
+          ta.selectionStart = ta.selectionEnd = start - 1;
+        }, 0);
+        return;
+      }
+    }
+
+    // ── 2. AUTO-CLOSING BRACKETS & QUOTES ─────────────────────────────────
+    const pairs = { "(": ")", "[": "]", "{": "}", '"': '"', "'": "'", "`": "`" };
+
+    // Overwrite protection for closing characters
+    if (start === end && (e.key in { ")":1, "]":1, "}":1, '"':1, "'":1, "`":1 })) {
+      const nextChar = value[start];
+      if (nextChar === e.key) {
+        // Move cursor over existing closing character without duplicating
+        e.preventDefault();
+        setTimeout(() => {
+          ta.selectionStart = ta.selectionEnd = start + 1;
+        }, 0);
+        return;
+      }
+    }
+
+    // Insert pair for opening bracket or quote
+    if (start === end && pairs[e.key]) {
+      const closing = pairs[e.key];
+      // For single quotes, avoid auto-closing when attached to a word character (e.g. apostrophes in comments/words)
+      if ((e.key === "'" || e.key === '"') && start > 0 && /[a-zA-Z0-9]/.test(value[start - 1])) {
+        // Normal character typing
+      } else {
+        e.preventDefault();
+        const nextValue = `${value.slice(0, start)}${e.key}${closing}${value.slice(end)}`;
+        setter(nextValue);
+        setTimeout(() => {
+          ta.selectionStart = ta.selectionEnd = start + 1;
+        }, 0);
+        return;
+      }
+    }
+
+    // Selection wrapping
+    if (start !== end && pairs[e.key]) {
+      e.preventDefault();
+      const closing = pairs[e.key];
+      const nextValue = `${value.slice(0, start)}${e.key}${selectedText}${closing}${value.slice(end)}`;
+      setter(nextValue);
+      setTimeout(() => {
+        ta.selectionStart = start + 1;
+        ta.selectionEnd = end + 1;
+      }, 0);
+      return;
+    }
+
+    // ── 3. TAB & SHIFT+TAB INDENTATION ────────────────────────────────────
     if (e.key === "Tab") {
       e.preventDefault();
 
       const lineStart = value.lastIndexOf("\n", start - 1) + 1;
-      const selectedText = value.slice(start, end);
-      const hasMultipleLines = selectedText.includes("\n") || start !== end && lineStart !== start;
+      const hasMultipleLines = selectedText.includes("\n") || (start !== end && lineStart !== start);
 
       if (hasMultipleLines) {
         const blockEnd = end;
@@ -4900,14 +5026,17 @@ function CodingPlatform() {
       return;
     }
 
+    // ── 4. SMART ENTER & AUTO INDENTATION ──────────────────────────────────
     if (e.key === "Enter") {
       e.preventDefault();
       const lineStart = value.lastIndexOf("\n", start - 1) + 1;
       const line = value.slice(lineStart, start);
       const currentIndent = (line.match(/^\s*/) || [""])[0];
       const trimmedLine = line.trimEnd();
-      const shouldIncreaseIndent = /[\{\[\(]\s*$/.test(trimmedLine)
-        || (language === "python" && /:\s*$/.test(trimmedLine));
+      const isPythonBlock = language === "python" && /(:\s*|def\s+.*|class\s+.*|if\s+.*|elif\s+.*|else\s*:|for\s+.*|while\s+.*|try\s*:|except\s*.*|finally\s*:|with\s+.*|match\s+.*|case\s+.*)$/.test(trimmedLine);
+      const isBraceBlock = /[\{\[\(]\s*$/.test(trimmedLine);
+      const shouldIncreaseIndent = isBraceBlock || isPythonBlock;
+
       const nextChar = value.slice(end).charAt(0);
       const shouldCreateInnerLine = shouldIncreaseIndent && /[\}\]\)]/.test(nextChar);
       const nextIndent = `${currentIndent}${shouldIncreaseIndent ? indentUnit : ""}`;
@@ -4922,6 +5051,7 @@ function CodingPlatform() {
       return;
     }
 
+    // ── 5. CLOSING BRACE DEDENTATION ───────────────────────────────────────
     if (/^[\}\]\)]$/.test(e.key) && start === end) {
       const lineStart = value.lastIndexOf("\n", start - 1) + 1;
       const beforeCursor = value.slice(lineStart, start);
@@ -4937,7 +5067,14 @@ function CodingPlatform() {
     }
   };
 
-  const problemCatalog = problemBank.length ? problemBank : PROBLEMS;
+  const rawProblemList = problemBank.length ? problemBank : PROBLEMS;
+  const problemCatalog = rawProblemList.filter((p) => {
+    const probType = p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding");
+    const hasMcqTag = Array.isArray(p.tags) && p.tags.some((t) => String(t).toUpperCase() === "MCQ");
+    const isMcqAcceptance = String(p.acceptance || "").toLowerCase().includes("mcq");
+    const isTheory = probType === "theory" || (Array.isArray(p.options) && p.options.length > 0) || hasMcqTag || isMcqAcceptance;
+    return !isTheory;
+  });
   const filteredProblems = problemCatalog.filter(p =>
     (filterDiff === "All" || p.difficulty === filterDiff) &&
     p.title.toLowerCase().includes(searchQuery.toLowerCase())
@@ -5427,9 +5564,16 @@ function CodingPlatform() {
   const adminLoginEvents = loginEvents.filter((event) => (
     event.role === "ADMIN" || event.email === currentUser.email
   ));
-  const displayedProblemBank = problemBank.filter((problem) =>
-    questionCategoryFilter === "All" || getProblemCategory(problem) === questionCategoryFilter
-  );
+  const displayedProblemBank = problemBank.filter((problem) => {
+    const categoryMatch = questionCategoryFilter === "All" || getProblemCategory(problem) === questionCategoryFilter;
+    const probType = problem.type || (Array.isArray(problem.options) && problem.options.length ? "theory" : "coding");
+    const typeMatch = questionTypeFilter === "All"
+      ? true
+      : questionTypeFilter === "theory"
+      ? (probType === "theory" || (Array.isArray(problem.options) && problem.options.length > 0))
+      : (probType === "coding" && (!Array.isArray(problem.options) || problem.options.length === 0));
+    return categoryMatch && typeMatch;
+  });
   const latestUnreadNotification = studentNotifications.find((notification) => !notification.read) || studentNotifications[0] || null;
   const formatDurationFromMs = (ms = 0) => {
     const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
@@ -5650,11 +5794,67 @@ function CodingPlatform() {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:12 }}>
         <div>
           <div style={S.adminSectionTitle}>Question Bank</div>
-          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>{problemBank.length} database questions</div>
+          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
+            {displayedProblemBank.length} {questionTypeFilter === "theory" ? "Theory MCQ" : questionTypeFilter === "coding" ? "Coding" : "database"} questions
+          </div>
         </div>
-        <select value={questionCategoryFilter} onChange={(e)=>setQuestionCategoryFilter(e.target.value)} style={{ ...S.adminInput, width:150 }}>
-          {["All", ...questionCategories].map((category) => <option key={category}>{category}</option>)}
-        </select>
+
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          <div style={{ display:"flex", background:"rgba(15, 23, 42, 0.6)", padding:3, borderRadius:10, border:"1px solid #334155" }}>
+            <button
+              type="button"
+              onClick={() => setQuestionTypeFilter("All")}
+              style={{
+                padding:"4px 10px",
+                borderRadius:8,
+                fontSize:11,
+                fontWeight:700,
+                border:"none",
+                background:questionTypeFilter === "All" ? "#3b82f6" : "transparent",
+                color:questionTypeFilter === "All" ? "#ffffff" : "#94a3b8",
+                cursor:"pointer",
+              }}
+            >
+              All ({problemBank.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setQuestionTypeFilter("coding")}
+              style={{
+                padding:"4px 10px",
+                borderRadius:8,
+                fontSize:11,
+                fontWeight:700,
+                border:"none",
+                background:questionTypeFilter === "coding" ? "#3b82f6" : "transparent",
+                color:questionTypeFilter === "coding" ? "#ffffff" : "#94a3b8",
+                cursor:"pointer",
+              }}
+            >
+              💻 Coding ({problemBank.filter(p => (p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding")) === "coding").length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setQuestionTypeFilter("theory")}
+              style={{
+                padding:"4px 10px",
+                borderRadius:8,
+                fontSize:11,
+                fontWeight:700,
+                border:"none",
+                background:questionTypeFilter === "theory" ? "#8b5cf6" : "transparent",
+                color:questionTypeFilter === "theory" ? "#ffffff" : "#94a3b8",
+                cursor:"pointer",
+              }}
+            >
+              📝 Theory MCQs ({problemBank.filter(p => (p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding")) === "theory" || (Array.isArray(p.options) && p.options.length > 0)).length})
+            </button>
+          </div>
+
+          <select value={questionCategoryFilter} onChange={(e)=>setQuestionCategoryFilter(e.target.value)} style={{ ...S.adminInput, width:120, padding:"6px 8px", fontSize:12 }}>
+            {["All", ...questionCategories].map((category) => <option key={category}>{category}</option>)}
+          </select>
+        </div>
       </div>
       <div style={{ display:"grid", gap:10, maxHeight:720, overflowY:"auto", paddingRight:4 }}>
         {displayedProblemBank.length ? displayedProblemBank.map((problem) => {
@@ -5856,7 +6056,10 @@ function CodingPlatform() {
             <div style={{ display: "flex", gap: 10 }}>
               <button
                 type="button"
-                onClick={() => setQuestionUploadForm((prev) => ({ ...prev, type: "coding", marks: prev.marks === "2" ? "10" : prev.marks }))}
+                onClick={() => {
+                  setQuestionUploadForm((prev) => ({ ...prev, type: "coding", marks: prev.marks === "2" ? "10" : prev.marks }));
+                  setQuestionTypeFilter("coding");
+                }}
                 style={{
                   ...S.adminButton(questionUploadForm.type === "coding" ? "submit" : "default"),
                   flex: 1,
@@ -5870,7 +6073,10 @@ function CodingPlatform() {
               </button>
               <button
                 type="button"
-                onClick={() => setQuestionUploadForm((prev) => ({ ...prev, type: "theory", marks: prev.marks === "10" ? "2" : prev.marks }))}
+                onClick={() => {
+                  setQuestionUploadForm((prev) => ({ ...prev, type: "theory", marks: prev.marks === "10" ? "2" : prev.marks }));
+                  setQuestionTypeFilter("theory");
+                }}
                 style={{
                   ...S.adminButton(questionUploadForm.type === "theory" ? "submit" : "default"),
                   flex: 1,
@@ -6202,6 +6408,7 @@ function CodingPlatform() {
   if (view === "home") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderLiveTestPopupModal()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
@@ -6298,18 +6505,6 @@ function CodingPlatform() {
                           />
                         </div>
 
-                        {authRole === "student" && (
-                          <div>
-                            <label style={S.fieldLabel}>USN</label>
-                            <input
-                              value={authUsn}
-                              onChange={e=>{ setAuthUsn(e.target.value); if (authError) setAuthError(""); }}
-                              style={S.input}
-                              placeholder="Enter USN"
-                            />
-                          </div>
-                        )}
-
                         <div>
                           <label style={S.fieldLabel}>Department</label>
                           <select
@@ -6324,34 +6519,6 @@ function CodingPlatform() {
                             <option value="ISE">ISE</option>
                             <option value="AIML">AIML</option>
                           </select>
-                        </div>
-
-                        <div style={{ background:"#0f1220", border:"1px solid #232843", borderRadius:16, padding:"16px 18px", display:"grid", gap:14 }}>
-                          <div style={{ display:"grid", gap:8 }}>
-                            <div style={{ color:"#eef0ff", fontSize:14, fontWeight:700 }}>Terms and Conditions</div>
-                            <div style={{ color:"#9da4c7", fontSize:13, lineHeight:1.6 }}>
-                              By creating an account, you agree to use the portal only for authorized coding activity, keep your credentials private, provide correct student or admin details, and follow contest integrity rules without impersonation, cheating, or misuse of platform content.
-                            </div>
-                          </div>
-
-                          <div style={{ display:"grid", gap:8 }}>
-                            <div style={{ color:"#eef0ff", fontSize:14, fontWeight:700 }}>Privacy Policy</div>
-                            <div style={{ color:"#9da4c7", fontSize:13, lineHeight:1.6 }}>
-                              The portal stores the information you enter during sign up, including name, email, department, role, and student USN when applicable, to manage access, personalize your profile, and operate contests. Your details are used only for this platform experience and administrative review.
-                            </div>
-                          </div>
-
-                          <label style={{ display:"flex", gap:10, alignItems:"flex-start", color:"#d8dcff", fontSize:13, lineHeight:1.5, cursor:"pointer" }}>
-                            <input
-                              type="checkbox"
-                              checked={authPoliciesAccepted}
-                              onChange={e=>{ setAuthPoliciesAccepted(e.target.checked); if (authError) setAuthError(""); }}
-                              style={{ marginTop:2, accentColor:"#7c6af7", cursor:"pointer" }}
-                            />
-                            <span>
-                              I agree to the Terms and Conditions and Privacy Policy. This is required to create a student or admin account.
-                            </span>
-                          </label>
                         </div>
                       </>
                     )}
@@ -7006,6 +7173,291 @@ function CodingPlatform() {
     );
   };
 
+  const renderAdminMalpracticeReports = () => {
+    const stats = proctoringStats || {};
+    const reports = proctoringReports || [];
+
+    const filteredReports = reports.filter((r) => {
+      if (proctoringFilterStatus !== "ALL" && r.proctoringStatus !== proctoringFilterStatus) {
+        return false;
+      }
+      if (proctoringSearch.trim()) {
+        const q = proctoringSearch.toLowerCase();
+        return (
+          r.studentName.toLowerCase().includes(q) ||
+          r.studentEmail.toLowerCase().includes(q) ||
+          r.testTitle.toLowerCase().includes(q) ||
+          String(r.studentUsn || "").toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
+    const getStatusBadge = (status, score) => {
+      if (status === "REJECTED_FOR_MALPRACTICE" || status === "REJECTED") {
+        return <span style={{ background: "#450a0a", color: "#f87171", border: "1px solid #991b1b", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>REJECTED</span>;
+      }
+      if (status === "CONFIRMED_MALPRACTICE") {
+        return <span style={{ background: "#431407", color: "#fb923c", border: "1px solid #9a3412", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>MALPRACTICE CONFIRMED</span>;
+      }
+      if (status === "REVIEW_REQUIRED" || status === "FLAGGED" || score >= 40) {
+        return <span style={{ background: "#3b0764", color: "#c084fc", border: "1px solid #6b21a8", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>REVIEW REQUIRED</span>;
+      }
+      if (status === "LOW_RISK") {
+        return <span style={{ background: "#1e1b4b", color: "#818cf8", border: "1px solid #3730a3", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>LOW RISK</span>;
+      }
+      if (status === "CLEARED") {
+        return <span style={{ background: "#064e3b", color: "#34d399", border: "1px solid #065f46", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>CLEARED</span>;
+      }
+      return <span style={{ background: "#064e3b", color: "#a7f3d0", border: "1px solid #047857", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>NORMAL</span>;
+    };
+
+    const getScoreColor = (score) => {
+      if (score >= 80) return "#f87171";
+      if (score >= 40) return "#fb923c";
+      if (score >= 20) return "#facc15";
+      return "#4ade80";
+    };
+
+    return (
+      <div style={{ display: "grid", gap: 20 }}>
+        {/* Header Bar */}
+        <div style={{ ...S.adminCard, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              🚨 EXAM SECURITY & PROCTORING AUDIT
+            </div>
+            <div style={{ color: ADMIN_THEME.text, fontSize: 22, fontWeight: 800, marginTop: 4 }}>
+              Student Malpractice Reports
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <a
+              href="/api/admin/reports/proctoring/export"
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+                color: "#fff",
+                padding: "8px 16px",
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 700,
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                boxShadow: "0 4px 14px rgba(239, 68, 68, 0.3)",
+              }}
+            >
+              📥 Export CSV Report
+            </a>
+          </div>
+        </div>
+
+        {/* Stats Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
+          <div style={{ background: "#0a0a0f", border: "1px solid #1e1e2e", borderRadius: 12, padding: 18 }}>
+            <div style={{ color: "#888", fontSize: 12, fontWeight: 700 }}>TOTAL STUDENTS</div>
+            <div style={{ color: "#fff", fontSize: 28, fontWeight: 800, marginTop: 4 }}>{stats.totalStudents || 0}</div>
+          </div>
+          <div style={{ background: "#0a0a0f", border: "1px solid #1e1e2e", borderRadius: 12, padding: 18 }}>
+            <div style={{ color: "#67e8f9", fontSize: 12, fontWeight: 700 }}>ACTIVE ATTEMPTS</div>
+            <div style={{ color: "#67e8f9", fontSize: 28, fontWeight: 800, marginTop: 4 }}>{stats.totalActiveAttempts || 0}</div>
+          </div>
+          <div style={{ background: "#0a0a0f", border: "1px solid #3b0764", borderRadius: 12, padding: 18 }}>
+            <div style={{ color: "#c084fc", fontSize: 12, fontWeight: 700 }}>FLAGGED / REVIEW REQUIRED</div>
+            <div style={{ color: "#c084fc", fontSize: 28, fontWeight: 800, marginTop: 4 }}>{stats.totalFlagged || 0}</div>
+          </div>
+          <div style={{ background: "#0a0a0f", border: "1px solid #450a0a", borderRadius: 12, padding: 18 }}>
+            <div style={{ color: "#f87171", fontSize: 12, fontWeight: 700 }}>REJECTED FOR MALPRACTICE</div>
+            <div style={{ color: "#f87171", fontSize: 28, fontWeight: 800, marginTop: 4 }}>{stats.totalRejected || 0}</div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div style={{ ...S.adminCard, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            type="text"
+            value={proctoringSearch}
+            onChange={(e) => setProctoringSearch(e.target.value)}
+            placeholder="Search student name, email, test title..."
+            style={{ flex: "1 1 240px", background: "#0f0f18", border: "1px solid #2a2a3e", color: "#fff", padding: "8px 14px", borderRadius: 8, fontSize: 13 }}
+          />
+
+          <select
+            value={proctoringFilterStatus}
+            onChange={(e) => setProctoringFilterStatus(e.target.value)}
+            style={{ background: "#0f0f18", border: "1px solid #2a2a3e", color: "#fff", padding: "8px 14px", borderRadius: 8, fontSize: 13 }}
+          >
+            <option value="ALL">All Statuses</option>
+            <option value="NORMAL">Normal</option>
+            <option value="LOW_RISK">Low Risk</option>
+            <option value="REVIEW_REQUIRED">Review Required</option>
+            <option value="CONFIRMED_MALPRACTICE">Malpractice Confirmed</option>
+            <option value="REJECTED_FOR_MALPRACTICE">Rejected for Malpractice</option>
+            <option value="CLEARED">Cleared</option>
+          </select>
+        </div>
+
+        {/* Reports Table */}
+        <div style={{ ...S.adminCard, padding: 0, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", color: "#fff", fontSize: 13, textAlign: "left" }}>
+            <thead>
+              <tr style={{ background: "#0a0a14", borderBottom: "1px solid #1e1e2e" }}>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Student</th>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Test Title</th>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Risk Score</th>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Proctoring Status</th>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Events Summary</th>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Started At</th>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredReports.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ padding: 24, textAlign: "center", color: "#666" }}>
+                    No proctoring records match your criteria.
+                  </td>
+                </tr>
+              ) : (
+                filteredReports.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #141420", background: i % 2 === 0 ? "#06060c" : "#0a0a12" }}>
+                    <td style={{ padding: "14px 16px" }}>
+                      <div style={{ fontWeight: 700, color: "#fff" }}>{r.studentName}</div>
+                      <div style={{ fontSize: 11, color: "#888" }}>{r.studentEmail}</div>
+                    </td>
+                    <td style={{ padding: "14px 16px", color: "#c8c8e8", fontWeight: 600 }}>{r.testTitle}</td>
+                    <td style={{ padding: "14px 16px" }}>
+                      <span style={{ fontSize: 16, fontWeight: 800, color: getScoreColor(r.totalRiskScore) }}>
+                        {r.totalRiskScore}
+                      </span>
+                    </td>
+                    <td style={{ padding: "14px 16px" }}>
+                      {getStatusBadge(r.proctoringStatus, r.totalRiskScore)}
+                    </td>
+                    <td style={{ padding: "14px 16px", color: "#aaa", fontSize: 12 }}>
+                      {Object.entries(r.eventCounts || {}).length === 0 ? (
+                        <span style={{ color: "#555" }}>No events</span>
+                      ) : (
+                        Object.entries(r.eventCounts).map(([type, cnt]) => `${type}: ${cnt}`).join(" • ")
+                      )}
+                    </td>
+                    <td style={{ padding: "14px 16px", color: "#888", fontSize: 12 }}>
+                      {r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : "--"}
+                    </td>
+                    <td style={{ padding: "14px 16px" }}>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => setSelectedProctoringAttempt(r)}
+                          style={{ background: "#1e1b4b", border: "1px solid #3730a3", color: "#a5b4fc", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+                        >
+                          Timeline
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedReviewAttempt(r);
+                            setReviewStatusInput(r.proctoringStatus || "REVIEW_REQUIRED");
+                            setReviewNoteInput(r.adminDecision?.note || "");
+                          }}
+                          style={{ background: "#312e81", border: "1px solid #4338ca", color: "#c7d2fe", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+                        >
+                          Review
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Timeline Modal */}
+        {selectedProctoringAttempt && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div style={{ background: "#0a0a14", border: "1px solid #2a2a3e", borderRadius: 12, width: "100%", maxWidth: 640, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid #1e1e2e", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ color: "#fff", fontWeight: 800, fontSize: 16 }}>Proctoring Event Timeline</div>
+                  <div style={{ color: "#888", fontSize: 12 }}>{selectedProctoringAttempt.studentName} — {selectedProctoringAttempt.testTitle}</div>
+                </div>
+                <button onClick={() => setSelectedProctoringAttempt(null)} style={{ background: "none", border: "none", color: "#888", fontSize: 20, cursor: "pointer" }}>×</button>
+              </div>
+
+              <div style={{ padding: 20, overflowY: "auto", flex: 1, display: "grid", gap: 12 }}>
+                {selectedProctoringAttempt.events.length === 0 ? (
+                  <div style={{ color: "#666", textAlign: "center", padding: 20 }}>No security events recorded during this attempt.</div>
+                ) : (
+                  selectedProctoringAttempt.events.map((evt, idx) => (
+                    <div key={idx} style={{ background: "#12121c", border: "1px solid #1e1e30", borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontWeight: 700, color: "#fff", fontSize: 13 }}>{evt.eventType}</span>
+                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: evt.severity === "CRITICAL" ? "#450a0a" : evt.severity === "HIGH" ? "#431407" : "#1e1b4b", color: "#fff", fontWeight: 700 }}>
+                            {evt.severity} (+{evt.score})
+                          </span>
+                        </div>
+                        <div style={{ color: "#777", fontSize: 11, marginTop: 4 }}>
+                          {new Date(evt.timestamp).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Review Action Modal */}
+        {selectedReviewAttempt && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div style={{ background: "#0a0a14", border: "1px solid #2a2a3e", borderRadius: 12, width: "100%", maxWidth: 500, padding: 20, display: "grid", gap: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e1e2e", paddingBottom: 12 }}>
+                <div style={{ color: "#fff", fontWeight: 800, fontSize: 16 }}>Admin Malpractice Review</div>
+                <button onClick={() => setSelectedReviewAttempt(null)} style={{ background: "none", border: "none", color: "#888", fontSize: 20, cursor: "pointer" }}>×</button>
+              </div>
+
+              <div>
+                <label style={{ color: "#aaa", fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>Proctoring Decision Status:</label>
+                <select
+                  value={reviewStatusInput}
+                  onChange={(e) => setReviewStatusInput(e.target.value)}
+                  style={{ width: "100%", background: "#0f0f18", border: "1px solid #2a2a3e", color: "#fff", padding: "8px 12px", borderRadius: 8, fontSize: 13 }}
+                >
+                  <option value="NORMAL">NORMAL (No malpractice)</option>
+                  <option value="REVIEW_REQUIRED">REVIEW REQUIRED</option>
+                  <option value="UNDER_REVIEW">UNDER REVIEW</option>
+                  <option value="CONFIRMED_MALPRACTICE">CONFIRMED MALPRACTICE</option>
+                  <option value="REJECTED_FOR_MALPRACTICE">REJECTED FOR MALPRACTICE</option>
+                  <option value="CLEARED">CLEARED (Flag Removed)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ color: "#aaa", fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>Admin Note / Audit Reason:</label>
+                <textarea
+                  value={reviewNoteInput}
+                  onChange={(e) => setReviewNoteInput(e.target.value)}
+                  placeholder="Enter audit explanation or review note..."
+                  style={{ width: "100%", height: 80, background: "#0f0f18", border: "1px solid #2a2a3e", color: "#fff", padding: "8px 12px", borderRadius: 8, fontSize: 13, resize: "none" }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setSelectedReviewAttempt(null)} style={{ background: "#1e1e2e", border: "none", color: "#aaa", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Cancel</button>
+                <button onClick={handleReviewSubmit} style={{ background: "#7c6af7", border: "none", color: "#fff", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Save Decision</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderStudentReportModal = () => {
     if (!studentReportModalOpen || !studentReportModalData) return null;
     const { student, test, submission } = studentReportModalData;
@@ -7320,76 +7772,156 @@ function CodingPlatform() {
     );
   };
 
-    const renderLiveTestPopupModal = () => {
-    if (!showLiveTestPopup || !activeContestAssignment || contestEntered) return null;
+  function renderLiveTestPopupModal() {
+    if (
+      !showLiveTestPopup ||
+      !activeContestAssignment ||
+      contestEntered ||
+      liveTestPopupDismissedId === activeContestAssignment.id
+    ) {
+      return null;
+    }
+
+    const testProbs = Array.isArray(activeContestAssignment.problems) ? activeContestAssignment.problems : [];
+    const theoryCount = testProbs.filter((p) => (p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding")) === "theory").length;
+    const codingCount = testProbs.length - theoryCount;
+    const totalMarks = testProbs.reduce((sum, p) => sum + (p.marks || (p.type === "theory" ? 2 : 10)), 0);
+    const durationMins = activeContestAssignment.duration || activeContestAssignment.durationMinutes || 60;
+    const levelText = activeContestAssignment.difficulty || activeContestAssignment.level || "Medium";
 
     return (
-      <div style={S.modalBackdrop} onClick={() => setShowLiveTestPopup(false)}>
+      <div
+        style={S.modalBackdrop}
+        onClick={() => {
+          setLiveTestPopupDismissedId(activeContestAssignment.id);
+          setShowLiveTestPopup(false);
+        }}
+      >
         <div
           style={{
-            width: "min(520px, 90vw)",
-            background: "linear-gradient(145deg, #0f172a, #1e1b4b)",
+            width: "min(580px, 92vw)",
+            background: "linear-gradient(145deg, #090d16, #1e1b4b)",
             color: "#f8fafc",
             border: "2px solid #818cf8",
             borderRadius: 24,
-            padding: "28px",
-            boxShadow: "0 25px 80px rgba(99, 102, 241, 0.4)",
+            padding: "26px",
+            boxShadow: "0 25px 90px rgba(99, 102, 241, 0.45)",
             display: "flex",
             flexDirection: "column",
-            gap: 18,
+            gap: 16,
             animation: "modalFadeIn 0.3s ease-out",
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 28 }}>📢</span>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 14, background: "rgba(99, 102, 241, 0.2)", border: "1px solid #818cf8", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
+                📢
+              </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#818cf8", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  LIVE TEST ANNOUNCEMENT
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", boxShadow: "0 0 10px #ef4444" }} />
+                  <span style={{ fontSize: 11, fontWeight: 900, color: "#818cf8", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    LIVE TEST ANNOUNCEMENT
+                  </span>
                 </div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: "#ffffff" }}>
-                  Assessment Available!
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#ffffff", marginTop: 2 }}>
+                  Assessment Test is Live!
                 </div>
               </div>
             </div>
             <button
-              onClick={() => setShowLiveTestPopup(false)}
-              style={{ padding: "6px 12px", borderRadius: 999, border: "1px solid #475569", background: "transparent", color: "#cbd5e1", fontSize: 12, cursor: "pointer" }}
+              type="button"
+              onClick={() => {
+                setLiveTestPopupDismissedId(activeContestAssignment.id);
+                setShowLiveTestPopup(false);
+              }}
+              style={{ padding: "6px 12px", borderRadius: 999, border: "1px solid #475569", background: "transparent", color: "#cbd5e1", fontSize: 13, cursor: "pointer" }}
             >
               ✕
             </button>
           </div>
 
-          <div style={{ background: "rgba(15, 23, 42, 0.6)", border: "1px solid rgba(129, 140, 248, 0.3)", borderRadius: 16, padding: "18px", display: "grid", gap: 10 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#38bdf8" }}>
-              {activeContestAssignment.title || "Live Assessment"}
+          {/* Test Overview Main Box */}
+          <div style={{ background: "rgba(15, 23, 42, 0.8)", border: "1px solid rgba(129, 140, 248, 0.35)", borderRadius: 18, padding: "18px", display: "grid", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#38bdf8", marginBottom: 4 }}>
+                {activeContestAssignment.title || "Live Assessment Challenge"}
+              </div>
+              <div style={{ fontSize: 13, color: "#cbd5e1", lineHeight: 1.5 }}>
+                {activeContestAssignment.description || "An official test is currently active for your class. Review the specifications below and launch your exam attempt."}
+              </div>
             </div>
-            <div style={{ fontSize: 13, color: "#cbd5e1", lineHeight: 1.5 }}>
-              {activeContestAssignment.description || "An official test is active now. Click below to start your test attempt immediately."}
+
+            {/* Test Details Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 2 }}>
+              <div style={{ background: "rgba(30, 41, 59, 0.7)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 12, padding: "10px 14px" }}>
+                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>⏱ Test Duration</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#ffffff", marginTop: 2 }}>{durationMins} Minutes</div>
+              </div>
+
+              <div style={{ background: "rgba(30, 41, 59, 0.7)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 12, padding: "10px 14px" }}>
+                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>🎯 Total Marks</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#4ade80", marginTop: 2 }}>{totalMarks} Points</div>
+              </div>
+
+              <div style={{ background: "rgba(30, 41, 59, 0.7)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 12, padding: "10px 14px" }}>
+                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>📝 Total Questions</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#ffffff", marginTop: 2 }}>
+                  {testProbs.length} ({theoryCount} Theory, {codingCount} Coding)
+                </div>
+              </div>
+
+              <div style={{ background: "rgba(30, 41, 59, 0.7)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 12, padding: "10px 14px" }}>
+                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>⚡ Difficulty Level</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#a78bfa", marginTop: 2 }}>{levelText}</div>
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 16, marginTop: 6, fontSize: 12, color: "#a78bfa", fontWeight: 700 }}>
-              <span>⏱ Duration: {activeContestAssignment.duration || 60} mins</span>
-              <span>📝 Questions: {activeContestAssignment.problems?.length || 0}</span>
+
+            {/* Exam Rules & Guidelines */}
+            <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: 12, padding: "12px 14px", fontSize: 12, color: "#fca5a5" }}>
+              <div style={{ fontWeight: 800, color: "#f87171", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                <span>🛡️ Exam Guidelines & Security Protocol</span>
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4, lineHeight: 1.4 }}>
+                <li><strong>Fullscreen Required:</strong> Entering test switches browser into locked fullscreen mode.</li>
+                <li><strong>Anti-Cheating Monitoring:</strong> Tab switching or unfocus triggers security warnings and auto-submits.</li>
+                <li><strong>No Copy/Paste:</strong> Copying, cutting, and pasting are disabled throughout the exam.</li>
+                <li><strong>Single Session:</strong> Your timer starts as soon as you click <em>Start Test Now</em>.</li>
+              </ul>
             </div>
           </div>
 
+          {/* Action Buttons */}
           <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 4 }}>
             <button
+              type="button"
               onClick={() => {
                 setLiveTestPopupDismissedId(activeContestAssignment.id);
                 setShowLiveTestPopup(false);
               }}
-              style={{ padding: "10px 18px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#cbd5e1", fontWeight: 700, cursor: "pointer" }}
+              style={{ padding: "12px 20px", borderRadius: 12, border: "1px solid #475569", background: "transparent", color: "#cbd5e1", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
             >
               Dismiss for Now
             </button>
             <button
+              type="button"
               onClick={() => {
                 setShowLiveTestPopup(false);
                 openContest();
               }}
-              style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #6366f1, #4f46e5)", color: "#ffffff", fontWeight: 800, cursor: "pointer", boxShadow: "0 4px 15px rgba(99, 102, 241, 0.4)" }}
+              style={{
+                padding: "12px 28px",
+                borderRadius: 12,
+                border: "none",
+                background: "linear-gradient(135deg, #6366f1, #4f46e5)",
+                color: "#ffffff",
+                fontWeight: 800,
+                fontSize: 14,
+                cursor: "pointer",
+                boxShadow: "0 4px 20px rgba(99, 102, 241, 0.5)",
+              }}
             >
               🚀 Start Test Now
             </button>
@@ -7450,7 +7982,14 @@ function CodingPlatform() {
         });
 
         const createdCount = data.count || data.problems?.length || 0;
-        setPortalMessage(`Successfully imported ${createdCount} MCQ question(s) into database!`);
+        const importedDbIds = (data.problems || []).map((p) => p.dbId || p.id).filter(Boolean);
+        if (importedDbIds.length) {
+          setAdminCreateForm((prev) => ({
+            ...prev,
+            questions: Array.from(new Set([...prev.questions, ...importedDbIds])),
+          }));
+        }
+        setPortalMessage(`Successfully imported ${createdCount} MCQ question(s) into database & attached to active test draft!`);
 
         await loadAdminPortalData();
 
@@ -8425,6 +8964,224 @@ function CodingPlatform() {
             </div>
 
             <div style={{ display:"grid", gap:18 }}>
+              {/* DEDICATED MCQ TEST QUESTIONS CARD */}
+              <div style={{ ...S.adminCard, background: "linear-gradient(145deg, #0f172a, #1e1b4b)", border: "2px solid #818cf8", boxShadow: "0 10px 30px rgba(99, 102, 241, 0.15)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 22 }}>📋</span>
+                      <div style={{ ...S.adminSectionTitle, color: "#ffffff", margin: 0, fontSize: 18 }}>MCQ Questions (Test Purpose)</div>
+                      <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: "#818cf8", color: "#0f172a", textTransform: "uppercase" }}>
+                        For Tests Only
+                      </span>
+                    </div>
+                    <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                      Manage and review theory MCQs added for test assessments.
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={openCreateMcqModal}
+                      style={{
+                        padding: "9px 16px",
+                        borderRadius: 10,
+                        background: "linear-gradient(135deg, #8b5cf6, #6366f1)",
+                        border: "none",
+                        color: "#ffffff",
+                        fontWeight: 800,
+                        fontSize: 13,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        boxShadow: "0 4px 14px rgba(139, 92, 246, 0.4)",
+                      }}
+                    >
+                      <span style={{ fontSize: 16 }}>+</span> ADD MCQ QUESTION
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPdfStage("idle");
+                        setPdfDraftQuestions([]);
+                        setPdfModalOpen(true);
+                      }}
+                      style={{
+                        padding: "9px 16px",
+                        borderRadius: 10,
+                        background: "rgba(56, 189, 248, 0.16)",
+                        border: "1px solid #38bdf8",
+                        color: "#38bdf8",
+                        fontWeight: 800,
+                        fontSize: 13,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <span style={{ fontSize: 16 }}>↑</span> UPLOAD MCQ PDF
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search filter inside MCQ Card */}
+                <div style={{ marginBottom: 12 }}>
+                  <input
+                    type="text"
+                    placeholder="🔍 Search MCQ questions by title, topic, or option..."
+                    value={mcqCardSearchQuery}
+                    onChange={(e) => setMcqCardSearchQuery(e.target.value)}
+                    style={{ ...S.adminInput, background: "#090d16", borderColor: "#334155", color: "#f8fafc", fontSize: 12, padding: "8px 14px" }}
+                  />
+                </div>
+
+                {/* MCQ List Container */}
+                {(() => {
+                  const theoryMcqList = problemBank.filter((p) => {
+                    const pType = p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding");
+                    return pType === "theory" || (Array.isArray(p.options) && p.options.length > 0) || p.acceptance === "Theory MCQ";
+                  });
+
+                  const filteredMcqs = theoryMcqList.filter((mcq) => {
+                    if (!mcqCardSearchQuery.trim()) return true;
+                    const q = mcqCardSearchQuery.toLowerCase();
+                    const titleMatch = String(mcq.title || "").toLowerCase().includes(q);
+                    const stmtMatch = String(mcq.statement || "").toLowerCase().includes(q);
+                    const catMatch = String(getProblemCategory(mcq) || "").toLowerCase().includes(q);
+                    const optMatch = Array.isArray(mcq.options) && mcq.options.some((o) => String(o).toLowerCase().includes(q));
+                    return titleMatch || stmtMatch || catMatch || optMatch;
+                  });
+
+                  const selectedMcqCount = theoryMcqList.filter((mcq) => adminCreateForm.questions.includes(mcq.dbId || mcq.id)).length;
+
+                  return (
+                    <div>
+                      <div style={{ maxHeight: 320, overflowY: "auto", display: "grid", gap: 10, paddingRight: 4 }}>
+                        {filteredMcqs.length ? (
+                          filteredMcqs.map((mcq) => {
+                            const mcqKey = mcq.dbId || mcq.id;
+                            const isIncludedInTest = adminCreateForm.questions.includes(mcqKey);
+                            const optionsList = Array.isArray(mcq.options) ? mcq.options : [];
+
+                            return (
+                              <div
+                                key={mcqKey}
+                                style={{
+                                  background: isIncludedInTest ? "rgba(139, 92, 246, 0.14)" : "#090d16",
+                                  border: `1px solid ${isIncludedInTest ? "#8b5cf6" : "#1e293b"}`,
+                                  borderRadius: 12,
+                                  padding: "12px 14px",
+                                  display: "grid",
+                                  gap: 8,
+                                }}
+                              >
+                                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+                                      <span style={{ fontSize: 9, fontWeight: 900, background: "#8b5cf6", color: "#ffffff", padding: "2px 6px", borderRadius: 4 }}>
+                                        TEST MCQ
+                                      </span>
+                                      <span style={{ fontSize: 11, color: "#cbd5e1", fontWeight: 700 }}>
+                                        {getProblemCategory(mcq)} • {mcq.difficulty} • {mcq.marks || 2} pts
+                                      </span>
+                                    </div>
+                                    <div style={{ color: "#f8fafc", fontWeight: 700, fontSize: 13, lineHeight: 1.4 }}>
+                                      {mcq.title || mcq.statement}
+                                    </div>
+                                  </div>
+
+                                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleCreateQuestion(mcqKey)}
+                                      style={{
+                                        padding: "5px 12px",
+                                        borderRadius: 8,
+                                        fontSize: 11,
+                                        fontWeight: 800,
+                                        border: "none",
+                                        background: isIncludedInTest ? "#22c55e" : "#3b82f6",
+                                        color: "#ffffff",
+                                        cursor: "pointer",
+                                        boxShadow: isIncludedInTest ? "0 2px 8px rgba(34, 197, 94, 0.3)" : "none",
+                                      }}
+                                    >
+                                      {isIncludedInTest ? "✓ In Test" : "+ Add to Test"}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => openEditMcqModal(mcq)}
+                                      title="Edit MCQ"
+                                      style={{ padding: "5px 9px", borderRadius: 8, fontSize: 12, border: "1px solid #475569", background: "transparent", color: "#cbd5e1", cursor: "pointer" }}
+                                    >
+                                      ✏️
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeletingProblem(mcq)}
+                                      title="Delete MCQ"
+                                      style={{ padding: "5px 9px", borderRadius: 8, fontSize: 12, border: "1px solid rgba(239, 68, 68, 0.4)", background: "rgba(239, 68, 68, 0.1)", color: "#fca5a5", cursor: "pointer" }}
+                                    >
+                                      🗑
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Option List Details */}
+                                {optionsList.length > 0 && (
+                                  <div style={{ fontSize: 11, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 4, background: "rgba(15, 23, 42, 0.7)", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.05)" }}>
+                                    {optionsList.map((opt, oIdx) => {
+                                      const isCorrect = String(opt).trim() === String(mcq.correctAnswer || "").trim();
+                                      return (
+                                        <div
+                                          key={oIdx}
+                                          style={{
+                                            color: isCorrect ? "#4ade80" : "#94a3b8",
+                                            fontWeight: isCorrect ? 800 : 400,
+                                            whiteSpace: "nowrap",
+                                            overflow: "hidden",
+                                            textOverflow: "ellipsis",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 4,
+                                          }}
+                                        >
+                                          <span style={{ color: isCorrect ? "#4ade80" : "#64748b", fontWeight: 700 }}>
+                                            {String.fromCharCode(65 + oIdx)}.
+                                          </span>
+                                          <span>{opt}</span>
+                                          {isCorrect && <span style={{ color: "#4ade80", fontSize: 10, fontWeight: 900 }}>[CORRECT]</span>}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div style={{ color: "#94a3b8", fontSize: 12, textAlign: "center", padding: "20px", background: "#090d16", borderRadius: 12, border: "1px dashed #334155" }}>
+                            No theory MCQ questions found. Use <strong>+ ADD MCQ QUESTION</strong> or <strong>↑ UPLOAD MCQ PDF</strong> above to add test MCQs.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Footer Summary */}
+                      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #1e293b", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#cbd5e1" }}>
+                        <span>Total Theory MCQs: <strong>{theoryMcqList.length}</strong></span>
+                        <span>Selected for Test: <strong style={{ color: "#818cf8" }}>{selectedMcqCount}</strong></span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
               <div style={S.adminCard}>
                 <div style={S.adminSectionTitle}>Create New Test</div>
                 <div style={{ display:"grid", gap:14 }}>
@@ -8722,6 +9479,7 @@ function CodingPlatform() {
 
           {adminTab === "questions" && renderQuestionUploads()}
           {adminTab === "reports" && renderAdminReports()}
+          {adminTab === "malpractice" && renderAdminMalpracticeReports()}
           {adminTab === "leaderboard" && renderAdminLeaderboard()}
           {adminTab === "students" && renderStudentList()}
           {adminTab === "profile" && renderAdminProfile()}
@@ -8734,6 +9492,7 @@ function CodingPlatform() {
   if (view === "list") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderLiveTestPopupModal()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <nav style={S.nav}>
@@ -8800,12 +9559,58 @@ function CodingPlatform() {
         </div>
 
         {/* Filters */}
-        <div style={{ display:"flex", gap:12, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:12, marginBottom:14, alignItems:"center", flexWrap:"wrap" }}>
           <input placeholder="🔍  Search problems..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}
             style={{ flex:1, minWidth:220, background:"#111118", border:"1px solid #1e1e2e", borderRadius:8, padding:"10px 14px", color:"#eef0ff", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, outline:"none", letterSpacing:"0.01em" }} />
           {["All","Easy","Medium","Hard"].map(d=>(
             <button key={d} onClick={()=>setFilterDiff(d)} style={{ ...S.btn("default"), background:filterDiff===d?"#1a1a2e":"transparent", color:filterDiff===d?"#7c6af7":"#666", border:filterDiff===d?"1px solid #7c6af7":"1px solid #1e1e2e" }}>{d}</button>
           ))}
+        </div>
+
+        {/* Language Selection Control */}
+        <div style={{ display:"flex", gap:12, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
+          <span style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
+            Language:
+          </span>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            {SUPPORTED_LANGUAGES.map((l) => {
+              const active = lang === l.id;
+              return (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => handleLangChange(l.id)}
+                  style={{
+                    ...S.btn("default"),
+                    padding: "8px 16px",
+                    borderRadius: 8,
+                    fontSize: 13,
+                    fontFamily: "'Outfit','Space Grotesk',sans-serif",
+                    fontWeight: active ? 700 : 500,
+                    background: active ? "#1a1a2e" : "transparent",
+                    color: active ? "#7c6af7" : "#666",
+                    border: active ? "1px solid #7c6af7" : "1px solid #1e1e2e",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!active) {
+                      e.currentTarget.style.borderColor = "#3a3a52";
+                      e.currentTarget.style.color = "#cdd2ef";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) {
+                      e.currentTarget.style.borderColor = "#1e1e2e";
+                      e.currentTarget.style.color = "#666";
+                    }
+                  }}
+                >
+                  {l.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Table */}
@@ -8842,6 +9647,7 @@ function CodingPlatform() {
   if (view === "profile") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderLiveTestPopupModal()}
       <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
         <nav style={{ ...S.nav, background:"#0b1220", borderBottom:"1px solid #1e293b" }}>
@@ -9446,6 +10252,7 @@ function CodingPlatform() {
   if (view === "leaderboard") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderLiveTestPopupModal()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
@@ -10027,9 +10834,9 @@ function CodingPlatform() {
             <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:`8px ${isPhone ? 12 : 16}px`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
               <select value={lang} onChange={e=>handleLangChange(e.target.value)}
                 style={{ background:"#1a1a2e", border:"1px solid #2a2a3e", color:"#c8c8e8", padding:"4px 10px", borderRadius:6, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>
-                <option value="javascript">JavaScript</option>
-                <option value="python">Python</option>
-                <option value="java">Java</option>
+                {SUPPORTED_LANGUAGES.map((l) => (
+                  <option key={l.id} value={l.id}>{l.label}</option>
+                ))}
               </select>
               <span style={{ fontSize:11, color: lang==="javascript"?"#4ade8077":"#ffc01e77" }}>
                 {lang==="javascript"?"Judge0 + Browser Fallback":"Judge0 Execution"}

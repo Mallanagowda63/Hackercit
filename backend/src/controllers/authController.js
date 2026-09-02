@@ -186,6 +186,11 @@ exports.register = async (req, res) => {
     const normalizedRole = normalizeRole(role);
     if (!normalizedRole) return res.status(400).json({ error: 'valid role required' });
 
+    const envAdminEmail = (process.env.ADMIN_EMAIL || 'mallanagowdap99@gmail.com').trim().toLowerCase();
+    if (normalizedRole === 'ADMIN' && String(email || '').trim().toLowerCase() !== envAdminEmail) {
+      return res.status(403).json({ error: 'Only the designated admin account is permitted to register as ADMIN.' });
+    }
+
     const trimmedName = String(name || '').trim();
     const trimmedUsn = String(usn || '').trim();
     const trimmedDepartment = String(department || '').trim();
@@ -264,20 +269,82 @@ exports.verifyEmail = async (req, res) => {
   }
 };
 
+async function ensureDefaultAdmin() {
+  const envAdminEmail = process.env.ADMIN_EMAIL || 'mallanagowdap99@gmail.com';
+  const envAdminPassword = process.env.ADMIN_PASSWORD || 'Mallana@99';
+
+  if (!envAdminEmail || !envAdminPassword) return null;
+
+  try {
+    const existing = await prisma.user.findUnique({ where: { email: envAdminEmail } });
+    const hashed = await bcrypt.hash(envAdminPassword, 10);
+
+    if (existing) {
+      if (existing.role !== 'ADMIN') {
+        await prisma.user.update({
+          where: { id: existing.id },
+          data: { role: 'ADMIN', password: hashed },
+        });
+      }
+      return existing;
+    }
+
+    const newAdmin = await prisma.user.create({
+      data: {
+        email: envAdminEmail,
+        password: hashed,
+        name: 'Admin User',
+        role: 'ADMIN',
+        verified: true,
+      },
+    });
+    return newAdmin;
+  } catch (err) {
+    console.error('Error ensuring default admin account:', err?.message || err);
+    return null;
+  }
+}
+
+exports.ensureDefaultAdmin = ensureDefaultAdmin;
+
 exports.login = async (req, res) => {
   const { email, password, role } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'email+password required' });
   try {
-    const user = await prisma.user.findUnique({ where: { email } });
+    const envAdminEmail = (process.env.ADMIN_EMAIL || 'mallanagowdap99@gmail.com').trim().toLowerCase();
+    const envAdminPassword = (process.env.ADMIN_PASSWORD || 'Mallana@99').trim();
+    const inputEmail = String(email).trim().toLowerCase();
+
+    let user = await prisma.user.findUnique({ where: { email: inputEmail } });
+
+    if (!user && inputEmail === envAdminEmail) {
+      user = await ensureDefaultAdmin();
+    }
+
     if (!user) return res.status(401).json({ error: 'invalid credentials' });
 
-    const requestedRole = normalizeRole(role);
-    if (requestedRole && user.role !== requestedRole) {
-      return res.status(403).json({ error: 'selected role does not match this account' });
+    const isConfiguredAdmin = inputEmail === envAdminEmail && String(password).trim() === envAdminPassword;
+
+    if (isConfiguredAdmin) {
+      const hashed = await bcrypt.hash(password, 10);
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { role: 'ADMIN', password: hashed, verified: true },
+      });
     }
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ error: 'invalid credentials' });
+    if (!match && !isConfiguredAdmin) {
+      return res.status(401).json({ error: 'invalid credentials' });
+    }
+
+    const requestedRole = normalizeRole(role);
+    if (requestedRole === 'ADMIN' && inputEmail !== envAdminEmail) {
+      return res.status(403).json({ error: 'Only the designated admin email can access as ADMIN' });
+    }
+    if (requestedRole && user.role !== requestedRole) {
+      return res.status(403).json({ error: 'selected role does not match this account' });
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: user.id },

@@ -293,30 +293,52 @@ function applyRanks(entries, scope) {
   }));
 }
 
+const problemCache = new Map();
+
 async function resolveProblem(problemId) {
-  const direct = await prisma.problem.findUnique({ where: { id: String(problemId || '') } });
-  if (direct) return direct;
+  const cacheKey = String(problemId || '');
+  if (problemCache.has(cacheKey)) {
+    const cached = problemCache.get(cacheKey);
+    if (Date.now() - cached.timestamp < 60000) {
+      return cached.problem;
+    }
+  }
+
+  const direct = await prisma.problem.findUnique({ where: { id: cacheKey } });
+  if (direct) {
+    problemCache.set(cacheKey, { problem: direct, timestamp: Date.now() });
+    return direct;
+  }
 
   const legacyId = Number(problemId);
   if (Number.isInteger(legacyId)) {
-    return prisma.problem.findFirst({ where: { legacyId } });
+    const legacy = await prisma.problem.findFirst({ where: { legacyId } });
+    if (legacy) {
+      problemCache.set(cacheKey, { problem: legacy, timestamp: Date.now() });
+      problemCache.set(String(legacy.id), { problem: legacy, timestamp: Date.now() });
+    }
+    return legacy;
   }
 
   return null;
 }
 
 exports.runSample = async (req, res) => {
+  const startMs = performance.now();
   try {
     const { problemId, language, code, customInput } = req.body;
     if (!problemId || !language || !code) {
       return res.status(400).json({ error: 'problemId, language, and code are required' });
     }
 
+    const t0 = performance.now();
     const problem = await resolveProblem(problemId);
+    const problemQueryMs = Math.round(performance.now() - t0);
     if (!problem) {
       return res.status(404).json({ error: 'problem not found' });
     }
 
+    const t1 = performance.now();
     const execution = await executeSubmission(
       {
         language,
@@ -327,6 +349,9 @@ exports.runSample = async (req, res) => {
       },
       { priority: 10 },
     );
+    const executionMs = Math.round(performance.now() - t1);
+
+    const t2 = performance.now();
     const tests = Array.isArray(execution.tests) ? execution.tests : [];
     const storedStatus = resolveSubmissionStatus(tests);
     const submission = await prisma.submission.create({
@@ -342,6 +367,8 @@ exports.runSample = async (req, res) => {
     });
 
     const userWithBadge = await syncUserBadge(req.user.id);
+    const dbSaveMs = Math.round(performance.now() - t2);
+    const totalMs = Math.round(performance.now() - startMs);
 
     return res.json({
       submissionId: submission.id,
@@ -353,6 +380,12 @@ exports.runSample = async (req, res) => {
       runtime: execution.runtime || 'N/A',
       memory: execution.memory || 'N/A',
       beats: execution.beats || 'N/A',
+      timings: {
+        problemQueryMs,
+        executionMs,
+        dbSaveMs,
+        totalMs,
+      },
     });
   } catch (error) {
     return res.status(error.statusCode || 502).json({
@@ -362,17 +395,21 @@ exports.runSample = async (req, res) => {
 };
 
 exports.submit = async (req, res) => {
+  const startMs = performance.now();
   try {
     const { problemId, language, code } = req.body;
     if (!problemId || !language || !code) {
       return res.status(400).json({ error: 'problemId, language, and code are required' });
     }
 
+    const t0 = performance.now();
     const problem = await resolveProblem(problemId);
+    const problemQueryMs = Math.round(performance.now() - t0);
     if (!problem) {
       return res.status(404).json({ error: 'problem not found' });
     }
 
+    const t1 = performance.now();
     const execution = await executeSubmission(
       {
         language,
@@ -382,6 +419,9 @@ exports.submit = async (req, res) => {
       },
       { priority: 1 },
     );
+    const executionMs = Math.round(performance.now() - t1);
+
+    const t2 = performance.now();
     const tests = Array.isArray(execution.tests) ? execution.tests : [];
     const storedStatus = resolveSubmissionStatus(tests);
     const submission = await prisma.submission.create({
@@ -397,6 +437,8 @@ exports.submit = async (req, res) => {
     });
 
     const userWithBadge = await syncUserBadge(req.user.id);
+    const dbSaveMs = Math.round(performance.now() - t2);
+    const totalMs = Math.round(performance.now() - startMs);
 
     return res.json({
       submission,
@@ -407,6 +449,12 @@ exports.submit = async (req, res) => {
       runtime: execution.runtime || 'N/A',
       memory: execution.memory || 'N/A',
       beats: execution.beats || 'N/A',
+      timings: {
+        problemQueryMs,
+        executionMs,
+        dbSaveMs,
+        totalMs,
+      },
     });
   } catch (error) {
     return res.status(error.statusCode || 502).json({

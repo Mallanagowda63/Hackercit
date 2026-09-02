@@ -15,7 +15,7 @@ let backendProcess = null;
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
-  ".jsx": "text/babel; charset=utf-8",
+  ".jsx": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".pdf": "application/pdf",
@@ -123,8 +123,13 @@ async function proxyBackendRequest(req, res, requestUrl) {
       res.end(responseBody);
     }
   } catch (error) {
+    const isProduction = process.env.NODE_ENV === "production";
+    const userMessage = isProduction
+      ? "Unable to connect to the exam server. Please try again in a moment."
+      : "Unable to connect to the local backend server. Please verify the backend process is running.";
+
     sendJson(res, 502, {
-      error: "Unable to reach backend API. Start the backend with npm start --prefix backend.",
+      error: userMessage,
       detail: error.message,
       backendProxyBase,
     });
@@ -177,6 +182,27 @@ createServer(async (req, res) => {
     proxyUrl.pathname = "/api/run";
     await proxyBackendRequest(req, res, proxyUrl);
     return;
+  }
+
+  if (pathname.startsWith("/vendor/")) {
+    let vendorPath = "";
+    if (pathname === "/vendor/react.js") {
+      vendorPath = join(rootDir, "node_modules/react/umd/react.development.js");
+    } else if (pathname === "/vendor/react-dom.js") {
+      vendorPath = join(rootDir, "node_modules/react-dom/umd/react-dom.development.js");
+    } else if (pathname === "/vendor/babel.js") {
+      vendorPath = join(rootDir, "node_modules/@babel/standalone/babel.min.js");
+    }
+
+    if (vendorPath && existsSync(vendorPath)) {
+      res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" });
+      const stream = createReadStream(vendorPath);
+      stream.on("error", () => {
+        if (!res.headersSent) sendJson(res, 500, { error: "Failed to read vendor script" });
+      });
+      stream.pipe(res);
+      return;
+    }
   }
 
   if (pathname.startsWith("/api/")) {
