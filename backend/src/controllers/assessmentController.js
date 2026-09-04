@@ -1,4 +1,5 @@
 const prisma = require('../prismaClient');
+const { executeSubmission } = require('../lib/executionService');
 
 async function attachRankToResult(result, assignmentId) {
   if (!result || !assignmentId) return result;
@@ -142,27 +143,39 @@ exports.submitAssessment = async (req, res) => {
       );
       let dbSub = latestSubmissionByProblem.get(problem.id);
 
-      // If DB submission missing but client supplied code, persist it to DB
       const code = dbSub?.code || clientCodingPayload.code || clientCodingPayload.submittedCode || '';
       const language = dbSub?.language || clientCodingPayload.language || 'javascript';
+      let results = Array.isArray(dbSub?.results) ? dbSub.results : (Array.isArray(clientCodingPayload.tests) ? clientCodingPayload.tests : []);
 
-      if (!dbSub && code) {
+      // If DB submission is missing or lacks results, evaluate code if code is present
+      if ((!dbSub || !results.length) && code.trim()) {
         try {
-          const clientStatus = clientCodingPayload.status === 'passed' || clientCodingPayload.status === 'ACCEPTED'
-            ? 'ACCEPTED'
-            : (clientCodingPayload.status || 'WRONG_ANSWER');
-          dbSub = await prisma.submission.create({
-            data: {
-              userId,
-              problemId: problem.id,
-              language,
-              code,
-              status: clientStatus === 'ACCEPTED' ? 'ACCEPTED' : 'WRONG_ANSWER',
-              results: Array.isArray(clientCodingPayload.tests) ? clientCodingPayload.tests : [],
-            },
+          const execution = await executeSubmission({
+            language,
+            sourceCode: code,
+            fnName: problem.fnName,
+            testCases: Array.isArray(problem.testCases) ? problem.testCases : [],
           });
+          if (Array.isArray(execution.tests) && execution.tests.length) {
+            results = execution.tests;
+          }
+          const isPassed = Boolean(execution.passed);
+          const computedStatus = isPassed ? 'ACCEPTED' : (execution.status || clientCodingPayload.status || 'WRONG_ANSWER');
+
+          if (!dbSub) {
+            dbSub = await prisma.submission.create({
+              data: {
+                userId,
+                problemId: problem.id,
+                language,
+                code,
+                status: computedStatus,
+                results,
+              },
+            });
+          }
         } catch (e) {
-          console.error('Error auto-creating submission:', e);
+          console.error('Error auto-evaluating submission during finishTest:', e);
         }
       }
 
@@ -174,38 +187,27 @@ exports.submitAssessment = async (req, res) => {
       let passCount = 0;
       let totalTests = Array.isArray(problem.testCases) && problem.testCases.length ? problem.testCases.length : 3;
 
-      if (dbSub) {
-        const results = Array.isArray(dbSub.results) ? dbSub.results : [];
-        if (results.length > 0) {
-          passCount = results.filter((t) => t.status === 'pass').length;
-          totalTests = results.length;
-        } else if (dbSub.status === 'ACCEPTED') {
-          passCount = totalTests;
-        }
-
+      if (results.length > 0) {
+        passCount = results.filter((t) => t.status === 'pass').length;
+        totalTests = results.length;
         const ratio = totalTests > 0 ? passCount / totalTests : 0;
         earnedMarks = Math.round(ratio * maxMarks * 100) / 100;
-
-        if (dbSub.status === 'ACCEPTED' || passCount === totalTests) {
-          status = 'ACCEPTED';
-          earnedMarks = maxMarks;
-        } else if (passCount > 0) {
-          status = 'PARTIAL';
-        } else if (dbSub.status === 'COMPILE_ERROR') {
-          status = 'COMPILE_ERROR';
-        } else if (dbSub.status === 'RUNTIME_ERROR') {
-          status = 'RUNTIME_ERROR';
-        } else {
-          status = dbSub.status || 'WRONG_ANSWER';
-        }
+        status = passCount === totalTests ? 'ACCEPTED' : passCount > 0 ? 'PARTIAL' : 'WRONG_ANSWER';
+      } else if (dbSub && dbSub.status === 'ACCEPTED') {
+        passCount = totalTests;
+        earnedMarks = maxMarks;
+        status = 'ACCEPTED';
       } else if (clientCodingPayload.testCasesPassed !== undefined && clientCodingPayload.totalTestCases !== undefined) {
         passCount = Number(clientCodingPayload.testCasesPassed || 0);
         totalTests = Number(clientCodingPayload.totalTestCases || totalTests);
         const ratio = totalTests > 0 ? passCount / totalTests : 0;
         earnedMarks = Math.round(ratio * maxMarks * 100) / 100;
         status = passCount === totalTests ? 'ACCEPTED' : passCount > 0 ? 'PARTIAL' : (clientCodingPayload.status || 'WRONG_ANSWER');
+      } else if (clientCodingPayload.marks !== undefined && Number(clientCodingPayload.marks) > 0) {
+        earnedMarks = Number(clientCodingPayload.marks);
+        status = earnedMarks >= maxMarks ? 'ACCEPTED' : 'PARTIAL';
       } else if (isAnswered) {
-        status = 'WRONG_ANSWER';
+        status = dbSub?.status || clientCodingPayload.status || 'WRONG_ANSWER';
         earnedMarks = 0;
         passCount = 0;
       }

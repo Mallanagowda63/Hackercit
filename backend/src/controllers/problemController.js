@@ -1,5 +1,6 @@
 const prisma = require('../prismaClient');
 const { normalizeProblemPayload, serializeProblem } = require('../lib/problemHelpers');
+const { clearProblemCache } = require('./submissionController');
 
 function isDuplicateProblemError(error) {
   const message = String(error?.message || '').toLowerCase();
@@ -177,6 +178,7 @@ exports.update = async (req, res) => {
     };
     const data = normalizeProblemPayload(merged);
     const updated = await prisma.problem.update({ where: { id: existing.id }, data });
+    clearProblemCache(existing.id);
     return res.json({ problem: serializeProblem(updated, { includeContent: true }) });
   } catch (err) {
     return sendProblemError(res, err);
@@ -204,6 +206,7 @@ exports.remove = async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'not found' });
 
     await prisma.problem.delete({ where: { id: existing.id } });
+    clearProblemCache(existing.id);
     return res.json({ ok: true });
   } catch (err) {
     return sendProblemError(res, err);

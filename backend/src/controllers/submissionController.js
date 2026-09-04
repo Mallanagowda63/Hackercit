@@ -295,6 +295,14 @@ function applyRanks(entries, scope) {
 
 const problemCache = new Map();
 
+function clearProblemCache(id) {
+  if (id) {
+    problemCache.delete(String(id));
+  } else {
+    problemCache.clear();
+  }
+}
+
 async function resolveProblem(problemId) {
   const cacheKey = String(problemId || '');
   if (problemCache.has(cacheKey)) {
@@ -322,6 +330,8 @@ async function resolveProblem(problemId) {
 
   return null;
 }
+
+exports.clearProblemCache = clearProblemCache;
 
 exports.runSample = async (req, res) => {
   const startMs = performance.now();

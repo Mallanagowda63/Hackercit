@@ -197,7 +197,6 @@ exports.register = async (req, res) => {
 
     if (!trimmedName) return res.status(400).json({ error: 'name required' });
     if (!trimmedDepartment) return res.status(400).json({ error: 'department required' });
-    if (normalizedRole === 'USER' && !trimmedUsn) return res.status(400).json({ error: 'usn required for student signup' });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: 'email in use' });

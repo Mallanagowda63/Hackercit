@@ -459,7 +459,21 @@ const tests = cases.map((tc) => {
       throw new Error(\`Function "${fnName}" not found.\`);
     }
 
-    const rawArgs = JSON.parse(\`[\${tc.input}]\`);
+    let rawArgs = [];
+    const trimmedInput = String(tc.input || "").trim();
+    if (trimmedInput) {
+      try {
+        rawArgs = JSON.parse(\`[\${trimmedInput}]\`);
+      } catch {
+        const parts = trimmedInput.split(/[\\s,]+/).filter(Boolean);
+        rawArgs = parts.map((p) => {
+          if (p === "true") return true;
+          if (p === "false") return false;
+          const num = Number(p);
+          return Number.isFinite(num) ? num : p;
+        });
+      }
+    }
     const args = prepareArgs(${escapeForTemplate(fnName)}, rawArgs);
     const result = fn(...args);
     const actual = serializeResult(${escapeForTemplate(fnName)}, result, args, rawArgs);

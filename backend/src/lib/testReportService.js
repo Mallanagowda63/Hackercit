@@ -1,9 +1,12 @@
 const prisma = require('../prismaClient');
 
 function formatName(user) {
-  const explicitName = String(user?.name || '').trim();
+  if (!user) return 'Unknown Student';
+  const explicitName = String(user.name || '').trim();
   if (explicitName) return explicitName;
-  return String(user?.email || 'Student').split('@')[0];
+  const handle = String(user.email || '').split('@')[0];
+  const formatted = handle.split(/[\s._-]+/).filter(Boolean).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+  return formatted || 'Unknown Student';
 }
 
 function getWeight(problem) {

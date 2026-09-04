@@ -27,8 +27,33 @@ function buildJudge0Headers() {
   return headers;
 }
 
-async function executeSubmissionDirect(payload) {
+const prisma = require('../prismaClient');
+
+async function executeSubmissionDirect(rawPayload) {
   const runner = await getRunnerModule();
+  let payload = { ...rawPayload };
+
+  if (payload.problemId && (!Array.isArray(payload.testCases) || payload.testCases.length === 0 || !payload.fnName)) {
+    let dbProb = null;
+    try {
+      dbProb = await prisma.problem.findUnique({ where: { id: payload.problemId } });
+    } catch {
+      // Ignore invalid ObjectId error
+    }
+    if (!dbProb) {
+      const numId = Number(payload.problemId);
+      if (Number.isInteger(numId)) {
+        dbProb = await prisma.problem.findFirst({ where: { legacyId: numId } }).catch(() => null);
+      }
+    }
+    if (dbProb) {
+      if (!payload.fnName) payload.fnName = dbProb.fnName;
+      if (!Array.isArray(payload.testCases) || payload.testCases.length === 0) {
+        payload.testCases = Array.isArray(dbProb.testCases) ? dbProb.testCases : [];
+      }
+    }
+  }
+
   return runner.runSubmission(payload);
 }
 

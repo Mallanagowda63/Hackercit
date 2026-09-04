@@ -115,6 +115,28 @@ async function recordProctoringEvent({ userId, assignmentId, eventType, metadata
   };
 }
 
+function formatStudentName(user) {
+  if (!user) return 'Unknown Student';
+  const explicitName = String(user.name || '').trim();
+  if (explicitName) return explicitName;
+
+  const emailHandle = String(user.email || '').split('@')[0];
+  const formattedHandle = emailHandle
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+  return formattedHandle || 'Unknown Student';
+}
+
+function formatStudentUsn(user) {
+  if (!user || !user.usn || String(user.usn).trim() === '' || String(user.usn).trim() === '--') {
+    return 'Not Available';
+  }
+  return String(user.usn).trim();
+}
+
 async function getProctoringReports(filters = {}) {
   const attempts = await prisma.testAttempt.findMany({
     include: {
@@ -124,7 +146,18 @@ async function getProctoringReports(filters = {}) {
     orderBy: { startedAt: 'desc' },
   });
 
+  const missingUserIds = [...new Set(attempts.filter((a) => !a.user && a.userId).map((a) => a.userId))];
+  let resolvedUserMap = new Map();
+  if (missingUserIds.length) {
+    const fetchedUsers = await prisma.user.findMany({
+      where: { id: { in: missingUserIds } },
+      select: { id: true, name: true, email: true, usn: true, department: true },
+    });
+    fetchedUsers.forEach((u) => resolvedUserMap.set(String(u.id), u));
+  }
+
   const reports = attempts.map((attempt) => {
+    const user = attempt.user || resolvedUserMap.get(String(attempt.userId)) || null;
     const events = Array.isArray(attempt.interruptions) ? attempt.interruptions : [];
     const totalRiskScore = events.reduce((sum, evt) => sum + (evt.score || 0), 0);
     const eventCounts = {};
@@ -138,15 +171,18 @@ async function getProctoringReports(filters = {}) {
       status = attempt.adminDecision.newStatus;
     }
 
+    const studentName = formatStudentName(user);
+    const studentUsn = formatStudentUsn(user);
+
     return {
       attemptId: attempt.id,
       assignmentId: attempt.assignmentId,
       testTitle: attempt.assignment?.title || 'Coding Test',
       userId: attempt.userId,
-      studentName: attempt.user?.name || attempt.user?.email?.split('@')[0] || 'Student',
-      studentEmail: attempt.user?.email || '',
-      studentUsn: attempt.user?.usn || '--',
-      studentDepartment: attempt.user?.department || '--',
+      studentName,
+      studentEmail: user?.email || 'Not Available',
+      studentUsn,
+      studentDepartment: user?.department || 'Not Available',
       startedAt: attempt.startedAt,
       finishedAt: attempt.finishedAt,
       attemptStatus: attempt.status,

@@ -2,15 +2,39 @@ const prisma = require('../prismaClient');
 const { toClientDifficulty } = require('../lib/problemHelpers');
 
 function formatStudentName(user) {
-  const explicitName = String(user?.name || '').trim();
+  if (!user) return 'Unknown Student';
+  const explicitName = String(user.name || '').trim();
   if (explicitName) return explicitName;
 
-  const emailHandle = String(user?.email || '').split('@')[0];
-  return emailHandle
+  const emailHandle = String(user.email || '').split('@')[0];
+  const formattedHandle = emailHandle
     .split(/[\s._-]+/)
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ') || 'Student';
+    .join(' ');
+
+  return formattedHandle || 'Unknown Student';
+}
+
+function formatStudentUsn(user) {
+  if (!user || !user.usn || String(user.usn).trim() === '' || String(user.usn).trim() === '--') {
+    return 'Not Available';
+  }
+  return String(user.usn).trim();
+}
+
+function formatStudentEmail(user) {
+  if (!user || !user.email || String(user.email).trim() === '') {
+    return 'Not Available';
+  }
+  return String(user.email).trim();
+}
+
+function formatStudentDept(user) {
+  if (!user || !user.department || String(user.department).trim() === '' || String(user.department).trim() === '--') {
+    return 'Not Available';
+  }
+  return String(user.department).trim();
 }
 
 function calculateTimeUsedMinutes(createdAt, assignmentStartAt, durationMinutes) {
@@ -37,8 +61,20 @@ exports.listReportsOverview = async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
 
+    // Explicit Batch User Resolution to handle raw DB string IDs
+    const missingUserIds = [...new Set(submissions.filter((s) => !s.user && s.userId).map((s) => s.userId))];
+    let resolvedUserMap = new Map();
+    if (missingUserIds.length) {
+      const fetchedUsers = await prisma.user.findMany({
+        where: { id: { in: missingUserIds } },
+        select: { id: true, name: true, email: true, usn: true, department: true },
+      });
+      fetchedUsers.forEach((u) => resolvedUserMap.set(String(u.id), u));
+    }
+
     const submissionsByAssignment = new Map();
     submissions.forEach((sub) => {
+      sub.user = sub.user || resolvedUserMap.get(String(sub.userId)) || null;
       const list = submissionsByAssignment.get(sub.assignmentId) || [];
       list.push(sub);
       submissionsByAssignment.set(sub.assignmentId, list);
@@ -110,9 +146,21 @@ exports.getTestReport = async (req, res) => {
       ],
     });
 
+    // Explicit Batch User Resolution to resolve raw DB user documents
+    const missingUserIds = [...new Set(submissions.filter((s) => !s.user && s.userId).map((s) => s.userId))];
+    let resolvedUserMap = new Map();
+    if (missingUserIds.length) {
+      const fetchedUsers = await prisma.user.findMany({
+        where: { id: { in: missingUserIds } },
+        select: { id: true, name: true, email: true, usn: true, department: true },
+      });
+      fetchedUsers.forEach((u) => resolvedUserMap.set(String(u.id), u));
+    }
+
     const uniqueUserSubmissions = [];
     const seenUsers = new Set();
     submissions.forEach((sub) => {
+      sub.user = sub.user || resolvedUserMap.get(String(sub.userId)) || null;
       if (!seenUsers.has(sub.userId)) {
         seenUsers.add(sub.userId);
         uniqueUserSubmissions.push(sub);
@@ -121,17 +169,28 @@ exports.getTestReport = async (req, res) => {
 
     // Rank calculation (Score desc, then submission time asc)
     const rankedSubmissions = uniqueUserSubmissions.map((sub, idx) => {
-      const studentName = formatStudentName(sub.user);
+      const u = sub.user;
+      const studentName = formatStudentName(u);
+      const studentUsn = formatStudentUsn(u);
+      const studentEmail = formatStudentEmail(u);
+      const studentDepartment = formatStudentDept(u);
       const timeUsed = calculateTimeUsedMinutes(sub.createdAt, assignment.startsAt || assignment.createdAt, assignment.durationMinutes);
 
       return {
         rank: idx + 1,
         submissionId: sub.id,
         userId: sub.userId,
+        student: {
+          id: u?.id || sub.userId,
+          name: studentName,
+          usn: studentUsn,
+          email: studentEmail,
+          department: studentDepartment,
+        },
         studentName,
-        studentEmail: sub.user?.email || '',
-        studentUsn: sub.user?.usn || '--',
-        studentDepartment: sub.user?.department || '--',
+        studentEmail,
+        studentUsn,
+        studentDepartment,
         totalScore: sub.totalScore,
         maxScore: sub.maxScore,
         percentage: sub.percentage,
@@ -242,6 +301,12 @@ exports.getStudentDetailReport = async (req, res) => {
       return res.status(404).json({ error: 'No submission found for this student on this test.' });
     }
 
+    // Get proctoring attempt details for this student & test
+    const attempt = await prisma.testAttempt.findFirst({
+      where: { assignmentId: testId, userId: studentId },
+      orderBy: { startedAt: 'desc' },
+    });
+
     // Get rank among all students for this test
     const allTestSubmissions = await prisma.assessmentSubmission.findMany({
       where: { assignmentId: testId },
@@ -265,15 +330,18 @@ exports.getStudentDetailReport = async (req, res) => {
     const rank = rankIdx >= 0 ? rankIdx + 1 : uniqueUserSubs.length;
 
     const studentName = formatStudentName(user);
+    const studentUsn = formatStudentUsn(user);
+    const studentEmail = formatStudentEmail(user);
+    const studentDept = formatStudentDept(user);
     const timeUsedMinutes = calculateTimeUsedMinutes(submission.createdAt, assignment.startsAt || assignment.createdAt, assignment.durationMinutes);
 
     return res.json({
       student: {
         id: user.id,
         name: studentName,
-        email: user.email,
-        usn: user.usn || '--',
-        department: user.department || '--',
+        email: studentEmail,
+        usn: studentUsn,
+        department: studentDept,
       },
       test: {
         id: assignment.id,
@@ -293,6 +361,13 @@ exports.getStudentDetailReport = async (req, res) => {
         createdAt: submission.createdAt,
         details: submission.details || {},
       },
+      proctoring: attempt ? {
+        attemptId: attempt.id,
+        status: attempt.status,
+        finishReason: attempt.finishReason,
+        interruptionCount: attempt.interruptionCount || 0,
+        interruptions: attempt.interruptions || [],
+      } : null,
     });
   } catch (error) {
     console.error('Error in getStudentDetailReport:', error);
@@ -308,13 +383,25 @@ exports.getCodingSubmissionDetail = async (req, res) => {
     const submission = await prisma.submission.findUnique({
       where: { id: submissionId },
       include: {
-        user: { select: { id: true, name: true, email: true } },
+        user: { select: { id: true, name: true, email: true, usn: true, department: true } },
         problem: { select: { id: true, title: true, statement: true, difficulty: true, marks: true } },
       },
     });
 
     if (!submission) {
       return res.status(404).json({ error: 'Coding submission not found.' });
+    }
+
+    if (!submission.user && submission.userId) {
+      submission.user = await prisma.user.findUnique({
+        where: { id: submission.userId },
+        select: { id: true, name: true, email: true, usn: true, department: true },
+      });
+    }
+
+    if (submission.user) {
+      submission.user.name = formatStudentName(submission.user);
+      submission.user.usn = formatStudentUsn(submission.user);
     }
 
     return res.json({ submission });

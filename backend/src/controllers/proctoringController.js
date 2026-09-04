@@ -73,7 +73,6 @@ exports.exportReportsCSV = async (req, res) => {
     const headers = [
       'Student Name',
       'Student Email',
-      'Student USN',
       'Department',
       'Test Title',
       'Started At',
@@ -87,7 +86,6 @@ exports.exportReportsCSV = async (req, res) => {
     const rows = reports.map((r) => [
       `"${r.studentName}"`,
       `"${r.studentEmail}"`,
-      `"${r.studentUsn}"`,
       `"${r.studentDepartment}"`,
       `"${r.testTitle}"`,
       `"${r.startedAt ? new Date(r.startedAt).toLocaleString() : ''}"`,
