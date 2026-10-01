@@ -2,6 +2,14 @@ const prisma = require('../prismaClient');
 const { normalizeDifficulty, serializeProblem, toClientDifficulty } = require('../lib/problemHelpers');
 const { buildAssignmentReport } = require('../lib/testReportService');
 
+// A test can be started again after it ends. Only attempts/submissions made since the
+// current start count, so students get a fresh attempt each time the admin restarts it.
+function inCurrentRun(record, assignment, field = 'startedAt') {
+  if (!record) return false;
+  if (!assignment?.startsAt) return true;
+  return new Date(record[field]).getTime() >= new Date(assignment.startsAt).getTime();
+}
+
 function serializeAssignment(assignment, problems = [], attempt = null) {
   return {
     id: assignment.id,
@@ -35,6 +43,83 @@ async function closeExpiredAssignments() {
   });
 }
 
+async function notifyStudents({ type, title, message, assignmentId }) {
+  const students = await prisma.user.findMany({
+    where: {
+      role: 'USER',
+      loginCount: { gt: 0 },
+    },
+    select: { id: true },
+  });
+
+  if (students.length) {
+    await prisma.$transaction(
+      students.map((student) => prisma.notification.create({
+        data: {
+          userId: student.id,
+          type,
+          title,
+          message,
+          assignmentId,
+        },
+      })),
+    );
+  }
+
+  return students.length;
+}
+
+// The DB wrapper's updates are read-then-write, so activation runs one at a time
+// to avoid going live (and notifying students) twice for the same test.
+let activationInFlight = null;
+
+async function activateScheduledAssignments() {
+  if (activationInFlight) return activationInFlight;
+
+  activationInFlight = (async () => {
+    const now = new Date();
+    const due = await prisma.testAssignment.findMany({
+      where: {
+        status: 'SCHEDULED',
+        startsAt: { lte: now },
+      },
+    });
+
+    for (const assignment of due) {
+      // The whole window passed while the server was down: end it without telling students it started.
+      if (assignment.endsAt && new Date(assignment.endsAt) <= now) {
+        await prisma.testAssignment.update({
+          where: { id: assignment.id },
+          data: { status: 'ENDED' },
+        });
+        continue;
+      }
+
+      await prisma.testAssignment.update({
+        where: { id: assignment.id },
+        data: { status: 'LIVE' },
+      });
+      await notifyStudents({
+        type: 'TEST_STARTED',
+        title: `Test started: ${assignment.title}`,
+        message: `Your assigned coding test "${assignment.title}" is now live. The timer has started.`,
+        assignmentId: assignment.id,
+      });
+    }
+  })();
+
+  try {
+    await activationInFlight;
+  } finally {
+    activationInFlight = null;
+  }
+}
+
+async function refreshAssignmentStatuses() {
+  await activateScheduledAssignments();
+  await closeExpiredAssignments();
+}
+
 async function loadAssignmentsWithProblems(where = {}, options = {}) {
   const assignments = await prisma.testAssignment.findMany({
     where,
@@ -55,8 +140,10 @@ async function loadAssignmentsWithProblems(where = {}, options = {}) {
       orderBy: [{ startedAt: 'desc' }],
     })
     : [];
+  const assignmentById = new Map(assignments.map((assignment) => [assignment.id, assignment]));
   const attemptByAssignmentId = new Map();
   attempts.forEach((attempt) => {
+    if (!inCurrentRun(attempt, assignmentById.get(attempt.assignmentId))) return;
     if (!attemptByAssignmentId.has(attempt.assignmentId)) {
       attemptByAssignmentId.set(attempt.assignmentId, attempt);
     }
@@ -74,7 +161,7 @@ async function loadAssignmentsWithProblems(where = {}, options = {}) {
 
 exports.list = async (req, res) => {
   try {
-    await closeExpiredAssignments();
+    await refreshAssignmentStatuses();
     const isCandidate = req.user?.role !== 'ADMIN' && req.user?.role !== 'SETTER';
     const assignments = await loadAssignmentsWithProblems({}, { isCandidate });
     return res.json({ assignments });
@@ -86,13 +173,22 @@ exports.list = async (req, res) => {
 
 exports.active = async (req, res) => {
   try {
-    await closeExpiredAssignments();
+    await refreshAssignmentStatuses();
     const isCandidate = req.user?.role !== 'ADMIN' && req.user?.role !== 'SETTER';
     const assignments = await loadAssignmentsWithProblems(
       { status: 'LIVE' },
       req.user?.role === 'USER' ? { isCandidate, userId: req.user.id } : { isCandidate },
     );
-    return res.json({ assignment: assignments[0] || null, assignments });
+    const upcoming = await prisma.testAssignment.findMany({ where: { status: 'SCHEDULED' } });
+    const nextStartsAt = upcoming
+      .map((assignment) => new Date(assignment.startsAt).getTime())
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)[0];
+    return res.json({
+      assignment: assignments[0] || null,
+      assignments,
+      nextStartsAt: nextStartsAt ? new Date(nextStartsAt).toISOString() : null,
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'server error' });
@@ -143,7 +239,7 @@ exports.create = async (req, res) => {
 
 exports.start = async (req, res) => {
   try {
-    await closeExpiredAssignments();
+    await refreshAssignmentStatuses();
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
@@ -164,32 +260,17 @@ exports.start = async (req, res) => {
       },
     });
 
-    const students = await prisma.user.findMany({
-      where: {
-        role: 'USER',
-        loginCount: { gt: 0 },
-      },
-      select: { id: true },
+    const notifiedStudents = await notifyStudents({
+      type: 'TEST_STARTED',
+      title: `Test started: ${startedAssignment.title}`,
+      message: `Your assigned coding test "${startedAssignment.title}" is now live. The timer has started.`,
+      assignmentId: startedAssignment.id,
     });
-
-    if (students.length) {
-      await prisma.$transaction(
-        students.map((student) => prisma.notification.create({
-          data: {
-            userId: student.id,
-            type: 'TEST_STARTED',
-            title: `Test started: ${startedAssignment.title}`,
-            message: `Your assigned coding test "${startedAssignment.title}" is now live. The timer has started.`,
-            assignmentId: startedAssignment.id,
-          },
-        })),
-      );
-    }
 
     const [fullAssignment] = await loadAssignmentsWithProblems({ id: startedAssignment.id });
     return res.json({
       assignment: fullAssignment,
-      notifiedStudents: students.length,
+      notifiedStudents,
     });
   } catch (err) {
     console.error(err);
@@ -197,9 +278,128 @@ exports.start = async (req, res) => {
   }
 };
 
+exports.schedule = async (req, res) => {
+  try {
+    await refreshAssignmentStatuses();
+
+    const { id } = req.params;
+    const assignment = await prisma.testAssignment.findUnique({ where: { id } });
+    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment.problemIds?.length) {
+      return res.status(400).json({ error: 'assignment must contain at least one problem' });
+    }
+    if (assignment.status === 'LIVE') {
+      return res.status(400).json({ error: 'this test is already live' });
+    }
+
+    const startsAt = new Date(req.body?.startsAt);
+    if (Number.isNaN(startsAt.getTime())) {
+      return res.status(400).json({ error: 'valid start date and time required' });
+    }
+    if (startsAt.getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'start time must be in the future; use Start Now to begin immediately' });
+    }
+
+    let endsAt = new Date(startsAt.getTime() + (assignment.durationMinutes * 60 * 1000));
+    let { durationMinutes } = assignment;
+    if (req.body?.endsAt) {
+      endsAt = new Date(req.body.endsAt);
+      if (Number.isNaN(endsAt.getTime())) {
+        return res.status(400).json({ error: 'valid end date and time required' });
+      }
+      if (endsAt.getTime() <= startsAt.getTime()) {
+        return res.status(400).json({ error: 'end time must be after the start time' });
+      }
+      durationMinutes = Math.ceil((endsAt.getTime() - startsAt.getTime()) / 60000);
+    }
+
+    const scheduledAssignment = await prisma.testAssignment.update({
+      where: { id },
+      data: {
+        status: 'SCHEDULED',
+        startsAt,
+        endsAt,
+        durationMinutes,
+      },
+    });
+
+    const [fullAssignment] = await loadAssignmentsWithProblems({ id: scheduledAssignment.id });
+    return res.json({ assignment: fullAssignment });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+exports.unschedule = async (req, res) => {
+  try {
+    await refreshAssignmentStatuses();
+
+    const { id } = req.params;
+    const assignment = await prisma.testAssignment.findUnique({ where: { id } });
+    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (assignment.status !== 'SCHEDULED') {
+      return res.status(400).json({ error: 'only a scheduled test can be cancelled' });
+    }
+
+    const draftAssignment = await prisma.testAssignment.update({
+      where: { id },
+      data: {
+        status: 'DRAFT',
+        startsAt: null,
+        endsAt: null,
+      },
+    });
+
+    const [fullAssignment] = await loadAssignmentsWithProblems({ id: draftAssignment.id });
+    return res.json({ assignment: fullAssignment });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+// DELETE /api/tests/:id — removes a test and everything recorded for it
+// (attempts, submitted answers/scores, notifications, feedback). Live tests must be stopped first.
+exports.remove = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const assignment = await prisma.testAssignment.findUnique({ where: { id } });
+    if (!assignment) return res.status(404).json({ error: 'test not found' });
+    if (assignment.status === 'LIVE') {
+      return res.status(400).json({ error: 'stop the live test before deleting it' });
+    }
+
+    const where = { assignmentId: id };
+    const [attempts, submissions, notifications, feedback] = await Promise.all([
+      prisma.testAttempt.deleteMany({ where }),
+      prisma.assessmentSubmission.deleteMany({ where }),
+      prisma.notification.deleteMany({ where }),
+      prisma.testFeedback.deleteMany({ where }),
+    ]);
+    await prisma.testAssignment.delete({ where: { id } });
+
+    return res.json({
+      deleted: true,
+      removed: {
+        attempts: attempts.count,
+        submissions: submissions.count,
+        notifications: notifications.count,
+        feedback: feedback.count,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+exports.refreshAssignmentStatuses = refreshAssignmentStatuses;
+exports.inCurrentRun = inCurrentRun;
+
 exports.stop = async (req, res) => {
   try {
-    await closeExpiredAssignments();
+    await refreshAssignmentStatuses();
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
@@ -270,7 +470,8 @@ exports.startAttempt = async (req, res) => {
     const durationMs = (assignment.durationMinutes || 60) * 60 * 1000;
     const endsAt = assignment.endsAt ? new Date(assignment.endsAt).toISOString() : new Date(now.getTime() + durationMs).toISOString();
 
-    const existing = await getAttemptOrNull(id, req.user.id);
+    const latest = await getAttemptOrNull(id, req.user.id);
+    const existing = inCurrentRun(latest, assignment) ? latest : null;
     if (existing) {
       if (existing.status === 'IN_PROGRESS') {
         return res.json({ attempt: { ...existing, endsAt } });

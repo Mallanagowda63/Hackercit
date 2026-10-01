@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { spawn } from "node:child_process";
+import Babel from "@babel/standalone";
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
@@ -19,7 +20,26 @@ const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".pdf": "application/pdf",
+  ".svg": "image/svg+xml",
 };
+
+// The app is written in JSX. Compile it once here (and again only when the file changes)
+// so students' browsers don't download Babel and compile ~460 KB on every page load.
+const APP_SOURCE_PATH = join(rootDir, "hacker.jsx");
+let compiledApp = { mtimeMs: -1, code: "" };
+
+function getCompiledApp() {
+  const { mtimeMs } = statSync(APP_SOURCE_PATH);
+  if (mtimeMs !== compiledApp.mtimeMs) {
+    const source = readFileSync(APP_SOURCE_PATH, "utf8");
+    const { code } = Babel.transform(source, {
+      presets: [[Babel.availablePresets.react, { runtime: "classic" }]],
+      filename: "hacker.jsx",
+    });
+    compiledApp = { mtimeMs, code };
+  }
+  return compiledApp.code;
+}
 
 function sendJson(res, statusCode, payload) {
   if (res.headersSent) return;
@@ -137,6 +157,11 @@ async function proxyBackendRequest(req, res, requestUrl) {
 }
 
 startBackendServer();
+try {
+  getCompiledApp();
+} catch (err) {
+  console.error("Failed to compile hacker.jsx at startup:", err?.message || err);
+}
 process.on("SIGINT", () => {
   stopBackendServer();
   process.exit(0);
@@ -170,7 +195,7 @@ createServer(async (req, res) => {
       ok: true,
       service: "devorbit",
       executionProvider: "Judge0",
-      judge0Url: (process.env.JUDGE0_URL || "https://ce.judge0.com").replace(/\/+$/, ""),
+      judge0Url: (process.env.JUDGE0_URL || (process.env.JUDGE0_RAPIDAPI_KEY ? `https://${process.env.JUDGE0_RAPIDAPI_HOST || "judge0-ce.p.rapidapi.com"}` : "https://ce.judge0.com")).replace(/\/+$/, ""),
       host,
       port,
     });
@@ -184,12 +209,25 @@ createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/app.js") {
+    try {
+      const code = getCompiledApp();
+      res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" });
+      res.end(code);
+    } catch (err) {
+      console.error("Failed to compile hacker.jsx:", err?.message || err);
+      res.writeHead(500, { "Content-Type": "text/javascript; charset=utf-8" });
+      res.end(`document.body.innerHTML = ${JSON.stringify(`<pre style="color:#f87171;padding:24px">App failed to compile:\n${String(err?.message || err)}</pre>`)};`);
+    }
+    return;
+  }
+
   if (pathname.startsWith("/vendor/")) {
     let vendorPath = "";
     if (pathname === "/vendor/react.js") {
-      vendorPath = join(rootDir, "node_modules/react/umd/react.development.js");
+      vendorPath = join(rootDir, "node_modules/react/umd/react.production.min.js");
     } else if (pathname === "/vendor/react-dom.js") {
-      vendorPath = join(rootDir, "node_modules/react-dom/umd/react-dom.development.js");
+      vendorPath = join(rootDir, "node_modules/react-dom/umd/react-dom.production.min.js");
     } else if (pathname === "/vendor/babel.js") {
       vendorPath = join(rootDir, "node_modules/@babel/standalone/babel.min.js");
     }

@@ -21,6 +21,9 @@ const BACKEND_API_TARGET = USES_SAME_ORIGIN_BACKEND
   : (BACKEND_API_BASE || "backend API (not configured)");
 const BACKEND_API_CONFIGURATION_ERROR = 'Backend API is not configured for this deployment. Set <meta name="codearena-backend-api-base" content="https://your-backend.example.com"> in index.html, or use content="same-origin" only when this host proxies /api requests to your backend.';
 const AUTH_SESSION_STORAGE_KEY = "codearena.authSession";
+// Admins sign in from /admin; the public login popup is student-only.
+const IS_ADMIN_ENTRY = /^\/admin\/?$/i.test(window.location.pathname);
+const DEFAULT_AUTH_ROLE = IS_ADMIN_ENTRY ? "admin" : "student";
 const EMPTY_CURRENT_USER = {
   id: "",
   role: "",
@@ -265,6 +268,28 @@ function createAuthHeaders(token, hasBody = false) {
     ...(hasBody ? { "Content-Type": "application/json" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+}
+
+// Combines <input type="date"> and <input type="time"> values into a Date in the admin's local time zone.
+function buildScheduledStart(dateValue, timeValue) {
+  if (!dateValue || !timeValue) return null;
+  const startsAt = new Date(`${dateValue}T${timeValue}`);
+  return Number.isNaN(startsAt.getTime()) ? null : startsAt;
+}
+
+// Validates a schedule window; returns { startsAt, endsAt } or { error }.
+function resolveScheduleWindow(startDate, startTime, endDate, endTime) {
+  const startsAt = buildScheduledStart(startDate, startTime);
+  if (!startsAt) return { error: "Pick both a start date and a start time to schedule the test." };
+  if (startsAt.getTime() <= Date.now()) {
+    return { error: "The start time must be in the future. Use Start Now to begin immediately." };
+  }
+
+  if (!endDate && !endTime) return { startsAt, endsAt: null };
+  const endsAt = buildScheduledStart(endDate || startDate, endTime);
+  if (!endsAt) return { error: "Pick an end time (and end date if it is a different day)." };
+  if (endsAt.getTime() <= startsAt.getTime()) return { error: "The end time must be after the start time." };
+  return { startsAt, endsAt };
 }
 
 function formatPortalDate(value) {
@@ -772,6 +797,13 @@ function CodingPlatform() {
   const [adminSyncingProblems, setAdminSyncingProblems] = useState(false);
   const [adminCreatingTest, setAdminCreatingTest] = useState(false);
   const [adminStartingTest, setAdminStartingTest] = useState(false);
+  const [adminSchedulingTest, setAdminSchedulingTest] = useState(false);
+  const [adminScheduleDate, setAdminScheduleDate] = useState("");
+  const [adminScheduleTime, setAdminScheduleTime] = useState("");
+  const [adminScheduleEndDate, setAdminScheduleEndDate] = useState("");
+  const [adminScheduleEndTime, setAdminScheduleEndTime] = useState("");
+  const [nextScheduledStartAt, setNextScheduledStartAt] = useState(null);
+  const [portalRefreshTick, setPortalRefreshTick] = useState(0);
   const [adminStoppingTest, setAdminStoppingTest] = useState(false);
   const [adminCurrentTest, setAdminCurrentTest] = useState(defaultAdminTest);
   const [previousTests, setPreviousTests]     = useState(defaultPreviousTests);
@@ -783,7 +815,10 @@ function CodingPlatform() {
   const [adminTab, setAdminTab]               = useState("overview");
   const [adminTimerSeconds, setAdminTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [adminWarning, setAdminWarning]       = useState("");
-  const [solutionsVisible, setSolutionsVisible] = useState(false);
+  const [attendanceTableOpen, setAttendanceTableOpen] = useState(false);
+  const [pendingReportScroll, setPendingReportScroll] = useState(false);
+  const [deletingTestId, setDeletingTestId] = useState(null);
+  const adminReportRef = useRef(null);
   const [adminTestReport, setAdminTestReport] = useState(null);
   const [questionUploadForm, setQuestionUploadForm] = useState(createDefaultQuestionUploadForm);
   const [questionUploading, setQuestionUploading] = useState(false);
@@ -798,6 +833,13 @@ function CodingPlatform() {
   const [candidateCodingAnswers, setCandidateCodingAnswers] = useState({});
   const [submittingAssessment, setSubmittingAssessment] = useState(false);
   const [assessmentResult, setAssessmentResult] = useState(null);
+  // Students see a thank-you screen after a test; scores stay in the admin reports only.
+  const [thankYouTest, setThankYouTest] = useState(null);
+  const [feedbackRating, setFeedbackRating] = useState(0);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
   const [adminPreviewOpen, setAdminPreviewOpen] = useState(false);
   const [adminPreviewActiveIdx, setAdminPreviewActiveIdx] = useState(0);
 
@@ -889,7 +931,10 @@ function CodingPlatform() {
   const [adminCreateForm, setAdminCreateForm] = useState({
     title: "Fresh Challenge",
     level: "Hard",
-    date: "24/03/2026",
+    scheduleDate: "",
+    scheduleTime: "",
+    scheduleEndDate: "",
+    scheduleEndTime: "",
     duration: "60",
     questions: defaultAdminProblems.map((problem) => problem.dbId || problem.id),
   });
@@ -920,6 +965,8 @@ function CodingPlatform() {
   const [contestTimerSeconds, setContestTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [attemptedProblems, setAttemptedProblems] = useState(new Set());
   const [contestSecurityLocked, setContestSecurityLocked] = useState(false);
+  // True while a student is in a test but not yet in fullscreen (e.g. the camera prompt closed it).
+  const [contestNeedsFullscreen, setContestNeedsFullscreen] = useState(false);
   const [contestInstructionsOpen, setContestInstructionsOpen] = useState(false);
   const [contestInstructionsAccepted, setContestInstructionsAccepted] = useState(false);
   const [contestCameraStatus, setContestCameraStatus] = useState("idle");
@@ -1007,7 +1054,7 @@ function CodingPlatform() {
         setCurrentUser(EMPTY_CURRENT_USER);
         setUserRole(null);
         setAuthMode("login");
-        setAuthRole("student");
+        setAuthRole(DEFAULT_AUTH_ROLE);
         setAuthModalOpen(true);
         throw new Error("Please log in to submit your code.");
       }
@@ -1169,8 +1216,10 @@ function CodingPlatform() {
         || defaultAssignment
         || availableLiveAssignments[0]
         || null;
+      setNextScheduledStartAt(assignmentData.nextStartsAt || null);
       setActiveAssignment(assignment);
-      if (assignment && (assignment.status === "LIVE" || assignment.status === "live" || assignment.active) && !contestEntered) {
+      const assignmentAlreadyAttempted = Boolean(assignment?.attempt && assignment.attempt.status !== "IN_PROGRESS");
+      if (assignment && (assignment.status === "LIVE" || assignment.status === "live" || assignment.active) && !contestEntered && !assignmentAlreadyAttempted) {
         setShowLiveTestPopup(true);
       }
       setActiveAssignments(availableLiveAssignments);
@@ -1235,7 +1284,14 @@ function CodingPlatform() {
   useEffect(() => {
     try {
       const rawSession = window.localStorage?.getItem(AUTH_SESSION_STORAGE_KEY);
-      if (!rawSession) return;
+      if (!rawSession) {
+        if (IS_ADMIN_ENTRY) {
+          setAuthMode("login");
+          setAuthRole("admin");
+          setAuthModalOpen(true);
+        }
+        return;
+      }
 
       const session = JSON.parse(rawSession);
       const savedUser = session?.user;
@@ -1327,6 +1383,11 @@ function CodingPlatform() {
       return undefined;
     }
 
+    if (adminCurrentTest.status === "SCHEDULED") {
+      setAdminTimerSeconds((adminCurrentTest.duration || 60) * 60);
+      return undefined;
+    }
+
     if (!adminCurrentTest.endsAt) {
       setAdminTimerSeconds((adminCurrentTest.duration || 60) * 60);
       return undefined;
@@ -1341,6 +1402,12 @@ function CodingPlatform() {
     const countdown = setInterval(syncAdminTimer, 1000);
     return () => clearInterval(countdown);
   }, [adminCurrentTest]);
+
+  useEffect(() => {
+    if (!pendingReportScroll || !adminTestReport) return;
+    adminReportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setPendingReportScroll(false);
+  }, [pendingReportScroll, adminTestReport]);
 
   useEffect(() => {
     if (view !== "admin" || !authToken || !adminCurrentTest?.id || adminCurrentTest.status !== "ENDED") {
@@ -1466,8 +1533,10 @@ function CodingPlatform() {
     }
 
     let ending = false;
+    let armed = Boolean(document.fullscreenElement) && !document.hidden;
+    setContestNeedsFullscreen(!armed);
     const endForSecurity = async (reason) => {
-      if (ending) return;
+      if (ending || !armed) return;
       ending = true;
       if (authToken && currentUser.id && activeContestAssignment?.id) {
         try {
@@ -1483,6 +1552,17 @@ function CodingPlatform() {
     const ensureContestFocus = () => {
       const hidden = document.hidden;
       const fullscreenActive = Boolean(document.fullscreenElement);
+
+      if (!armed) {
+        if (fullscreenActive && !hidden) {
+          armed = true;
+          setContestNeedsFullscreen(false);
+        } else {
+          setContestNeedsFullscreen(true);
+        }
+        return;
+      }
+
       const shouldLock = hidden || !fullscreenActive;
 
       setContestSecurityLocked(shouldLock);
@@ -1495,6 +1575,7 @@ function CodingPlatform() {
     };
 
     const handleBlur = () => {
+      if (!armed) return;
       setContestSecurityLocked(true);
       endForSecurity("Ended because you switched away from the test window.");
     };
@@ -1510,7 +1591,7 @@ function CodingPlatform() {
         return;
       }
 
-      if (key === "Escape" || key === "F11" || key === "Meta" || key === "OS") {
+      if (armed && (key === "Escape" || key === "F11" || key === "Meta" || key === "OS")) {
         e.preventDefault();
         endForSecurity(`Ended because restricted key "${key}" was pressed.`);
       }
@@ -1541,6 +1622,7 @@ function CodingPlatform() {
       window.removeEventListener("keydown", handleContestKeyDown, true);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", ensureContestFocus);
+      setContestNeedsFullscreen(false);
     };
   }, [contestEntered]);
 
@@ -1584,7 +1666,16 @@ function CodingPlatform() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [authToken, currentUser.id, currentUser.role]);
+  }, [authToken, currentUser.id, currentUser.role, portalRefreshTick]);
+
+  // Reload the moment a scheduled test is due, instead of waiting for the next poll.
+  useEffect(() => {
+    if (!nextScheduledStartAt) return undefined;
+    const delay = new Date(nextScheduledStartAt).getTime() - Date.now() + 1500;
+    if (!Number.isFinite(delay) || delay > 24 * 60 * 60 * 1000) return undefined;
+    const timer = setTimeout(() => setPortalRefreshTick((tick) => tick + 1), Math.max(0, delay));
+    return () => clearTimeout(timer);
+  }, [nextScheduledStartAt]);
 
   const openProblem = (p, navigationSource = "catalog") => {
     setSelectedProblem(p);
@@ -1611,6 +1702,40 @@ function CodingPlatform() {
     setLeaderboardScope(scope);
     setLeaderboardPage(1);
     setView("leaderboard");
+  };
+
+  const showThankYouScreen = (test) => {
+    setThankYouTest(test || { id: null, title: "Assessment" });
+    setFeedbackRating(0);
+    setFeedbackComment("");
+    setFeedbackSent(false);
+    setFeedbackError("");
+    setView("thankYou");
+  };
+
+  const submitTestFeedback = async () => {
+    if (!feedbackRating) {
+      setFeedbackError("Tap an emoji to rate the test first.");
+      return;
+    }
+    if (!thankYouTest?.id) {
+      setFeedbackSent(true);
+      return;
+    }
+
+    setFeedbackSubmitting(true);
+    setFeedbackError("");
+    try {
+      await performApiRequest(`/api/tests/${thankYouTest.id}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ rating: feedbackRating, comment: feedbackComment }),
+      });
+      setFeedbackSent(true);
+    } catch (error) {
+      setFeedbackError(error.message || "Could not send feedback. Please try again.");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
   };
 
   const openContest = () => {
@@ -1669,6 +1794,13 @@ function CodingPlatform() {
       } catch {}
     }
     setContestResult(buildContestResult(reason, sessionProgress));
+    const finishedTest = activeContestAssignment?.id
+      ? { id: activeContestAssignment.id, title: activeContestAssignment.title || "Assessment" }
+      : null;
+    if (activeContestAssignment?.id) {
+      setLiveTestPopupDismissedId(activeContestAssignment.id);
+    }
+    setShowLiveTestPopup(false);
     setContestEntered(false);
     setContestSecurityLocked(false);
     setContestInstructionsOpen(false);
@@ -1682,7 +1814,7 @@ function CodingPlatform() {
     if (document.fullscreenElement && document.exitFullscreen) {
       document.exitFullscreen().catch(() => {});
     }
-    setView("contestResult");
+    showThankYouScreen(finishedTest);
   };
 
     const goBackFromAdmin = () => {
@@ -1696,6 +1828,29 @@ function CodingPlatform() {
       return;
     }
     setView(problemNavigationSource === "contest" ? "contest" : "list");
+  };
+
+  const renderFullscreenGate = () => {
+    if (!contestEntered || !contestNeedsFullscreen) return null;
+    return (
+      <div style={{ position:"fixed", inset:0, zIndex:100000, background:"rgba(5,6,12,0.94)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+        <div style={{ width:"min(460px, 100%)", background:"#11111b", border:"1px solid #2b2b45", borderRadius:20, padding:"28px 24px", textAlign:"center" }}>
+          <div style={{ fontSize:44 }}>🖥️</div>
+          <h2 style={{ color:"#f5f6ff", fontSize:22, margin:"12px 0 8px" }}>Continue your test in fullscreen</h2>
+          <p style={{ color:"#a9aed0", fontSize:14, lineHeight:1.6, margin:"0 0 20px" }}>
+            The test runs in fullscreen mode. Your timer is already running.
+            Once you're in fullscreen, leaving it or switching windows will end the test.
+          </p>
+          <button
+            type="button"
+            onClick={() => { requestContestFullscreen(); }}
+            style={{ ...S.btn("submit"), width:"100%", padding:"12px 20px" }}
+          >
+            Enter Fullscreen
+          </button>
+        </div>
+      </div>
+    );
   };
 
   const requestContestFullscreen = async () => {
@@ -1801,7 +1956,9 @@ function CodingPlatform() {
     setContestEntered(true);
     setContestSecurityLocked(false);
     if (!contestSessionEndsAt) {
-      setContestSessionEndsAt(new Date(Date.now() + ((activeContestAssignment?.duration || adminCurrentTest.duration || 60) * 60 * 1000)).toISOString());
+      const durationEnd = Date.now() + ((activeContestAssignment?.duration || adminCurrentTest.duration || 60) * 60 * 1000);
+      const testEnd = activeContestAssignment?.endsAt ? new Date(activeContestAssignment.endsAt).getTime() : NaN;
+      setContestSessionEndsAt(new Date(Number.isFinite(testEnd) ? Math.min(durationEnd, testEnd) : durationEnd).toISOString());
     }
     setContestSessionProgress({});
     setContestResult(null);
@@ -1849,7 +2006,7 @@ function CodingPlatform() {
   const openAuthFlow = () => {
     setAuthModalOpen(true);
     setAuthMode("");
-    setAuthRole("");
+    setAuthRole(DEFAULT_AUTH_ROLE);
     setAuthName("");
     setAuthUsn("");
     setAuthDepartment("");
@@ -1874,18 +2031,7 @@ function CodingPlatform() {
 
   const chooseAuthMode = (mode) => {
     setAuthMode(mode);
-    setAuthRole("");
-    setAuthName("");
-    setAuthUsn("");
-    setAuthDepartment("");
-    setAuthEmail("");
-    setAuthPassword("");
-    setAuthError("");
-    setAuthPoliciesAccepted(false);
-  };
-
-  const chooseAuthRole = (role) => {
-    setAuthRole(role);
+    setAuthRole(DEFAULT_AUTH_ROLE);
     setAuthName("");
     setAuthUsn("");
     setAuthDepartment("");
@@ -2013,7 +2159,6 @@ function CodingPlatform() {
     setParticipantsCount(defaultActiveUsers.length);
     setAdminTab("overview");
     setAdminWarning("");
-    setSolutionsVisible(false);
     setAdminExecution(null);
     setQuestionUploadForm(createDefaultQuestionUploadForm());
     setQuestionUploading(false);
@@ -2367,12 +2512,21 @@ function CodingPlatform() {
     });
   };
 
-  const handleCreateTest = async () => {
+  const handleCreateTest = async (withSchedule = false) => {
     const duration = Math.max(1, Number(adminCreateForm.duration) || 60);
     if (!adminCreateForm.questions.length) {
       setPortalError("Select at least one database problem for the test.");
       return;
     }
+
+    const scheduleWindow = withSchedule
+      ? resolveScheduleWindow(adminCreateForm.scheduleDate, adminCreateForm.scheduleTime, adminCreateForm.scheduleEndDate, adminCreateForm.scheduleEndTime)
+      : null;
+    if (scheduleWindow?.error) {
+      setPortalError(scheduleWindow.error);
+      return;
+    }
+    const scheduledStart = scheduleWindow?.startsAt || null;
 
     setAdminCreatingTest(true);
     setPortalError("");
@@ -2388,12 +2542,23 @@ function CodingPlatform() {
         }),
       });
 
-      const createdAssignment = mapAssignmentRecord(data.assignment);
+      let createdAssignment = mapAssignmentRecord(data.assignment);
+      if (scheduledStart) {
+        const scheduled = await performApiRequest(`/api/tests/${createdAssignment.id}/schedule`, {
+          method: "POST",
+          body: JSON.stringify({
+            startsAt: scheduledStart.toISOString(),
+            endsAt: scheduleWindow.endsAt ? scheduleWindow.endsAt.toISOString() : undefined,
+          }),
+        });
+        createdAssignment = mapAssignmentRecord(scheduled.assignment);
+      }
       setAdminCurrentTest(createdAssignment);
       setAdminTimerSeconds(duration * 60);
       setAdminSubmissionProblemId(createdAssignment?.problems?.[0]?.id || "");
-      setSolutionsVisible(false);
-      setPortalMessage(`Draft test "${createdAssignment.title}" saved. Start it when you're ready to notify students.`);
+      setPortalMessage(scheduledStart
+        ? `Test "${createdAssignment.title}" scheduled for ${formatPortalDate(scheduledStart)}. It will start automatically and notify students.`
+        : `Draft test "${createdAssignment.title}" saved. Start it now or schedule a date and time.`);
       await loadAdminPortalData(createdAssignment.id);
     } catch (error) {
       setPortalError(error.message || "Unable to create the test.");
@@ -2426,6 +2591,175 @@ function CodingPlatform() {
       setPortalError(error.message || "Unable to start the test.");
     } finally {
       setAdminStartingTest(false);
+    }
+  };
+
+  const handleScheduleAssignedTest = async () => {
+    if (!adminCurrentTest.id) {
+      setPortalError("Create a draft test first, then schedule it.");
+      return;
+    }
+
+    const scheduleWindow = resolveScheduleWindow(adminScheduleDate, adminScheduleTime, adminScheduleEndDate, adminScheduleEndTime);
+    if (scheduleWindow.error) {
+      setPortalError(scheduleWindow.error);
+      return;
+    }
+    const scheduledStart = scheduleWindow.startsAt;
+
+    setAdminSchedulingTest(true);
+    setPortalError("");
+
+    try {
+      const data = await performApiRequest(`/api/tests/${adminCurrentTest.id}/schedule`, {
+        method: "POST",
+        body: JSON.stringify({
+          startsAt: scheduledStart.toISOString(),
+          endsAt: scheduleWindow.endsAt ? scheduleWindow.endsAt.toISOString() : undefined,
+        }),
+      });
+
+      const scheduledAssignment = mapAssignmentRecord(data.assignment);
+      setAdminCurrentTest(scheduledAssignment);
+      setAdminScheduleDate("");
+      setAdminScheduleTime("");
+      setAdminScheduleEndDate("");
+      setAdminScheduleEndTime("");
+      setPortalMessage(`Test scheduled for ${formatPortalDate(scheduledStart)}. It will start automatically and notify students.`);
+      await loadAdminPortalData(scheduledAssignment.id);
+    } catch (error) {
+      setPortalError(error.message || "Unable to schedule the test.");
+    } finally {
+      setAdminSchedulingTest(false);
+    }
+  };
+
+  const handleUnscheduleAssignedTest = async () => {
+    if (!adminCurrentTest.id || adminCurrentTest.status !== "SCHEDULED") return;
+
+    setAdminSchedulingTest(true);
+    setPortalError("");
+
+    try {
+      const data = await performApiRequest(`/api/tests/${adminCurrentTest.id}/unschedule`, {
+        method: "POST",
+      });
+
+      const draftAssignment = mapAssignmentRecord(data.assignment);
+      setAdminCurrentTest(draftAssignment);
+      setPortalMessage("Schedule cancelled. The test is back to draft.");
+      await loadAdminPortalData(draftAssignment.id);
+    } catch (error) {
+      setPortalError(error.message || "Unable to cancel the schedule.");
+    } finally {
+      setAdminSchedulingTest(false);
+    }
+  };
+
+  const downloadProctoringReport = async () => {
+    try {
+      const response = await fetch(buildBackendApiUrl("/api/admin/reports/proctoring/export"), {
+        headers: createAuthHeaders(authToken),
+      });
+      if (!response.ok) {
+        const data = await readJsonSafely(response);
+        throw new Error(data.error || "Unable to export the report.");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `proctoring-malpractice-report-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setPortalError(error.message || "Unable to export the report.");
+    }
+  };
+
+  const downloadAdminTestReport = () => {
+    if (!adminTestReport) return;
+
+    const csvCell = (value) => {
+      const text = value === null || value === undefined ? "" : String(value);
+      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    const formatTime = (value) => (value ? new Date(value).toLocaleString("en-IN") : "");
+
+    const headers = ["Name", "Email", "USN", "Department", "Attendance", "Score", "Solved", "Time Used", "Submissions", "Interruptions", "Result", "Finish Reason", "Started At", "Finished At"];
+    const rows = (adminTestReport.students || []).map((student) => [
+      student.name,
+      student.email,
+      student.usn,
+      student.department,
+      student.attendance,
+      student.score,
+      student.solved,
+      formatDurationFromMs(student.timeSpentMs),
+      student.submissionCount,
+      student.interruptionCount,
+      student.attemptStatus,
+      student.finishReason,
+      formatTime(student.startedAt),
+      formatTime(student.finishedAt),
+    ]);
+
+    const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+    // The BOM makes Excel open the file as UTF-8 so names keep their characters.
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeTitle = String(adminCurrentTest.title || "test").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "test";
+    link.href = url;
+    link.download = `${safeTitle}-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const openTestFromQueue = (test) => {
+    setAdminCurrentTest(test);
+    setAdminSubmissionProblemId(test?.problems?.[0]?.id || "");
+    setAdminExecution(null);
+
+    if (test.status === "ENDED") {
+      setAttendanceTableOpen(true);
+      setPendingReportScroll(true);
+    } else {
+      setPortalMessage(`"${test.title || "This test"}" is ${String(test.status || "DRAFT").toLowerCase()}. Its report will be available after the test ends.`);
+    }
+  };
+
+  const handleDeleteTest = async (test) => {
+    if (!test?.id) return;
+    if (test.status === "LIVE") {
+      setPortalError("Stop the live test before deleting it.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete "${test.title || "this test"}"?\n\nThis permanently removes the test and all of its results, attempts, notifications and feedback. This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setDeletingTestId(test.id);
+    setPortalError("");
+    try {
+      await performApiRequest(`/api/tests/${test.id}`, { method: "DELETE" });
+      const deletedCurrent = sameValue(adminCurrentTest?.id, test.id);
+      if (deletedCurrent) {
+        setAdminTestReport(null);
+      }
+      setPortalMessage(`Test "${test.title || "Untitled"}" deleted.`);
+      await loadAdminPortalData(deletedCurrent ? null : adminCurrentTest?.id);
+    } catch (error) {
+      setPortalError(error.message || "Unable to delete the test.");
+    } finally {
+      setDeletingTestId(null);
     }
   };
 
@@ -2478,7 +2812,7 @@ function CodingPlatform() {
           setCurrentUser(EMPTY_CURRENT_USER);
           setUserRole(null);
           setAuthMode("login");
-          setAuthRole("student");
+          setAuthRole(DEFAULT_AUTH_ROLE);
           setAuthModalOpen(true);
           setErrorBanner([{ caseNum: 1, message: "Please log in or sign up to submit your official code." }]);
           setSubmitting(false);
@@ -3302,13 +3636,13 @@ function CodingPlatform() {
       textTransform:"uppercase",
       fontFamily:"'Space Grotesk',sans-serif"
     }),
-    adminShell: { maxWidth:1240, margin:"0 auto", width:"100%", boxSizing:"border-box", padding:isPhone ? "18px 14px 32px" : `28px ${pageGutter}px 40px`, display:"grid", gap:isPhone ? 16 : 22 },
+    adminShell: { maxWidth:1440, margin:"0 auto", width:"100%", boxSizing:"border-box", padding:isPhone ? "18px 14px 32px" : `28px ${pageGutter}px 40px`, display:"grid", gap:isPhone ? 16 : 22 },
     adminCardGrid: { display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 150 : 220}px, 1fr))`, gap:isPhone ? 12 : 16 },
     adminCard: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, padding:"18px 18px 20px", boxShadow:ADMIN_THEME.shadowSoft },
     adminSectionTitle: { fontFamily:"'Space Grotesk',sans-serif", fontSize:12, fontWeight:700, color:ADMIN_THEME.textSecondary, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 },
     adminGridTwo: { display:"grid", gridTemplateColumns:isCompact ? compactGrid : "1.35fr 0.95fr", gap:18, alignItems:"start" },
     adminTableWrap: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, overflowX:"auto", boxShadow:ADMIN_THEME.shadowSoft },
-    adminTableHead: { padding:"14px 16px", textAlign:"left", fontSize:11, color:ADMIN_THEME.textSecondary, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"'Space Grotesk',sans-serif", background:ADMIN_THEME.hoverBackground },
+    adminTableHead: { padding:"14px 16px", textAlign:"left", whiteSpace:"nowrap", fontSize:11, color:ADMIN_THEME.textSecondary, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"'Space Grotesk',sans-serif", background:ADMIN_THEME.hoverBackground },
     adminTableCell: { padding:"14px 16px", borderTop:`1px solid ${ADMIN_THEME.divider}`, fontSize:14, color:ADMIN_THEME.text },
     adminSubCard: { background:ADMIN_THEME.hoverBackground, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:14, padding:"14px" },
   };
@@ -3330,8 +3664,16 @@ function CodingPlatform() {
     ? ADMIN_THEME.success
     : adminCurrentStatus === "ENDED"
       ? ADMIN_THEME.error
-      : ADMIN_THEME.info;
+      : adminCurrentStatus === "SCHEDULED"
+        ? ADMIN_THEME.warning
+        : ADMIN_THEME.info;
   const liveAdminAssignments = adminAssignments.filter((assignment) => assignment.status === "LIVE");
+  const createFormWindowMinutes = (() => {
+    const start = buildScheduledStart(adminCreateForm.scheduleDate, adminCreateForm.scheduleTime);
+    const end = buildScheduledStart(adminCreateForm.scheduleEndDate || adminCreateForm.scheduleDate, adminCreateForm.scheduleEndTime);
+    if (!start || !end || end <= start) return 0;
+    return Math.ceil((end - start) / 60000);
+  })();
   const selectableAdminAssignments = adminAssignments.length ? adminAssignments : [adminCurrentTest].filter(Boolean);
   const loggedInRegisteredStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) > 0);
   const neverLoggedInStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) === 0);
@@ -4186,6 +4528,7 @@ function CodingPlatform() {
   if (view === "home") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -4233,9 +4576,11 @@ function CodingPlatform() {
           <div style={S.modalBackdrop} onClick={closeAuthFlow}>
             <div style={S.modalCard} onClick={(e) => e.stopPropagation()}>
               <div style={{ color:"#4fd1c5", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:12 }}>Access Flow</div>
-              <h1 style={{ ...S.problemTitle, fontSize:38, marginBottom:12 }}>Enter the portal.</h1>
+              <h1 style={{ ...S.problemTitle, fontSize:38, marginBottom:12 }}>{IS_ADMIN_ENTRY ? "Admin portal." : "Enter the portal."}</h1>
               <p style={{ ...S.problemBody, marginBottom:24 }}>
-                Login uses only mail ID and password. Sign up collects the extra details needed for student or admin access.
+                {IS_ADMIN_ENTRY
+                  ? "Sign in with the admin mail ID and password to manage tests and participants."
+                  : "Login uses only mail ID and password. Sign up collects the extra details needed for student access."}
               </p>
 
               <div style={{ display:"grid", gap:18 }}>
@@ -4252,22 +4597,6 @@ function CodingPlatform() {
                     </button>
                   </div>
                 </div>
-
-                {authMode && (
-                  <div>
-                    <label style={S.fieldLabel}>Choose Role</label>
-                    <div style={S.authChoiceGrid}>
-                      <button onClick={() => chooseAuthRole("student")} style={S.authChoiceButton(authRole === "student", "student")}>
-                        <div style={{ fontWeight:700, marginBottom:4 }}>Student</div>
-                        <div style={{ color:"#8f93b4", fontSize:12 }}>Coding tests and leaderboard access</div>
-                      </button>
-                      <button onClick={() => chooseAuthRole("admin")} style={S.authChoiceButton(authRole === "admin", "admin")}>
-                        <div style={{ fontWeight:700, marginBottom:4 }}>Admin</div>
-                        <div style={{ color:"#8f93b4", fontSize:12 }}>Manage tests and participants</div>
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 {authMode && authRole && (
                   <div style={{ display:"grid", gap:18 }}>
@@ -4383,12 +4712,9 @@ function CodingPlatform() {
         }),
       });
 
-      if (data.result) {
-        setAssessmentResult(data.result);
-      }
       setFinalSubmitConfirmOpen(false);
       setContestEntered(false);
-      setPortalMessage("Assessment submitted successfully!");
+      showThankYouScreen({ id: testId, title: activeContestAssignment?.title || adminCurrentTest?.title || "Assessment" });
     } catch (err) {
       setPortalError(err.message || "Failed to submit assessment.");
     } finally {
@@ -5051,11 +5377,12 @@ function CodingPlatform() {
           </div>
 
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <a
-              href="/api/admin/reports/proctoring/export"
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={downloadProctoringReport}
               style={{
+                border: "none",
+                cursor: "pointer",
                 background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
                 color: "#fff",
                 padding: "8px 16px",
@@ -5070,7 +5397,7 @@ function CodingPlatform() {
               }}
             >
               📥 Export CSV Report
-            </a>
+            </button>
           </div>
         </div>
 
@@ -5496,95 +5823,22 @@ function CodingPlatform() {
 
 
 
-  const renderLeftStatsPanel = () => {
-    const totalTestsCount = adminAssignments.length || selectableAdminAssignments.length || 1;
-    const activeStudentsCount = registeredStudents.length || participantsCount || 42;
-    const completedTestsCount = adminAssignments.filter((a) => a.status === "COMPLETED").length;
-    const pendingDraftsCount = adminAssignments.filter((a) => a.status === "DRAFT" || !a.status).length;
-
-    return (
-      <div style={{ display: "grid", gap: 14 }}>
-        <div style={{ ...S.adminCard, padding: "16px" }}>
-          <div style={{ ...S.adminSectionTitle, marginBottom: 12 }}>⚡ QUICK STATS</div>
-
-          <div style={{ display: "grid", gap: 10 }}>
-            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
-              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>TOTAL ASSESSMENTS</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: "#38bdf8", marginTop: 2 }}>{totalTestsCount}</div>
-            </div>
-
-            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
-              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>ACTIVE CANDIDATES</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: "#4ade80", marginTop: 2 }}>{activeStudentsCount}</div>
-            </div>
-
-            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
-              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>COMPLETED ROUNDS</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: "#a78bfa", marginTop: 2 }}>{completedTestsCount}</div>
-            </div>
-
-            <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px" }}>
-              <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700 }}>PENDING DRAFTS</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: "#facc15", marginTop: 2 }}>{pendingDraftsCount}</div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ ...S.adminCard, padding: "16px" }}>
-          <div style={{ ...S.adminSectionTitle, marginBottom: 10 }}>🖥 SYSTEM HEALTH</div>
-          <div style={{ display: "grid", gap: 8, fontSize: 12, color: "#cbd5e1" }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span>Backend API:</span>
-              <span style={{ color: "#4ade80", fontWeight: 700 }}>● Online</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span>Execution Engine:</span>
-              <span style={{ color: "#4ade80", fontWeight: 700 }}>● Judge0 Ready</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span>Database:</span>
-              <span style={{ color: "#38bdf8", fontWeight: 700 }}>● Connected</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderRightActivityPanel = () => {
-    const activities = [
-      { id: "act_1", icon: "📥", text: "New MCQ Question added", time: "Just now" },
-      { id: "act_2", icon: "📝", text: `Assessment "${adminCurrentTest.title}" updated`, time: "5 mins ago" },
-      { id: "act_3", icon: "👤", text: "Student submission evaluated", time: "12 mins ago" },
-      { id: "act_4", icon: "🎓", text: "New student candidate registered", time: "1 hr ago" },
+  const renderOverviewStats = () => {
+    const stats = [
+      { label: "Total Assessments", value: adminAssignments.length, color: "#38bdf8" },
+      { label: "Registered Students", value: registeredStudents.length || participantsCount || 0, color: "#4ade80" },
+      { label: "Live Now", value: liveAdminAssignments.length, color: "#f472b6" },
+      { label: "Pending Drafts", value: adminAssignments.filter((a) => a.status === "DRAFT" || !a.status).length, color: "#facc15" },
     ];
 
     return (
-      <div style={{ display: "grid", gap: 14 }}>
-        <div style={{ ...S.adminCard, padding: "16px" }}>
-          <div style={{ ...S.adminSectionTitle, marginBottom: 12 }}>🔔 RECENT ACTIVITY</div>
-
-          <div style={{ display: "grid", gap: 10 }}>
-            {activities.map((act) => (
-              <div key={act.id} style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "10px 12px", display: "flex", gap: 10, alignItems: "flex-start" }}>
-                <span style={{ fontSize: 16 }}>{act.icon}</span>
-                <div>
-                  <div style={{ color: "#f8fafc", fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>{act.text}</div>
-                  <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 2 }}>{act.time}</div>
-                </div>
-              </div>
-            ))}
+      <div style={S.adminCardGrid}>
+        {stats.map((stat) => (
+          <div key={stat.label} style={{ ...S.adminCard, padding: "16px 18px" }}>
+            <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{stat.label}</div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: stat.color, marginTop: 6, lineHeight: 1 }}>{stat.value}</div>
           </div>
-        </div>
-
-        <div style={{ ...S.adminCard, padding: "16px", background: "linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.05))", border: "1px solid rgba(139, 92, 246, 0.3)" }}>
-          <div style={{ color: "#c4b5fd", fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
-            💡 QUICK TIP
-          </div>
-          <div style={{ color: "#e2e8f0", fontSize: 12, lineHeight: 1.5 }}>
-            You can upload an MCQ PDF using <strong>[↑ UPLOAD MCQ PDF]</strong> to extract questions in seconds!
-          </div>
-        </div>
+        ))}
       </div>
     );
   };
@@ -5594,6 +5848,7 @@ function CodingPlatform() {
       !showLiveTestPopup ||
       !activeContestAssignment ||
       contestEntered ||
+      hasUsedContestAttempt ||
       liveTestPopupDismissedId === activeContestAssignment.id
     ) {
       return null;
@@ -6424,6 +6679,7 @@ function CodingPlatform() {
   if (view === "admin") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderFullscreenGate()}
       <div style={{ ...S.adminApp, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.adminNav}>
@@ -6477,12 +6733,9 @@ function CodingPlatform() {
           </div>
 
           {adminTab === "overview" && (
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start", width: "100%" }}>
-              <div style={{ flex: "1 1 240px", maxWidth: 280, minWidth: 220 }}>
-                {renderLeftStatsPanel()}
-              </div>
+            <div style={{ display:"grid", gap:isPhone ? 16 : 20, minWidth:0 }}>
+              {renderOverviewStats()}
 
-              <div style={{ flex: "3 1 640px", minWidth: 0 }}>
                 <div style={S.adminCardGrid}>
             <div style={S.adminCard}>
               <div style={S.adminSectionTitle}>Current Test</div>
@@ -6504,7 +6757,7 @@ function CodingPlatform() {
                     if (!selectedAssignment) return;
                     setAdminCurrentTest(selectedAssignment);
                     setAdminSubmissionProblemId(selectedAssignment?.problems?.[0]?.id || "");
-                    setSolutionsVisible(false);
+                    setAdminExecution(null);
                   }}
                   style={S.adminInput}
                 >
@@ -6525,7 +6778,7 @@ function CodingPlatform() {
                     cursor: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? "not-allowed" : "pointer",
                   }}
                 >
-                  {adminStartingTest ? "Starting..." : adminCurrentTest.status === "LIVE" ? "Test Live" : "Start Test"}
+                  {adminStartingTest ? "Starting..." : adminCurrentTest.status === "LIVE" ? "Test Live" : "Start Now"}
                 </button>
                 <button
                   onClick={handleStopAssignedTest}
@@ -6548,6 +6801,62 @@ function CodingPlatform() {
                   {adminSyncingProblems ? "Syncing..." : "Sync Problems"}
                 </button>
               </div>
+              {adminCurrentTest.id && adminCurrentTest.status !== "LIVE" && adminCurrentTest.status !== "ENDED" && (
+                <div style={{ marginTop:16, paddingTop:14, borderTop:`1px solid ${ADMIN_THEME.divider}` }}>
+                  {adminCurrentTest.status === "SCHEDULED" ? (
+                    <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", justifyContent:"space-between" }}>
+                      <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
+                        Starts automatically on <span style={{ color:ADMIN_THEME.warning, fontWeight:700 }}>{formatPortalDate(adminCurrentTest.startsAt)}</span>
+                        {adminCurrentTest.endsAt && (
+                          <> · ends <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{formatPortalDate(adminCurrentTest.endsAt)}</span></>
+                        )}
+                      </div>
+                      <button
+                        onClick={handleUnscheduleAssignedTest}
+                        disabled={adminSchedulingTest}
+                        style={{ ...S.adminButton("default"), opacity: adminSchedulingTest ? 0.6 : 1, cursor: adminSchedulingTest ? "not-allowed" : "pointer" }}
+                      >
+                        {adminSchedulingTest ? "Cancelling..." : "Cancel Schedule"}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display:"grid", gap:10 }}>
+                        <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(0, 1fr)", gap:10 }}>
+                          <div>
+                            <label style={S.adminFieldLabel}>Start Date</label>
+                            <input type="date" value={adminScheduleDate} onChange={(e) => setAdminScheduleDate(e.target.value)} style={S.adminInput} />
+                          </div>
+                          <div>
+                            <label style={S.adminFieldLabel}>Start Time</label>
+                            <input type="time" value={adminScheduleTime} onChange={(e) => setAdminScheduleTime(e.target.value)} style={S.adminInput} />
+                          </div>
+                          <div>
+                            <label style={S.adminFieldLabel}>End Date (optional)</label>
+                            <input type="date" value={adminScheduleEndDate} onChange={(e) => setAdminScheduleEndDate(e.target.value)} style={S.adminInput} />
+                          </div>
+                          <div>
+                            <label style={S.adminFieldLabel}>End Time (optional)</label>
+                            <input type="time" value={adminScheduleEndTime} onChange={(e) => setAdminScheduleEndTime(e.target.value)} style={S.adminInput} />
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleScheduleAssignedTest}
+                          disabled={adminSchedulingTest || !adminScheduleDate || !adminScheduleTime}
+                          style={{
+                            ...S.adminButton("run"),
+                            width:"100%",
+                            opacity: adminSchedulingTest || !adminScheduleDate || !adminScheduleTime ? 0.6 : 1,
+                            cursor: adminSchedulingTest || !adminScheduleDate || !adminScheduleTime ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          {adminSchedulingTest ? "Scheduling..." : "Schedule"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             <div style={S.adminCard}>
@@ -6555,32 +6864,60 @@ function CodingPlatform() {
               <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, marginBottom:12 }}>
                 Live now: <span style={{ color:ADMIN_THEME.success, fontWeight:700 }}>{liveAdminAssignments.length}</span>
               </div>
-              <div style={{ display:"grid", gap:10 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr)", gap:10 }}>
                 {selectableAdminAssignments.slice(0, 5).map((test, index) => (
-                  <button
+                  <div
                     key={test.id || `test-${index}`}
-                    onClick={() => {
-                      setAdminCurrentTest(test);
-                      setAdminSubmissionProblemId(test?.problems?.[0]?.id || "");
-                      setSolutionsVisible(false);
-                    }}
+                    role="button"
+                    tabIndex={0}
+                    title={test.status === "ENDED" ? "Open this test's report" : "Select this test"}
+                    onClick={() => openTestFromQueue(test)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTestFromQueue(test); } }}
                     style={{
                       background:adminCurrentTest?.id===test.id ? ADMIN_THEME.sidebarActive : ADMIN_THEME.hoverBackground,
                       border:adminCurrentTest?.id===test.id ? `1px solid ${ADMIN_THEME.primary}` : `1px solid ${ADMIN_THEME.border}`,
                       borderRadius:12,
                       color:ADMIN_THEME.text,
                       padding:"12px 14px",
+                      minWidth:0,
+                      boxSizing:"border-box",
                       textAlign:"left",
                       cursor:"pointer",
                       boxShadow:adminCurrentTest?.id===test.id ? ADMIN_THEME.shadowSoft : "none"
                     }}
                   >
                     <div style={{ display:"flex", justifyContent:"space-between", gap:10, alignItems:"center" }}>
-                      <span style={{ fontWeight:700 }}>{test.title || test.name}</span>
-                      <span style={{ color:test.status === "LIVE" ? ADMIN_THEME.success : test.status === "ENDED" ? ADMIN_THEME.error : ADMIN_THEME.info, fontSize:11, fontWeight:800 }}>{test.status || "ENDED"}</span>
+                      <span title={test.title || test.name} style={{ fontWeight:700, flex:"1 1 auto", minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{test.title || test.name}</span>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+                        <span style={{ color:test.status === "LIVE" ? ADMIN_THEME.success : test.status === "ENDED" ? ADMIN_THEME.error : test.status === "SCHEDULED" ? ADMIN_THEME.warning : ADMIN_THEME.info, fontSize:11, fontWeight:800 }}>{test.status || "ENDED"}</span>
+                        {test.id && (
+                          <button
+                            type="button"
+                            aria-label={`Delete ${test.title || "test"}`}
+                            title={test.status === "LIVE" ? "Stop the test before deleting it" : "Delete this test"}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteTest(test); }}
+                            disabled={deletingTestId === test.id || test.status === "LIVE"}
+                            style={{
+                              background:"transparent",
+                              border:`1px solid ${ADMIN_THEME.border}`,
+                              borderRadius:8,
+                              padding:"3px 7px",
+                              fontSize:13,
+                              lineHeight:1,
+                              cursor:deletingTestId === test.id || test.status === "LIVE" ? "not-allowed" : "pointer",
+                              opacity:deletingTestId === test.id || test.status === "LIVE" ? 0.4 : 1,
+                            }}
+                          >
+                            {deletingTestId === test.id ? "…" : "🗑"}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{test.date} | {test.level || test.difficulty}</div>
-                  </button>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>
+                      {test.date} | {test.level || test.difficulty}
+                      {test.status === "ENDED" && <span style={{ color:ADMIN_THEME.primary, fontWeight:700 }}> · View report →</span>}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
@@ -6596,24 +6933,28 @@ function CodingPlatform() {
             </div>
 
             <div style={S.adminCard}>
-              <div style={S.adminSectionTitle}>Solutions</div>
-              <div style={{ fontSize:14, color:ADMIN_THEME.textSecondary, marginBottom:14 }}>Submitted solutions become viewable after the timer ends.</div>
+              <div style={S.adminSectionTitle}>Test Report</div>
+              <div style={{ fontSize:14, color:ADMIN_THEME.textSecondary, marginBottom:14 }}>
+                {currentTestEnded
+                  ? "Download every student's attendance, score, time, submissions and interruptions (opens in Excel)."
+                  : "The report can be downloaded once the test ends."}
+              </div>
               <button
-                onClick={() => setSolutionsVisible((prev) => !prev)}
-                disabled={!currentTestEnded}
+                onClick={downloadAdminTestReport}
+                disabled={!adminTestReport}
                 style={{
-                  ...(currentTestEnded ? S.adminButton("run") : S.adminButton("default")),
-                  opacity:currentTestEnded?1:0.7,
-                  cursor:currentTestEnded?"pointer":"not-allowed"
+                  ...(adminTestReport ? S.adminButton("run") : S.adminButton("default")),
+                  opacity:adminTestReport?1:0.7,
+                  cursor:adminTestReport?"pointer":"not-allowed"
                 }}
               >
-                View Solutions
+                ⬇ Download Report
               </button>
             </div>
           </div>
 
           {currentTestEnded && adminTestReport && (
-            <div style={{ display:"grid", gap:18 }}>
+            <div ref={adminReportRef} style={{ display:"grid", gap:18, scrollMarginTop:90 }}>
               <div style={S.adminCard}>
                 <div style={S.adminSectionTitle}>Post-Test Report</div>
                 <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 140 : 180}px, 1fr))`, gap:12 }}>
@@ -6642,10 +6983,16 @@ function CodingPlatform() {
               </div>
 
               <div style={S.adminTableWrap}>
-                <div style={{ padding:"18px 18px 8px" }}>
-                  <div style={S.adminSectionTitle}>Student Attendance & Activity</div>
-                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14 }}>Each student’s attendance, score, time usage, submissions, and interruption details.</div>
+                <div style={{ padding:attendanceTableOpen ? "18px 18px 8px" : "18px", display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                  <div>
+                    <div style={S.adminSectionTitle}>Student Attendance & Activity</div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14 }}>Each student’s attendance, score, time usage, submissions, and interruption details.</div>
+                  </div>
+                  <button onClick={() => setAttendanceTableOpen((prev) => !prev)} style={S.adminButton(attendanceTableOpen ? "default" : "run")}>
+                    {attendanceTableOpen ? "Hide Table" : `Show Table (${adminTestReport.students.length})`}
+                  </button>
                 </div>
+                {attendanceTableOpen && (
                 <table style={{ width:"100%", borderCollapse:"collapse", minWidth:860 }}>
                   <thead>
                     <tr>
@@ -6664,7 +7011,7 @@ function CodingPlatform() {
                         <td style={S.adminTableCell}>{student.attendance}</td>
                         <td style={S.adminTableCell}>{student.score}</td>
                         <td style={S.adminTableCell}>{student.solved}</td>
-                        <td style={S.adminTableCell}>{formatDurationFromMs(student.timeSpentMs)}</td>
+                        <td style={{ ...S.adminTableCell, whiteSpace:"nowrap" }}>{formatDurationFromMs(student.timeSpentMs)}</td>
                         <td style={S.adminTableCell}>{student.submissionCount}</td>
                         <td style={{ ...S.adminTableCell, color:student.interruptionCount ? ADMIN_THEME.error : ADMIN_THEME.success }}>
                           {student.interruptionCount}
@@ -6679,6 +7026,7 @@ function CodingPlatform() {
                     ))}
                   </tbody>
                 </table>
+                )}
               </div>
             </div>
           )}
@@ -6696,6 +7044,7 @@ function CodingPlatform() {
                         const selectedProblem = adminCurrentTest.problems?.find((problem) => String(problem.id) === e.target.value)
                           || problemCatalog.find((problem) => String(problem.id) === e.target.value);
                         setAdminSubmissionProblemId(selectedProblem ? selectedProblem.id : e.target.value);
+                        setAdminExecution(null);
                       }}
                       style={S.adminInput}
                     >
@@ -6708,7 +7057,7 @@ function CodingPlatform() {
                   </div>
                   <div>
                     <label style={S.adminFieldLabel}>Language</label>
-                    <select value={adminSubmissionLang} onChange={(e)=>setAdminSubmissionLang(e.target.value)} style={S.adminInput}>
+                    <select value={adminSubmissionLang} onChange={(e)=>{ setAdminSubmissionLang(e.target.value); setAdminExecution(null); }} style={S.adminInput}>
                       <option value="javascript">JavaScript</option>
                       <option value="python">Python</option>
                       <option value="java">Java</option>
@@ -6994,6 +7343,9 @@ function CodingPlatform() {
                 })()}
               </div>
 
+            </div>
+              </div>
+
               <div style={S.adminCard}>
                 <div style={S.adminSectionTitle}>Create New Test</div>
                 <div style={{ display:"grid", gap:14 }}>
@@ -7011,8 +7363,31 @@ function CodingPlatform() {
                       </select>
                     </div>
                     <div>
-                      <label style={S.adminFieldLabel}>Duration (mins)</label>
-                      <input value={adminCreateForm.duration} onChange={(e)=>handleAdminCreateInput("duration", e.target.value)} style={S.adminInput} />
+                      <label style={S.adminFieldLabel}>Duration (mins){createFormWindowMinutes ? " – from start/end" : ""}</label>
+                      <input
+                        value={createFormWindowMinutes ? String(createFormWindowMinutes) : adminCreateForm.duration}
+                        onChange={(e)=>handleAdminCreateInput("duration", e.target.value)}
+                        disabled={Boolean(createFormWindowMinutes)}
+                        style={{ ...S.adminInput, opacity: createFormWindowMinutes ? 0.7 : 1 }}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "1fr 1fr", gap:12 }}>
+                    <div>
+                      <label style={S.adminFieldLabel}>Start Date (optional)</label>
+                      <input type="date" value={adminCreateForm.scheduleDate} onChange={(e)=>handleAdminCreateInput("scheduleDate", e.target.value)} style={S.adminInput} />
+                    </div>
+                    <div>
+                      <label style={S.adminFieldLabel}>Start Time (optional)</label>
+                      <input type="time" value={adminCreateForm.scheduleTime} onChange={(e)=>handleAdminCreateInput("scheduleTime", e.target.value)} style={S.adminInput} />
+                    </div>
+                    <div>
+                      <label style={S.adminFieldLabel}>End Date (optional)</label>
+                      <input type="date" value={adminCreateForm.scheduleEndDate} onChange={(e)=>handleAdminCreateInput("scheduleEndDate", e.target.value)} style={S.adminInput} />
+                    </div>
+                    <div>
+                      <label style={S.adminFieldLabel}>End Time (optional)</label>
+                      <input type="time" value={adminCreateForm.scheduleEndTime} onChange={(e)=>handleAdminCreateInput("scheduleEndTime", e.target.value)} style={S.adminInput} />
                     </div>
                   </div>
                   <div>
@@ -7245,11 +7620,23 @@ function CodingPlatform() {
 
                   <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
                     <button
-                      onClick={handleCreateTest}
+                      onClick={() => handleCreateTest(false)}
                       disabled={adminCreatingTest}
                       style={{ ...S.adminButton("submit"), flex:1, opacity: adminCreatingTest ? 0.65 : 1, cursor: adminCreatingTest ? "not-allowed" : "pointer" }}
                     >
                       {adminCreatingTest ? "Saving..." : "Save Draft Test"}
+                    </button>
+                    <button
+                      onClick={() => handleCreateTest(true)}
+                      disabled={adminCreatingTest || !adminCreateForm.scheduleDate || !adminCreateForm.scheduleTime}
+                      style={{
+                        ...S.adminButton("run"),
+                        flex:1,
+                        opacity: adminCreatingTest || !adminCreateForm.scheduleDate || !adminCreateForm.scheduleTime ? 0.6 : 1,
+                        cursor: adminCreatingTest || !adminCreateForm.scheduleDate || !adminCreateForm.scheduleTime ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {adminCreatingTest ? "Saving..." : "Save & Schedule"}
                     </button>
                     <button
                       type="button"
@@ -7260,31 +7647,6 @@ function CodingPlatform() {
                     </button>
                   </div>
                 </div>
-              </div>
-
-              {solutionsVisible && (
-                <div style={S.adminCard}>
-                  <div style={S.adminSectionTitle}>Submitted Solutions</div>
-                  <div style={{ display:"grid", gap:10 }}>
-                    {adminCurrentTest.questions.map((id) => {
-                      const problem = adminCurrentTest.problems?.find((item) => item.id === id)
-                        || problemCatalog.find((item) => item.id === id);
-                      return (
-                        <div key={id} style={S.adminSubCard}>
-                          <div style={{ color:ADMIN_THEME.text, fontWeight:700, marginBottom:4 }}>{problem?.title || `Problem ${id}`}</div>
-                          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>Top submission visible after test completion. Connect secure storage/backend to load real submitted code.</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-              </div>
-            </div>
-
-              <div style={{ flex: "1 1 240px", maxWidth: 280, minWidth: 220 }}>
-                {renderRightActivityPanel()}
               </div>
             </div>
           )}
@@ -7304,6 +7666,7 @@ function CodingPlatform() {
   if (view === "list") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -7459,6 +7822,7 @@ function CodingPlatform() {
   if (view === "profile") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
       <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -7487,9 +7851,6 @@ function CodingPlatform() {
               </span>
             )}
             <div style={{ width:34, height:34, borderRadius:"50%", background:`linear-gradient(135deg, ${profileAvatarGradient[0]}, ${profileAvatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#081018", boxShadow:"0 0 18px rgba(96,165,250,0.28)" }}>{profileAvatarLabel}</div>
-            <button onClick={signOut} style={{ padding:"6px 12px", borderRadius:10, background:"#ef44441f", border:"1px solid #ef44444d", color:"#f87171", fontWeight:700, fontSize:12, cursor:"pointer" }}>
-              Sign Out
-            </button>
           </div>
         </nav>
 
@@ -7526,9 +7887,6 @@ function CodingPlatform() {
                   </div>
                 </div>
               </div>
-              <button onClick={signOut} style={{ padding:"10px 18px", borderRadius:12, background:"#ef44441f", border:"1px solid #ef44444d", color:"#f87171", fontWeight:700, fontSize:13, cursor:"pointer" }}>
-                🚪 Log Out
-              </button>
             </div>
           </div>
 
@@ -7689,6 +8047,7 @@ function CodingPlatform() {
   if (view === "contest") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderFullscreenGate()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         {contestInstructionsOpen && (
@@ -7975,6 +8334,132 @@ function CodingPlatform() {
     </div>
   );
 
+  if (view === "thankYou") {
+    const ratingOptions = [
+      { value: 1, emoji: "😞", label: "Poor" },
+      { value: 2, emoji: "😕", label: "Okay" },
+      { value: 3, emoji: "😐", label: "Good" },
+      { value: 4, emoji: "🙂", label: "Very good" },
+      { value: 5, emoji: "🤩", label: "Excellent" },
+    ];
+    const confetti = ["🎉", "✨", "🎊", "⭐", "💜", "🎉", "✨", "🎊", "⭐", "💙", "🎉", "✨"];
+    const firstName = String(currentUser.name || "").trim().split(/\s+/)[0];
+
+    return (
+      <div style={{ ...S.app, minHeight:"100vh", position:"relative", overflow:"hidden" }}>
+        <style>{`
+          @keyframes dvThanksPop { 0% { transform: scale(0.4); opacity: 0; } 60% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); } }
+          @keyframes dvThanksWave { 0%, 100% { transform: rotate(0deg); } 20% { transform: rotate(16deg); } 40% { transform: rotate(-10deg); } 60% { transform: rotate(12deg); } 80% { transform: rotate(-6deg); } }
+          @keyframes dvThanksFall { 0% { transform: translateY(-12vh) rotate(0deg); opacity: 0; } 10% { opacity: 1; } 100% { transform: translateY(110vh) rotate(360deg); opacity: 0; } }
+          @keyframes dvThanksRise { from { transform: translateY(18px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+          @media (prefers-reduced-motion: reduce) { .dv-thanks-anim { animation: none !important; } }
+        `}</style>
+
+        {confetti.map((piece, index) => (
+          <span
+            key={index}
+            aria-hidden="true"
+            className="dv-thanks-anim"
+            style={{
+              position:"absolute",
+              top:0,
+              left:`${4 + index * 8}%`,
+              fontSize:18 + (index % 3) * 6,
+              animation:`dvThanksFall ${5 + (index % 4)}s linear ${index * 0.35}s infinite`,
+              pointerEvents:"none",
+            }}
+          >
+            {piece}
+          </span>
+        ))}
+
+        <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", padding:"32px 16px", boxSizing:"border-box", position:"relative" }}>
+          <div
+            className="dv-thanks-anim"
+            style={{ width:"min(560px, 100%)", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #2b2b45", borderRadius:24, padding:"36px 28px", textAlign:"center", boxShadow:"0 24px 60px #00000060", animation:"dvThanksRise 0.6s ease-out both" }}
+          >
+            <div className="dv-thanks-anim" style={{ fontSize:72, lineHeight:1, animation:"dvThanksPop 0.7s ease-out both" }}>🎉</div>
+            <h1 style={{ margin:"18px 0 8px", color:"#f5f6ff", fontSize:30, lineHeight:1.2, fontFamily:"'Fraunces',serif" }}>
+              Thank you for attending{firstName ? `, ${firstName}` : ""}!{" "}
+              <span className="dv-thanks-anim" style={{ display:"inline-block", transformOrigin:"70% 70%", animation:"dvThanksWave 1.8s ease-in-out 0.8s 2" }}>👋</span>
+            </h1>
+            <p style={{ color:"#a9aed0", fontSize:15, lineHeight:1.7, margin:"0 0 6px" }}>
+              Your answers for <strong style={{ color:"#e2e4ff" }}>{thankYouTest?.title || "this test"}</strong> have been submitted successfully. ✅
+            </p>
+            <p style={{ color:"#7a7f9e", fontSize:13, margin:"0 0 26px" }}>Your results will be shared by your instructor.</p>
+
+            <div style={{ borderTop:"1px solid #25253b", paddingTop:22 }}>
+              {feedbackSent ? (
+                <div className="dv-thanks-anim" style={{ animation:"dvThanksPop 0.5s ease-out both" }}>
+                  <div style={{ fontSize:44 }}>💜</div>
+                  <div style={{ color:"#e2e4ff", fontWeight:700, fontSize:16, marginTop:8 }}>Thanks for your feedback!</div>
+                  <div style={{ color:"#7a7f9e", fontSize:13, marginTop:4 }}>It helps us make the next test better.</div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ color:"#e2e4ff", fontWeight:700, fontSize:16, marginBottom:14 }}>How was the test?</div>
+                  <div style={{ display:"flex", justifyContent:"center", gap:isPhone ? 6 : 10, flexWrap:"wrap", marginBottom:16 }}>
+                    {ratingOptions.map((option) => {
+                      const selected = feedbackRating === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => { setFeedbackRating(option.value); setFeedbackError(""); }}
+                          aria-label={option.label}
+                          aria-pressed={selected}
+                          style={{
+                            background:selected ? "#1e1b4b" : "transparent",
+                            border:selected ? "1px solid #818cf8" : "1px solid #2b2b45",
+                            borderRadius:14,
+                            padding:"8px 10px",
+                            cursor:"pointer",
+                            display:"grid",
+                            gap:4,
+                            minWidth:62,
+                            transform:selected ? "scale(1.08)" : "scale(1)",
+                            transition:"transform 0.15s ease, background 0.15s ease",
+                          }}
+                        >
+                          <span style={{ fontSize:30 }}>{option.emoji}</span>
+                          <span style={{ color:selected ? "#c7d2fe" : "#7a7f9e", fontSize:11, fontWeight:700 }}>{option.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <textarea
+                    value={feedbackComment}
+                    onChange={(e) => setFeedbackComment(e.target.value)}
+                    maxLength={1000}
+                    placeholder="Anything you'd like to tell us? (optional)"
+                    style={{ ...S.input, width:"100%", minHeight:90, resize:"vertical", boxSizing:"border-box", marginBottom:12 }}
+                  />
+                  {feedbackError && <div style={{ color:"#fda4af", fontSize:13, marginBottom:10 }}>{feedbackError}</div>}
+                  <button
+                    type="button"
+                    onClick={submitTestFeedback}
+                    disabled={feedbackSubmitting}
+                    style={{ ...S.btn("submit"), width:"100%", opacity:feedbackSubmitting ? 0.6 : 1, cursor:feedbackSubmitting ? "not-allowed" : "pointer" }}
+                  >
+                    {feedbackSubmitting ? "Sending..." : "Submit Feedback"}
+                  </button>
+                </>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => { setThankYouTest(null); openContest(); }}
+              style={{ ...S.btn("default"), marginTop:16, width:"100%" }}
+            >
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (view === "contestResult") {
     const result = contestResult || buildContestResult("Completed");
     const percentage = result.maxScore ? Math.round((result.score / result.maxScore) * 100) : 0;
@@ -8062,6 +8547,7 @@ function CodingPlatform() {
   if (view === "leaderboard") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -8320,6 +8806,7 @@ function CodingPlatform() {
   return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={screenShield} message={shieldMessage} />
+      {renderFullscreenGate()}
       <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
       {exitExamConfirmModalOpen && (
         <div style={S.modalBackdrop} onClick={() => setExitExamConfirmModalOpen(false)}>
@@ -8469,6 +8956,24 @@ function CodingPlatform() {
           <div style={{ display:"inline-flex", alignItems:"center", gap:8, marginLeft:14, padding:"7px 10px", borderRadius:10, background:"#0f1727", border:"1px solid #2d4f7b", color:"#93c5fd", fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
             <span>Time Left</span>
             <span style={{ color:contestTimerSeconds <= 60 ? "#ff9b9b" : "#eef0ff", fontFamily:"'JetBrains Mono',monospace", fontSize:13 }}>{formatCountdown(contestTimerSeconds)}</span>
+          </div>
+        )}
+        {showProblemNavigation && (
+          <div style={{ display:"flex", gap:10, alignItems:"center", marginLeft:"auto" }}>
+            <button
+              onClick={() => openAdjacentProblem(-1)}
+              disabled={!hasPreviousProblem}
+              style={{ ...S.btn("default"), opacity: hasPreviousProblem ? 1 : 0.45, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
+            >
+              ← PREVIOUS
+            </button>
+            <button
+              onClick={() => openAdjacentProblem(1)}
+              disabled={!hasNextProblem}
+              style={{ ...S.btn("default"), opacity: hasNextProblem ? 1 : 0.45, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
+            >
+              NEXT →
+            </button>
           </div>
         )}
       </nav>
@@ -8811,26 +9316,7 @@ function CodingPlatform() {
 
       {/* Sticky Bottom Action Bar */}
       <div style={{ background: "#0d0d15", borderTop: "1px solid #1e1e2e", padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, position: "sticky", bottom: 0, zIndex: 80, width: "100%", boxSizing: "border-box" }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {showProblemNavigation && (
-            <>
-              <button
-                onClick={() => openAdjacentProblem(-1)}
-                disabled={!hasPreviousProblem}
-                style={{ ...S.btn("default"), opacity: hasPreviousProblem ? 1 : 0.45, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
-              >
-                ← PREVIOUS
-              </button>
-              <button
-                onClick={() => openAdjacentProblem(1)}
-                disabled={!hasNextProblem}
-                style={{ ...S.btn("default"), opacity: hasNextProblem ? 1 : 0.45, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
-              >
-                NEXT →
-              </button>
-            </>
-          )}
-        </div>
+        <div />
 
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           {!isTheoryProblem && (

@@ -148,6 +148,42 @@ function matchesWhere(document, where = {}) {
   });
 }
 
+// Values a stored field may hold for an equality match: ids can be saved as ObjectId or as hex strings.
+function candidateValues(value) {
+  if (value instanceof ObjectId) return [value, value.toHexString()];
+  if (typeof value === 'string') {
+    return /^[0-9a-f]{24}$/i.test(value) ? [value, new ObjectId(value)] : [value];
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value instanceof Date) return [value];
+  return null;
+}
+
+// Turns simple equality / `in` conditions into a MongoDB filter so only candidate documents are
+// fetched instead of the whole collection. It may match more than `where` (never less);
+// matchesWhere still runs on the results, so behaviour is unchanged.
+function buildPrefilter(where) {
+  const filter = {};
+
+  for (const [key, condition] of Object.entries(where || {})) {
+    let values = null;
+
+    if (isPlainObject(condition)) {
+      if (Object.keys(condition).length === 1 && Array.isArray(condition.in)) {
+        const perEntry = condition.in.map(candidateValues);
+        if (perEntry.every(Boolean)) values = perEntry.flat();
+      }
+    } else {
+      values = candidateValues(condition);
+    }
+
+    if (values) {
+      filter[key === 'id' ? '_id' : key] = { $in: values };
+    }
+  }
+
+  return filter;
+}
+
 function sortDocuments(documents, orderBy) {
   const sorters = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
   if (!sorters.length) return [...documents];
@@ -235,6 +271,11 @@ function applyDefaults(modelName, data) {
     },
     loginEvent: {
       createdAt: now,
+    },
+    testFeedback: {
+      comment: '',
+      createdAt: now,
+      updatedAt: now,
     },
     assessmentSubmission: {
       theoryScore: 0,
@@ -336,13 +377,19 @@ class MongoModel {
     return collection.find({}).toArray();
   }
 
-  async decorate(document, options = {}) {
+  async loadMatchingDocuments(where) {
+    const collection = await this.collection();
+    const documents = await collection.find(buildPrefilter(where)).toArray();
+    return documents.filter((document) => matchesWhere(document, where));
+  }
+
+  async decorate(document, options = {}, includeCache = null) {
     if (!document) return null;
 
     let result = serializeDocument(document);
 
     if (options.include) {
-      result = await applyInclude(this.modelName, result, options.include);
+      result = await applyInclude(this.modelName, result, options.include, includeCache);
     }
 
     if (options.select) {
@@ -353,29 +400,26 @@ class MongoModel {
   }
 
   async findUnique(options = {}) {
-    const documents = await this.loadRawDocuments();
-    const match = documents.find((document) => matchesWhere(document, options.where));
+    const [match] = await this.loadMatchingDocuments(options.where);
     return this.decorate(match, options);
   }
 
   async findFirst(options = {}) {
-    const documents = sortDocuments(
-      (await this.loadRawDocuments()).filter((document) => matchesWhere(document, options.where)),
-      options.orderBy,
-    );
-
+    const documents = sortDocuments(await this.loadMatchingDocuments(options.where), options.orderBy);
     return this.decorate(documents[0], options);
   }
 
   async findMany(options = {}) {
-    let documents = (await this.loadRawDocuments()).filter((document) => matchesWhere(document, options.where));
-    documents = sortDocuments(documents, options.orderBy);
+    let documents = sortDocuments(await this.loadMatchingDocuments(options.where), options.orderBy);
 
     if (typeof options.take === 'number') {
       documents = documents.slice(0, options.take);
     }
 
-    return Promise.all(documents.map((document) => this.decorate(document, options)));
+    const includeCache = options.include
+      ? await buildIncludeCache(this.modelName, documents, options.include)
+      : null;
+    return Promise.all(documents.map((document) => this.decorate(document, options, includeCache)));
   }
 
   async create({ data }) {
@@ -392,8 +436,7 @@ class MongoModel {
 
   async update({ where, data }) {
     const collection = await this.collection();
-    const documents = await this.loadRawDocuments();
-    const existing = documents.find((document) => matchesWhere(document, where));
+    const [existing] = await this.loadMatchingDocuments(where);
 
     if (!existing) {
       return null;
@@ -410,8 +453,7 @@ class MongoModel {
 
   async updateMany({ where, data }) {
     const collection = await this.collection();
-    const documents = await this.loadRawDocuments();
-    const matches = documents.filter((document) => matchesWhere(document, where));
+    const matches = await this.loadMatchingDocuments(where);
 
     await Promise.all(
       matches.map(async (document) => {
@@ -429,8 +471,7 @@ class MongoModel {
 
   async delete({ where }) {
     const collection = await this.collection();
-    const documents = await this.loadRawDocuments();
-    const existing = documents.find((document) => matchesWhere(document, where));
+    const [existing] = await this.loadMatchingDocuments(where);
 
     if (!existing) {
       return null;
@@ -438,6 +479,15 @@ class MongoModel {
 
     await collection.deleteOne({ _id: existing._id });
     return this.decorate(existing);
+  }
+
+  async deleteMany({ where } = {}) {
+    const collection = await this.collection();
+    const matches = await this.loadMatchingDocuments(where);
+    if (!matches.length) return { count: 0 };
+
+    await collection.deleteMany({ _id: { $in: matches.map((document) => document._id) } });
+    return { count: matches.length };
   }
 
   async upsert({ where, update, create }) {
@@ -452,18 +502,43 @@ class MongoModel {
 
 let prisma = null;
 
-async function applyInclude(modelName, document, include) {
+function idKey(value) {
+  if (value instanceof ObjectId) return value.toHexString();
+  return value === null || value === undefined ? '' : String(value);
+}
+
+async function loadById(model, ids) {
+  const unique = [...new Set(ids.map(idKey).filter(Boolean))];
+  if (!unique.length) return new Map();
+  const records = await model.findMany({ where: { id: { in: unique } } });
+  return new Map(records.map((record) => [idKey(record.id), record]));
+}
+
+async function buildIncludeCache(modelName, documents, include) {
+  if (modelName !== 'submission' || !documents.length) return null;
+
+  return {
+    problems: include.problem ? await loadById(prisma.problem, documents.map((document) => document.problemId)) : null,
+    users: include.user ? await loadById(prisma.user, documents.map((document) => document.userId)) : null,
+  };
+}
+
+async function applyInclude(modelName, document, include, includeCache = null) {
   if (!include || !document) return document;
 
   if (modelName === 'submission') {
     const result = { ...document };
 
     if (include.problem) {
-      result.problem = await prisma.problem.findUnique({ where: { id: document.problemId } });
+      result.problem = includeCache?.problems
+        ? includeCache.problems.get(idKey(document.problemId)) ?? null
+        : await prisma.problem.findUnique({ where: { id: document.problemId } });
     }
 
     if (include.user) {
-      result.user = await prisma.user.findUnique({ where: { id: document.userId } });
+      result.user = includeCache?.users
+        ? includeCache.users.get(idKey(document.userId)) ?? null
+        : await prisma.user.findUnique({ where: { id: document.userId } });
     }
 
     return result;
@@ -483,6 +558,7 @@ prisma = {
   notification: new MongoModel('notification', 'Notification'),
   loginEvent: new MongoModel('loginEvent', 'LoginEvent'),
   assessmentSubmission: new MongoModel('assessmentSubmission', 'AssessmentSubmission'),
+  testFeedback: new MongoModel('testFeedback', 'TestFeedback'),
   async $transaction(operations) {
     return Promise.all(operations);
   },

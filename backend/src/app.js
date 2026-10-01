@@ -5,7 +5,11 @@ const pino = require('pino');
 const pinoHttp = require('pino-http');
 const prisma = require('./prismaClient');
 
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+// Never write login tokens or cookies to the logs.
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  redact: ['req.headers.authorization', 'req.headers.cookie'],
+});
 const app = express();
 
 app.use(express.json({ limit: '5mb' }));

@@ -1,4 +1,8 @@
-const JUDGE0_URL = String(process.env.JUDGE0_URL || 'https://ce.judge0.com').replace(/\/+$/, '');
+const JUDGE0_RAPIDAPI_KEY = String(process.env.JUDGE0_RAPIDAPI_KEY || '').trim();
+const JUDGE0_RAPIDAPI_HOST = String(process.env.JUDGE0_RAPIDAPI_HOST || 'judge0-ce.p.rapidapi.com').trim();
+const JUDGE0_URL = String(
+  process.env.JUDGE0_URL || (JUDGE0_RAPIDAPI_KEY ? `https://${JUDGE0_RAPIDAPI_HOST}` : 'https://ce.judge0.com'),
+).replace(/\/+$/, '');
 const HEALTH_TIMEOUT_MS = Number(process.env.JUDGE0_HEALTH_TIMEOUT_MS || 8000);
 const JUDGE0_AUTH_TOKEN = String(process.env.JUDGE0_AUTH_TOKEN || '').trim();
 const JUDGE0_AUTH_USER = String(process.env.JUDGE0_AUTH_USER || '').trim();
@@ -22,6 +26,11 @@ function buildJudge0Headers() {
 
   if (JUDGE0_AUTH_USER) {
     headers['X-Auth-User'] = JUDGE0_AUTH_USER;
+  }
+
+  if (JUDGE0_RAPIDAPI_KEY) {
+    headers['X-RapidAPI-Key'] = JUDGE0_RAPIDAPI_KEY;
+    headers['X-RapidAPI-Host'] = JUDGE0_RAPIDAPI_HOST;
   }
 
   return headers;

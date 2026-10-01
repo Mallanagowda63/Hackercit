@@ -1,4 +1,5 @@
 const prisma = require('../prismaClient');
+const { inCurrentRun } = require('./testController');
 const { executeSubmission } = require('../lib/executionService');
 
 async function attachRankToResult(result, assignmentId) {
@@ -46,7 +47,7 @@ exports.submitAssessment = async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (existingSubmission) {
+    if (existingSubmission && inCurrentRun(existingSubmission, assignment, 'createdAt')) {
       const rankedExisting = await attachRankToResult(existingSubmission, assignment.id);
       return res.status(200).json({
         ok: true,

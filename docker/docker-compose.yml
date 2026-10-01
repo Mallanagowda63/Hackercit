@@ -1,33 +1,12 @@
-version: '3.8'
+# Run from the repo root: docker compose -f docker/docker-compose.yml up -d --build
+# Settings come from backend/.env (MongoDB Atlas, JWT, SMTP, Judge0/RapidAPI).
 services:
-  mongo:
-    image: mongo:7
-    volumes:
-      - mongo-data:/data/db
-    networks:
-      - hacknet
-
-  backend:
+  app:
     build:
       context: ..
-      dockerfile: backend/Dockerfile
+      dockerfile: Dockerfile
     env_file:
-      - ../backend/.env.example
+      - ../backend/.env
     ports:
-      - "4000:4000"
-    depends_on:
-      - mongo
-    networks:
-      - hacknet
-
-  sandbox:
-    build: ../docker/sandbox
-    networks:
-      - hacknet
-
-volumes:
-  mongo-data:
-
-networks:
-  hacknet:
-    driver: bridge
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
