@@ -106,7 +106,9 @@ function ScholarLogicBadge({ height = 34 }) {
   );
 }
 
-function DevOrbitLogo({ onClick, lightSurface = false, showPartner = true }) {
+function DevOrbitLogo({ onClick, lightSurface = false, showPartner = true, showBrand = false }) {
+  if (!showBrand && !showPartner) return null;
+
   return (
     <div
       onClick={onClick}
@@ -118,6 +120,7 @@ function DevOrbitLogo({ onClick, lightSurface = false, showPartner = true }) {
         userSelect:"none",
       }}
     >
+      {showBrand && (
       <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
         <circle cx="15" cy="15" r="13" fill={lightSurface ? "#EEF2FF" : "#111827"} />
         <ellipse cx="15" cy="15" rx="11" ry="5.8" transform="rotate(-18 15 15)" stroke="#7C6AF7" strokeWidth="2" />
@@ -125,6 +128,8 @@ function DevOrbitLogo({ onClick, lightSurface = false, showPartner = true }) {
         <circle cx="15" cy="15" r="4.2" fill="#4FD1C5" />
         <circle cx="24" cy="10" r="2.3" fill="#FFC01E" />
       </svg>
+      )}
+      {showBrand && (
       <span
         style={{
           fontFamily:"'Space Grotesk',sans-serif",
@@ -136,6 +141,7 @@ function DevOrbitLogo({ onClick, lightSurface = false, showPartner = true }) {
       >
         DevOrbit
       </span>
+      )}
       {showPartner && <ScholarLogicBadge />}
     </div>
   );
@@ -4596,6 +4602,9 @@ function CodingPlatform() {
         {authModalOpen && (
           <div style={S.modalBackdrop} onClick={closeAuthFlow}>
             <div style={S.modalCard} onClick={(e) => e.stopPropagation()}>
+              <div style={{ marginBottom:18 }}>
+                <DevOrbitLogo showBrand showPartner={false} />
+              </div>
               <div style={{ color:"#4fd1c5", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:12 }}>Access Flow</div>
               <h1 style={{ ...S.problemTitle, fontSize:38, marginBottom:12 }}>{IS_ADMIN_ENTRY ? "Admin portal." : "Enter the portal."}</h1>
               <p style={{ ...S.problemBody, marginBottom:24 }}>
@@ -4655,7 +4664,7 @@ function CodingPlatform() {
 
                     <div>
                       <label style={S.fieldLabel}>Email ID</label>
-                      <input value={authEmail} onChange={e=>{ setAuthEmail(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder="name@gmail.com" />
+                      <input value={authEmail} onChange={e=>{ setAuthEmail(e.target.value); if (authError) setAuthError(""); }} style={S.input} placeholder={IS_ADMIN_ENTRY ? "admin email" : "name@gmail.com"} />
                     </div>
                     <div>
                       <label style={S.fieldLabel}>Password</label>
@@ -8974,7 +8983,7 @@ function CodingPlatform() {
 
       <nav style={S.nav}>
         <DevOrbitLogo onClick={()=>setView("list")} showPartner={isExamWorkspace} />
-        <span style={{ color:"#444", fontSize:14 }}>/</span>
+        {isExamWorkspace && <span style={{ color:"#444", fontSize:14 }}>/</span>}
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
         {problemNavigationSource === "contest" && contestEntered && (
           <div style={{ display:"inline-flex", alignItems:"center", gap:8, marginLeft:14, padding:"7px 10px", borderRadius:10, background:"#0f1727", border:"1px solid #2d4f7b", color:"#93c5fd", fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
