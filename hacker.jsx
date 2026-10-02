@@ -26,6 +26,8 @@ const IS_ADMIN_ENTRY = /^\/admin\/?$/i.test(window.location.pathname);
 const DEFAULT_AUTH_ROLE = IS_ADMIN_ENTRY ? "admin" : "student";
 // Tab switches / leaving fullscreen / restricted keys: the 4th one ends the test.
 const MAX_CONTEST_WARNINGS = 4;
+// Height of the fixed Run / Submit bar on the coding screen.
+const PROBLEM_ACTION_BAR_HEIGHT = 66;
 // Shared test links look like /test/<testId>; opening one takes a student straight into that test.
 const TEST_LINK_ID = (window.location.pathname.match(/^\/test\/([0-9a-f]{24})\/?$/i) || [])[1] || null;
 const EMPTY_CURRENT_USER = {
@@ -9036,7 +9038,7 @@ function CodingPlatform() {
   const isTheoryProblem = p && (p.type === "theory" || (Array.isArray(p.options) && p.options.length > 0));
   const problemWorkspaceStyle = isCompact
     ? { display:"grid", gridTemplateColumns:"minmax(0, 1fr)", overflow:"visible", minHeight:"calc(100vh - 116px)" }
-    : { display:"flex", flex:1, overflow:"hidden", height:isExamWorkspace ? "calc(100vh - 186px)" : "calc(100vh - 128px)" };
+    : { display:"flex", flex:1, overflow:"hidden", height:`calc(100vh - ${(isExamWorkspace ? 130 : 72) + PROBLEM_ACTION_BAR_HEIGHT}px)` };
   // Exam question palette: completed = coding answer submitted / MCQ option chosen; attempted = code run only.
   const getExamQuestionState = (problem) => {
     const keys = [problem.dbId, problem.id, problem.legacyId].filter((key) => key !== undefined && key !== null && key !== "");
@@ -9615,8 +9617,9 @@ function CodingPlatform() {
         )}
       </div>
 
-      {/* Sticky Bottom Action Bar */}
-      <div style={{ background: "#0d0d15", borderTop: "1px solid #1e1e2e", padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, position: "sticky", bottom: 0, zIndex: 80, width: "100%", boxSizing: "border-box" }}>
+      {/* Bottom Action Bar: fixed so Run/Submit always stay visible (sticky breaks inside the overflow-hidden app). */}
+      <div aria-hidden="true" style={{ height: PROBLEM_ACTION_BAR_HEIGHT, flexShrink: 0 }} />
+      <div style={{ background: "#0d0d15", borderTop: "1px solid #1e1e2e", padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 80, minHeight: PROBLEM_ACTION_BAR_HEIGHT, boxSizing: "border-box" }}>
         <div />
 
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
