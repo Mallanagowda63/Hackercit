@@ -2026,7 +2026,7 @@ function CodingPlatform() {
 
   const openAuthFlow = () => {
     setAuthModalOpen(true);
-    setAuthMode("");
+    setAuthMode(IS_ADMIN_ENTRY ? "login" : "");
     setAuthRole(DEFAULT_AUTH_ROLE);
     setAuthName("");
     setAuthUsn("");
@@ -2092,7 +2092,7 @@ function CodingPlatform() {
       }
     }
 
-    if (!emailPattern.test(email)) {
+    if (!IS_ADMIN_ENTRY && !emailPattern.test(email)) {
       setAuthError("Only @gmail.com email addresses are allowed.");
       return;
     }
@@ -4600,11 +4600,12 @@ function CodingPlatform() {
               <h1 style={{ ...S.problemTitle, fontSize:38, marginBottom:12 }}>{IS_ADMIN_ENTRY ? "Admin portal." : "Enter the portal."}</h1>
               <p style={{ ...S.problemBody, marginBottom:24 }}>
                 {IS_ADMIN_ENTRY
-                  ? "Sign in with the admin mail ID and password to manage tests and participants."
+                  ? "Admin login only. Sign in with the admin mail ID and password."
                   : "Login uses only mail ID and password. Sign up collects the extra details needed for student access."}
               </p>
 
               <div style={{ display:"grid", gap:18 }}>
+                {!IS_ADMIN_ENTRY && (
                 <div>
                   <label style={S.fieldLabel}>Choose Action</label>
                   <div style={S.authChoiceGrid}>
@@ -4618,6 +4619,7 @@ function CodingPlatform() {
                     </button>
                   </div>
                 </div>
+                )}
 
                 {authMode && authRole && (
                   <div style={{ display:"grid", gap:18 }}>

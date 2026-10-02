@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const prisma = require('../prismaClient');
+const { effectiveRole } = require('../lib/adminConfig');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
 
@@ -11,7 +12,8 @@ async function requireAuth(req, res, next) {
     const payload = jwt.verify(token, JWT_SECRET);
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) return res.status(401).json({ error: 'invalid user' });
-    req.user = user;
+    // Only the ADMIN_EMAIL account keeps admin rights; any other ADMIN account acts as a student.
+    req.user = { ...user, role: effectiveRole(user) };
     next();
   } catch (err) {
     return res.status(401).json({ error: 'invalid token' });
