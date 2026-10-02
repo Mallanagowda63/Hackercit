@@ -359,6 +359,37 @@ exports.unschedule = async (req, res) => {
   }
 };
 
+// GET /api/tests/:id/info — what a shared test link should do for this student
+// (no questions included, so it is safe for scheduled tests too).
+exports.info = async (req, res) => {
+  try {
+    await refreshAssignmentStatuses();
+
+    const assignment = await prisma.testAssignment.findUnique({ where: { id: req.params.id } });
+    if (!assignment) return res.status(404).json({ error: 'test not found' });
+
+    const latest = await getAttemptOrNull(assignment.id, req.user.id);
+    const attempt = inCurrentRun(latest, assignment) ? latest : null;
+
+    return res.json({
+      test: {
+        id: assignment.id,
+        title: assignment.title,
+        status: assignment.status,
+        startsAt: assignment.startsAt,
+        endsAt: assignment.endsAt,
+        durationMinutes: assignment.durationMinutes,
+        questionCount: Array.isArray(assignment.problemIds) ? assignment.problemIds.length : 0,
+        attemptStatus: attempt?.status || null,
+        attemptUsed: Boolean(attempt && attempt.status !== 'IN_PROGRESS'),
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
 // DELETE /api/tests/:id — removes a test and everything recorded for it
 // (attempts, submitted answers/scores, notifications, feedback). Live tests must be stopped first.
 exports.remove = async (req, res) => {

@@ -24,6 +24,8 @@ const AUTH_SESSION_STORAGE_KEY = "codearena.authSession";
 // Admins sign in from /admin; the public login popup is student-only.
 const IS_ADMIN_ENTRY = /^\/admin\/?$/i.test(window.location.pathname);
 const DEFAULT_AUTH_ROLE = IS_ADMIN_ENTRY ? "admin" : "student";
+// Shared test links look like /test/<testId>; opening one takes a student straight into that test.
+const TEST_LINK_ID = (window.location.pathname.match(/^\/test\/([0-9a-f]{24})\/?$/i) || [])[1] || null;
 const EMPTY_CURRENT_USER = {
   id: "",
   role: "",
@@ -830,6 +832,10 @@ function CodingPlatform() {
   const [adminScheduleEndDate, setAdminScheduleEndDate] = useState("");
   const [adminScheduleEndTime, setAdminScheduleEndTime] = useState("");
   const [nextScheduledStartAt, setNextScheduledStartAt] = useState(null);
+  const [linkTestId, setLinkTestId] = useState(TEST_LINK_ID);
+  const [linkTestInfo, setLinkTestInfo] = useState(null);
+  const [linkTestError, setLinkTestError] = useState("");
+  const [linkAutoStarted, setLinkAutoStarted] = useState(false);
   const [portalRefreshTick, setPortalRefreshTick] = useState(0);
   const [adminStoppingTest, setAdminStoppingTest] = useState(false);
   const [adminCurrentTest, setAdminCurrentTest] = useState(defaultAdminTest);
@@ -1239,14 +1245,15 @@ function CodingPlatform() {
       const availableLiveAssignments = liveAssignments.length
         ? liveAssignments
         : (defaultAssignment ? [defaultAssignment] : []);
-      const assignment = liveAssignments.find((item) => sameValue(item.id, activeAssignment?.id))
+      const assignment = (linkTestId && liveAssignments.find((item) => sameValue(item.id, linkTestId)))
+        || liveAssignments.find((item) => sameValue(item.id, activeAssignment?.id))
         || defaultAssignment
         || availableLiveAssignments[0]
         || null;
       setNextScheduledStartAt(assignmentData.nextStartsAt || null);
       setActiveAssignment(assignment);
       const assignmentAlreadyAttempted = Boolean(assignment?.attempt && assignment.attempt.status !== "IN_PROGRESS");
-      if (assignment && (assignment.status === "LIVE" || assignment.status === "live" || assignment.active) && !contestEntered && !assignmentAlreadyAttempted) {
+      if (assignment && (assignment.status === "LIVE" || assignment.status === "live" || assignment.active) && !contestEntered && !assignmentAlreadyAttempted && !sameValue(assignment.id, linkTestId)) {
         setShowLiveTestPopup(true);
       }
       setActiveAssignments(availableLiveAssignments);
@@ -1315,6 +1322,10 @@ function CodingPlatform() {
         if (IS_ADMIN_ENTRY) {
           setAuthMode("login");
           setAuthRole("admin");
+          setAuthModalOpen(true);
+        } else if (TEST_LINK_ID) {
+          setAuthMode("login");
+          setAuthRole("student");
           setAuthModalOpen(true);
         }
         return;
@@ -1695,6 +1706,48 @@ function CodingPlatform() {
     };
   }, [authToken, currentUser.id, currentUser.role, portalRefreshTick]);
 
+  useEffect(() => {
+    if (!linkTestId || !authToken || !currentUser.id || currentUser.role === "admin") return undefined;
+    if (contestEntered || view === "thankYou") return undefined;
+
+    let cancelled = false;
+    const loadLinkInfo = async () => {
+      try {
+        const data = await performApiRequest(`/api/tests/${linkTestId}/info`);
+        if (cancelled) return;
+        setLinkTestError("");
+        setLinkTestInfo(data.test || null);
+        if (data.test?.status === "LIVE" && !data.test.attemptUsed) {
+          setPortalRefreshTick((tick) => tick + 1);
+          setView("contest");
+        } else {
+          setView("testLink");
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setLinkTestInfo(null);
+        setLinkTestError(/not found/i.test(error.message || "") ? "This test link is not valid. The test may have been deleted." : (error.message || "Could not open this test."));
+        setView("testLink");
+      }
+    };
+
+    loadLinkInfo();
+    const interval = setInterval(loadLinkInfo, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [linkTestId, authToken, currentUser.id, currentUser.role, contestEntered]);
+
+  // Once the linked live test is loaded on the contest page, start it automatically.
+  useEffect(() => {
+    if (!linkTestId || linkAutoStarted || contestEntered || view !== "contest") return;
+    if (!activeContestAssignment || !sameValue(activeContestAssignment.id, linkTestId)) return;
+    if (linkTestInfo?.status !== "LIVE" || linkTestInfo?.attemptUsed || hasUsedContestAttempt) return;
+    setLinkAutoStarted(true);
+    handleEnterContest(contestProblems[0]);
+  });
+
   // Reload the moment a scheduled test is due, instead of waiting for the next poll.
   useEffect(() => {
     if (!nextScheduledStartAt) return undefined;
@@ -1729,6 +1782,26 @@ function CodingPlatform() {
     setLeaderboardScope(scope);
     setLeaderboardPage(1);
     setView("leaderboard");
+  };
+
+  const leaveTestLink = () => {
+    setLinkTestId(null);
+    setLinkTestInfo(null);
+    setLinkTestError("");
+    try {
+      window.history.replaceState(null, "", "/");
+    } catch {}
+  };
+
+  const shareTestLink = async (test) => {
+    if (!test?.id) return;
+    const url = `${window.location.origin}/test/${test.id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setPortalMessage(`Test link copied: ${url}  (students who open it go straight into "${test.title || "the test"}")`);
+    } catch {
+      window.prompt("Copy this test link and share it with students:", url);
+    }
   };
 
   const showThankYouScreen = (test) => {
@@ -6832,6 +6905,18 @@ function CodingPlatform() {
                 >
                   {adminSyncingProblems ? "Syncing..." : "Sync Problems"}
                 </button>
+                <button
+                  onClick={() => shareTestLink(adminCurrentTest)}
+                  disabled={!adminCurrentTest.id || adminCurrentTest.status === "ENDED"}
+                  title="Copy a link that takes students straight into this test"
+                  style={{
+                    ...S.adminButton("run"),
+                    opacity: !adminCurrentTest.id || adminCurrentTest.status === "ENDED" ? 0.6 : 1,
+                    cursor: !adminCurrentTest.id || adminCurrentTest.status === "ENDED" ? "not-allowed" : "pointer",
+                  }}
+                >
+                  🔗 Share Link
+                </button>
               </div>
               {adminCurrentTest.id && adminCurrentTest.status !== "LIVE" && adminCurrentTest.status !== "ENDED" && (
                 <div style={{ marginTop:16, paddingTop:14, borderTop:`1px solid ${ADMIN_THEME.divider}` }}>
@@ -8366,6 +8451,60 @@ function CodingPlatform() {
     </div>
   );
 
+  if (view === "testLink") {
+    const info = linkTestInfo;
+    const startsAtMs = info?.startsAt ? new Date(info.startsAt).getTime() : NaN;
+    const secondsToStart = Number.isFinite(startsAtMs) ? Math.max(0, Math.floor((startsAtMs - Date.now()) / 1000)) : null;
+    let icon = "⏳";
+    let heading = "Opening your test...";
+    let detail = "Please wait a moment.";
+
+    if (linkTestError) {
+      icon = "🔗";
+      heading = "Link not available";
+      detail = linkTestError;
+    } else if (info?.attemptUsed) {
+      icon = "✅";
+      heading = "You have already taken this test";
+      detail = `Your answers for "${info.title}" were submitted. Results will be shared by your instructor.`;
+    } else if (info?.status === "SCHEDULED") {
+      icon = "🗓️";
+      heading = `${info.title} starts soon`;
+      detail = `Starts on ${formatPortalDate(info.startsAt)}${secondsToStart !== null ? ` (in ${formatCountdown(secondsToStart)})` : ""}. Keep this page open; the test will open by itself.`;
+    } else if (info?.status === "DRAFT") {
+      icon = "🕒";
+      heading = `${info.title} has not started yet`;
+      detail = "Keep this page open; it will open as soon as your instructor starts the test.";
+    } else if (info?.status === "ENDED") {
+      icon = "🏁";
+      heading = `${info.title} has ended`;
+      detail = "This test is no longer accepting answers.";
+    }
+
+    return (
+      <div style={{ ...S.app, minHeight:"100vh" }}>
+        <nav style={S.nav}>
+          <DevOrbitLogo onClick={() => { leaveTestLink(); setView("home"); }} />
+        </nav>
+        <div style={{ minHeight:"calc(100vh - 80px)", display:"flex", alignItems:"center", justifyContent:"center", padding:"32px 16px", boxSizing:"border-box" }}>
+          <div style={{ width:"min(520px, 100%)", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #2b2b45", borderRadius:24, padding:"32px 26px", textAlign:"center" }}>
+            <div style={{ fontSize:56 }}>{icon}</div>
+            <h1 style={{ color:"#f5f6ff", fontSize:26, margin:"14px 0 10px" }}>{heading}</h1>
+            <p style={{ color:"#a9aed0", fontSize:15, lineHeight:1.7, margin:"0 0 22px" }}>{detail}</p>
+            {info && !linkTestError && (
+              <div style={{ color:"#7a7f9e", fontSize:13, marginBottom:20 }}>
+                {info.questionCount} questions · {info.durationMinutes} minutes
+              </div>
+            )}
+            <button type="button" onClick={() => { leaveTestLink(); openContest(); }} style={{ ...S.btn("default"), width:"100%" }}>
+              Go to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (view === "thankYou") {
     const ratingOptions = [
       { value: 1, emoji: "😞", label: "Poor" },
@@ -8481,7 +8620,7 @@ function CodingPlatform() {
 
             <button
               type="button"
-              onClick={() => { setThankYouTest(null); openContest(); }}
+              onClick={() => { setThankYouTest(null); leaveTestLink(); openContest(); }}
               style={{ ...S.btn("default"), marginTop:16, width:"100%" }}
             >
               Back to Dashboard
