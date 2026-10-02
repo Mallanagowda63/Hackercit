@@ -86,7 +86,27 @@ function normalizeAuthenticatedUser(user = {}, fallback = {}) {
   };
 }
 
-function DevOrbitLogo({ onClick, lightSurface = false }) {
+// The ScholarLogic logo has a white background and dark text, so it sits on a white badge
+// to stay readable on the dark headers.
+function ScholarLogicBadge({ height = 34 }) {
+  return (
+    <span
+      style={{
+        display:"inline-flex",
+        alignItems:"center",
+        background:"#ffffff",
+        borderRadius:8,
+        padding:"3px 8px",
+        boxShadow:"0 1px 4px rgba(0,0,0,0.25)",
+        flexShrink:0,
+      }}
+    >
+      <img src="/scholarlogic-logo.png" alt="ScholarLogic" style={{ height, width:"auto", display:"block" }} />
+    </span>
+  );
+}
+
+function DevOrbitLogo({ onClick, lightSurface = false, showPartner = true }) {
   return (
     <div
       onClick={onClick}
@@ -116,6 +136,7 @@ function DevOrbitLogo({ onClick, lightSurface = false }) {
       >
         DevOrbit
       </span>
+      {showPartner && <ScholarLogicBadge />}
     </div>
   );
 }
@@ -8791,6 +8812,7 @@ function CodingPlatform() {
   if (assessmentResult) return renderAssessmentResultView();
 
   const p = selectedProblem;
+  const isExamWorkspace = problemNavigationSource === "contest" && contestEntered;
   const consoleHeight = consoleOpen ? (isPhone ? 320 : 260) : 42;
   const isTheoryProblem = p && (p.type === "theory" || (Array.isArray(p.options) && p.options.length > 0));
   const problemWorkspaceStyle = isCompact
@@ -8949,7 +8971,7 @@ function CodingPlatform() {
       <ErrorBanner errors={errorBanner} onClose={() => setErrorBanner(null)} />
 
       <nav style={S.nav}>
-        <DevOrbitLogo onClick={()=>setView("list")} />
+        <DevOrbitLogo onClick={()=>setView("list")} showPartner={isExamWorkspace} />
         <span style={{ color:"#444", fontSize:14 }}>/</span>
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
         {problemNavigationSource === "contest" && contestEntered && (
@@ -8958,24 +8980,27 @@ function CodingPlatform() {
             <span style={{ color:contestTimerSeconds <= 60 ? "#ff9b9b" : "#eef0ff", fontFamily:"'JetBrains Mono',monospace", fontSize:13 }}>{formatCountdown(contestTimerSeconds)}</span>
           </div>
         )}
-        {showProblemNavigation && (
-          <div style={{ display:"flex", gap:10, alignItems:"center", marginLeft:"auto" }}>
-            <button
-              onClick={() => openAdjacentProblem(-1)}
-              disabled={!hasPreviousProblem}
-              style={{ ...S.btn("default"), opacity: hasPreviousProblem ? 1 : 0.45, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
-            >
-              ← PREVIOUS
-            </button>
-            <button
-              onClick={() => openAdjacentProblem(1)}
-              disabled={!hasNextProblem}
-              style={{ ...S.btn("default"), opacity: hasNextProblem ? 1 : 0.45, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
-            >
-              NEXT →
-            </button>
-          </div>
-        )}
+        <div style={{ display:"flex", gap:10, alignItems:"center", marginLeft:"auto" }}>
+          {showProblemNavigation && (
+            <>
+              <button
+                onClick={() => openAdjacentProblem(-1)}
+                disabled={!hasPreviousProblem}
+                style={{ ...S.btn("default"), opacity: hasPreviousProblem ? 1 : 0.45, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
+              >
+                ← PREVIOUS
+              </button>
+              <button
+                onClick={() => openAdjacentProblem(1)}
+                disabled={!hasNextProblem}
+                style={{ ...S.btn("default"), opacity: hasNextProblem ? 1 : 0.45, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
+              >
+                NEXT →
+              </button>
+            </>
+          )}
+          {!isExamWorkspace && <ScholarLogicBadge />}
+        </div>
       </nav>
 
 

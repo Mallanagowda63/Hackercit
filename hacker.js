@@ -21,6 +21,7 @@ const contentTypes = {
   ".json": "application/json; charset=utf-8",
   ".pdf": "application/pdf",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
 };
 
 // The app is written in JSX. Compile it once here (and again only when the file changes)
