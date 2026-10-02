@@ -92,10 +92,13 @@ function normalizeAuthenticatedUser(user = {}, fallback = {}) {
 
 // The ScholarLogic logo has a white background and dark text, so it sits on a white badge
 // to stay readable on the dark headers.
-function ScholarLogicBadge({ height = 34 }) {
+function ScholarLogicBadge({ height = 34, onClick }) {
   return (
     <span
+      onClick={onClick}
+      title={onClick ? "Go to home page" : undefined}
       style={{
+        cursor:onClick ? "pointer" : "inherit",
         display:"inline-flex",
         alignItems:"center",
         background:"#ffffff",
@@ -9225,7 +9228,7 @@ function CodingPlatform() {
               </button>
             </>
           )}
-          {!isExamWorkspace && <ScholarLogicBadge />}
+          {!isExamWorkspace && <ScholarLogicBadge onClick={() => setView("home")} />}
         </div>
       </nav>
 
