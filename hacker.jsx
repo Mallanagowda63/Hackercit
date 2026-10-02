@@ -9200,8 +9200,8 @@ function CodingPlatform() {
       <ErrorBanner errors={errorBanner} onClose={() => setErrorBanner(null)} />
 
       <nav style={S.nav}>
-        <DevOrbitLogo onClick={()=>setView("list")} showPartner={isExamWorkspace} />
-        {isExamWorkspace && <span style={{ color:"#444", fontSize:14 }}>/</span>}
+        <DevOrbitLogo onClick={isExamWorkspace ? undefined : () => setView("list")} />
+        <span style={{ color:"#444", fontSize:14 }}>/</span>
         <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
         {problemNavigationSource === "contest" && contestEntered && (
           <div style={{ display:"inline-flex", alignItems:"center", gap:8, marginLeft:14, padding:"7px 10px", borderRadius:10, background:"#0f1727", border:"1px solid #2d4f7b", color:"#93c5fd", fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
@@ -9228,7 +9228,6 @@ function CodingPlatform() {
               </button>
             </>
           )}
-          {!isExamWorkspace && <ScholarLogicBadge onClick={() => setView("home")} />}
         </div>
       </nav>
 
