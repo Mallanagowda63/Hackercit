@@ -300,8 +300,9 @@ exports.schedule = async (req, res) => {
       return res.status(400).json({ error: 'start time must be in the future; use Start Now to begin immediately' });
     }
 
+    // The duration stays what the admin set (each student's time). An optional end time only
+    // closes the window in which students can take the test.
     let endsAt = new Date(startsAt.getTime() + (assignment.durationMinutes * 60 * 1000));
-    let { durationMinutes } = assignment;
     if (req.body?.endsAt) {
       endsAt = new Date(req.body.endsAt);
       if (Number.isNaN(endsAt.getTime())) {
@@ -310,7 +311,6 @@ exports.schedule = async (req, res) => {
       if (endsAt.getTime() <= startsAt.getTime()) {
         return res.status(400).json({ error: 'end time must be after the start time' });
       }
-      durationMinutes = Math.ceil((endsAt.getTime() - startsAt.getTime()) / 60000);
     }
 
     const scheduledAssignment = await prisma.testAssignment.update({
@@ -319,7 +319,6 @@ exports.schedule = async (req, res) => {
         status: 'SCHEDULED',
         startsAt,
         endsAt,
-        durationMinutes,
       },
     });
 

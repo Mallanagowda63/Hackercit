@@ -3829,12 +3829,6 @@ function CodingPlatform() {
         ? ADMIN_THEME.warning
         : ADMIN_THEME.info;
   const liveAdminAssignments = adminAssignments.filter((assignment) => assignment.status === "LIVE");
-  const createFormWindowMinutes = (() => {
-    const start = buildScheduledStart(adminCreateForm.scheduleDate, adminCreateForm.scheduleTime);
-    const end = buildScheduledStart(adminCreateForm.scheduleEndDate || adminCreateForm.scheduleDate, adminCreateForm.scheduleEndTime);
-    if (!start || !end || end <= start) return 0;
-    return Math.ceil((end - start) / 60000);
-  })();
   const selectableAdminAssignments = adminAssignments.length ? adminAssignments : [adminCurrentTest].filter(Boolean);
   const loggedInRegisteredStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) > 0);
   const neverLoggedInStudents = registeredStudents.filter((student) => Number(student.loginCount || 0) === 0);
@@ -7551,13 +7545,8 @@ function CodingPlatform() {
                       </select>
                     </div>
                     <div>
-                      <label style={S.adminFieldLabel}>Duration (mins){createFormWindowMinutes ? " – from start/end" : ""}</label>
-                      <input
-                        value={createFormWindowMinutes ? String(createFormWindowMinutes) : adminCreateForm.duration}
-                        onChange={(e)=>handleAdminCreateInput("duration", e.target.value)}
-                        disabled={Boolean(createFormWindowMinutes)}
-                        style={{ ...S.adminInput, opacity: createFormWindowMinutes ? 0.7 : 1 }}
-                      />
+                      <label style={S.adminFieldLabel}>Duration (mins)</label>
+                      <input value={adminCreateForm.duration} onChange={(e)=>handleAdminCreateInput("duration", e.target.value)} style={S.adminInput} />
                     </div>
                   </div>
                   <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "1fr 1fr", gap:12 }}>
