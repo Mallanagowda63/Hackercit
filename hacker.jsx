@@ -24,6 +24,8 @@ const AUTH_SESSION_STORAGE_KEY = "codearena.authSession";
 // Admins sign in from /admin; the public login popup is student-only.
 const IS_ADMIN_ENTRY = /^\/admin\/?$/i.test(window.location.pathname);
 const DEFAULT_AUTH_ROLE = IS_ADMIN_ENTRY ? "admin" : "student";
+// Tab switches / leaving fullscreen / restricted keys: the 4th one ends the test.
+const MAX_CONTEST_WARNINGS = 4;
 // Shared test links look like /test/<testId>; opening one takes a student straight into that test.
 const TEST_LINK_ID = (window.location.pathname.match(/^\/test\/([0-9a-f]{24})\/?$/i) || [])[1] || null;
 const EMPTY_CURRENT_USER = {
@@ -1000,6 +1002,8 @@ function CodingPlatform() {
   const [contestSecurityLocked, setContestSecurityLocked] = useState(false);
   // True while a student is in a test but not yet in fullscreen (e.g. the camera prompt closed it).
   const [contestNeedsFullscreen, setContestNeedsFullscreen] = useState(false);
+  const [contestWarningCount, setContestWarningCount] = useState(0);
+  const [contestWarningReason, setContestWarningReason] = useState("");
   const [contestInstructionsOpen, setContestInstructionsOpen] = useState(false);
   const [contestInstructionsAccepted, setContestInstructionsAccepted] = useState(false);
   const [contestCameraStatus, setContestCameraStatus] = useState("idle");
@@ -1572,9 +1576,25 @@ function CodingPlatform() {
 
     let ending = false;
     let armed = Boolean(document.fullscreenElement) && !document.hidden;
+    let warnings = 0;
     setContestNeedsFullscreen(!armed);
+    setContestWarningCount(0);
+    setContestWarningReason("");
+
+    const logProctoringEvent = (eventType, reason, warningNumber) => {
+      if (!authToken || !currentUser.id || !activeContestAssignment?.id) return;
+      performApiRequest("/api/proctoring/events", {
+        method: "POST",
+        body: JSON.stringify({
+          assignmentId: activeContestAssignment.id,
+          eventType,
+          metadata: { reason, warning: warningNumber, maxWarnings: MAX_CONTEST_WARNINGS },
+        }),
+      }).catch(() => {});
+    };
+
     const endForSecurity = async (reason) => {
-      if (ending || !armed) return;
+      if (ending) return;
       ending = true;
       if (authToken && currentUser.id && activeContestAssignment?.id) {
         try {
@@ -1585,6 +1605,21 @@ function CodingPlatform() {
         } catch {}
       }
       finishContest(reason);
+    };
+
+    const handleViolation = (eventType, reason) => {
+      if (!armed || ending) return;
+      armed = false;
+      warnings += 1;
+      setContestWarningCount(warnings);
+      setContestWarningReason(reason);
+      logProctoringEvent(eventType, reason, warnings);
+
+      if (warnings >= MAX_CONTEST_WARNINGS) {
+        endForSecurity(`Ended after ${MAX_CONTEST_WARNINGS} warnings. Last: ${reason}`);
+        return;
+      }
+      setContestNeedsFullscreen(true);
     };
 
     const ensureContestFocus = () => {
@@ -1606,7 +1641,7 @@ function CodingPlatform() {
       setContestSecurityLocked(shouldLock);
 
       if (shouldLock) {
-        endForSecurity("Ended because fullscreen was closed or the window changed.");
+        handleViolation(hidden ? "TAB_SWITCH" : "FULLSCREEN_EXIT", hidden ? "You switched to another tab or window." : "You left fullscreen mode.");
       } else {
         setScreenShield(false);
       }
@@ -1614,8 +1649,7 @@ function CodingPlatform() {
 
     const handleBlur = () => {
       if (!armed) return;
-      setContestSecurityLocked(true);
-      endForSecurity("Ended because you switched away from the test window.");
+      handleViolation("WINDOW_BLUR", "You switched away from the test window.");
     };
 
     const handleContestKeyDown = (e) => {
@@ -1631,7 +1665,7 @@ function CodingPlatform() {
 
       if (armed && (key === "Escape" || key === "F11" || key === "Meta" || key === "OS")) {
         e.preventDefault();
-        endForSecurity(`Ended because restricted key "${key}" was pressed.`);
+        handleViolation("SUSPICIOUS_SHORTCUT", `You pressed a restricted key (${key === "Meta" || key === "OS" ? "Windows" : key}).`);
       }
     };
 
@@ -1935,18 +1969,40 @@ function CodingPlatform() {
     return (
       <div style={{ position:"fixed", inset:0, zIndex:100000, background:"rgba(5,6,12,0.94)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
         <div style={{ width:"min(460px, 100%)", background:"#11111b", border:"1px solid #2b2b45", borderRadius:20, padding:"28px 24px", textAlign:"center" }}>
-          <div style={{ fontSize:44 }}>🖥️</div>
-          <h2 style={{ color:"#f5f6ff", fontSize:22, margin:"12px 0 8px" }}>Continue your test in fullscreen</h2>
-          <p style={{ color:"#a9aed0", fontSize:14, lineHeight:1.6, margin:"0 0 20px" }}>
-            The test runs in fullscreen mode. Your timer is already running.
-            Once you're in fullscreen, leaving it or switching windows will end the test.
-          </p>
+          {contestWarningCount > 0 ? (
+            <>
+              <div style={{ fontSize:44 }}>⚠️</div>
+              <h2 style={{ color:"#fca5a5", fontSize:22, margin:"12px 0 8px" }}>Warning {contestWarningCount} of {MAX_CONTEST_WARNINGS}</h2>
+              <p style={{ color:"#fecaca", fontSize:14, fontWeight:700, margin:"0 0 8px" }}>{contestWarningReason}</p>
+              <p style={{ color:"#a9aed0", fontSize:14, lineHeight:1.6, margin:"0 0 16px" }}>
+                {MAX_CONTEST_WARNINGS - contestWarningCount === 1
+                  ? "This is your last chance. One more violation will end your test."
+                  : `${MAX_CONTEST_WARNINGS - contestWarningCount} more violations will end your test.`}
+                {" "}This has been recorded. Your timer is still running.
+              </p>
+              <div style={{ display:"flex", justifyContent:"center", gap:8, marginBottom:20 }}>
+                {Array.from({ length: MAX_CONTEST_WARNINGS }, (_, index) => (
+                  <span key={index} style={{ width:28, height:8, borderRadius:999, background:index < contestWarningCount ? "#ef4444" : "#2b2b45" }} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize:44 }}>🖥️</div>
+              <h2 style={{ color:"#f5f6ff", fontSize:22, margin:"12px 0 8px" }}>Continue your test in fullscreen</h2>
+              <p style={{ color:"#a9aed0", fontSize:14, lineHeight:1.6, margin:"0 0 20px" }}>
+                The test runs in fullscreen mode. Your timer is already running.
+                Switching tabs/windows, leaving fullscreen or pressing restricted keys gives a warning;
+                after {MAX_CONTEST_WARNINGS} warnings the test ends.
+              </p>
+            </>
+          )}
           <button
             type="button"
             onClick={() => { requestContestFullscreen(); }}
             style={{ ...S.btn("submit"), width:"100%", padding:"12px 20px" }}
           >
-            Enter Fullscreen
+            {contestWarningCount > 0 ? "Return to Test (Fullscreen)" : "Enter Fullscreen"}
           </button>
         </div>
       </div>
@@ -5558,6 +5614,7 @@ function CodingPlatform() {
               <tr style={{ background: "#0a0a14", borderBottom: "1px solid #1e1e2e" }}>
                 <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Student</th>
                 <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Test Title</th>
+                <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Test Score</th>
                 <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Risk Score</th>
                 <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Proctoring Status</th>
                 <th style={{ padding: "14px 16px", color: "#888", fontWeight: 700 }}>Events Summary</th>
@@ -5568,7 +5625,7 @@ function CodingPlatform() {
             <tbody>
               {filteredReports.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: 24, textAlign: "center", color: "#666" }}>
+                  <td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#666" }}>
                     No proctoring records match your criteria.
                   </td>
                 </tr>
@@ -5580,6 +5637,15 @@ function CodingPlatform() {
                       <div style={{ fontSize: 11, color: "#888" }}>{r.studentEmail}</div>
                     </td>
                     <td style={{ padding: "14px 16px", color: "#c8c8e8", fontWeight: 600 }}>{r.testTitle}</td>
+                    <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
+                      {r.score === null || r.score === undefined ? (
+                        <span style={{ color: "#666", fontSize: 12 }}>Not submitted</span>
+                      ) : (
+                        <span style={{ fontSize: 15, fontWeight: 800, color: "#60a5fa" }}>
+                          {r.score}{r.maxScore ? <span style={{ color: "#888", fontWeight: 600, fontSize: 12 }}> / {r.maxScore}</span> : null}
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: "14px 16px" }}>
                       <span style={{ fontSize: 16, fontWeight: 800, color: getScoreColor(r.totalRiskScore) }}>
                         {r.totalRiskScore}
@@ -8967,7 +9033,17 @@ function CodingPlatform() {
   const isTheoryProblem = p && (p.type === "theory" || (Array.isArray(p.options) && p.options.length > 0));
   const problemWorkspaceStyle = isCompact
     ? { display:"grid", gridTemplateColumns:"minmax(0, 1fr)", overflow:"visible", minHeight:"calc(100vh - 116px)" }
-    : { display:"flex", flex:1, overflow:"hidden", height:"calc(100vh - 128px)" };
+    : { display:"flex", flex:1, overflow:"hidden", height:isExamWorkspace ? "calc(100vh - 186px)" : "calc(100vh - 128px)" };
+  // Exam question palette: completed = coding answer submitted / MCQ option chosen; attempted = code run only.
+  const getExamQuestionState = (problem) => {
+    const keys = [problem.dbId, problem.id, problem.legacyId].filter((key) => key !== undefined && key !== null && key !== "");
+    if (keys.some((key) => candidateTheoryAnswers[key] !== undefined && candidateTheoryAnswers[key] !== null && candidateTheoryAnswers[key] !== "")) return "completed";
+    if (keys.some((key) => candidateCodingAnswers[key]?.submitted) || contestSessionProgress[problem.id] === "accepted" || contestSessionProgress[problem.id] === "rejected") return "completed";
+    if (keys.some((key) => candidateCodingAnswers[key])) return "attempted";
+    return "notStarted";
+  };
+  const examQuestionStates = isExamWorkspace ? problemNavigation.map(getExamQuestionState) : [];
+  const examCompletedCount = examQuestionStates.filter((state) => state === "completed").length;
   const problemPanelStyle = isCompact
     ? { display:"flex", flexDirection:"column", borderBottom:"1px solid #1e1e2e", overflow:"hidden", minHeight:isPhone ? 360 : 420 }
     : { width:"42%", display:"flex", flexDirection:"column", borderRight:"1px solid #1e1e2e", overflow:"hidden" };
@@ -9136,14 +9212,14 @@ function CodingPlatform() {
               <button
                 onClick={() => openAdjacentProblem(-1)}
                 disabled={!hasPreviousProblem}
-                style={{ ...S.btn("default"), opacity: hasPreviousProblem ? 1 : 0.45, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
+                style={{ ...S.btn("default"), background:"#1e1b4b", color:"#c7d2fe", border:"1px solid #6366f1", opacity: hasPreviousProblem ? 1 : 0.4, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
               >
                 ← PREVIOUS
               </button>
               <button
                 onClick={() => openAdjacentProblem(1)}
                 disabled={!hasNextProblem}
-                style={{ ...S.btn("default"), opacity: hasNextProblem ? 1 : 0.45, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
+                style={{ ...S.btn("default"), background:"linear-gradient(135deg,#7c3aed,#0ea5e9)", color:"#ffffff", border:"none", boxShadow:"0 4px 14px rgba(124,58,237,0.35)", opacity: hasNextProblem ? 1 : 0.4, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
               >
                 NEXT →
               </button>
@@ -9155,9 +9231,57 @@ function CodingPlatform() {
 
 
 
+      {isExamWorkspace && problemNavigation.length > 0 && (
+        <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:"10px 24px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
+          <div style={{ color:"#e2e4ff", fontSize:13, fontWeight:700, whiteSpace:"nowrap" }}>
+            Question {selectedProblemIndex + 1} of {problemNavigation.length}
+            <span style={{ color:"#4ade80", marginLeft:10 }}>✓ {examCompletedCount}/{problemNavigation.length} completed</span>
+          </div>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", flex:1 }}>
+            {problemNavigation.map((problem, index) => {
+              const state = examQuestionStates[index];
+              const current = index === selectedProblemIndex;
+              const colors = state === "completed"
+                ? { background:"#16a34a", color:"#ffffff", border:"#22c55e" }
+                : state === "attempted"
+                  ? { background:"#b45309", color:"#ffffff", border:"#f59e0b" }
+                  : { background:"#1a1a2b", color:"#a9aed0", border:"#2b2b45" };
+              return (
+                <button
+                  key={problem.dbId || problem.id || index}
+                  type="button"
+                  title={`Question ${index + 1}: ${problem.title || ""} (${state === "completed" ? "completed" : state === "attempted" ? "attempted" : "not started"})`}
+                  onClick={() => openProblem(problem, problemNavigationSource)}
+                  style={{
+                    width:34,
+                    height:34,
+                    borderRadius:8,
+                    background:colors.background,
+                    color:colors.color,
+                    border:current ? "2px solid #a78bfa" : `1px solid ${colors.border}`,
+                    boxShadow:current ? "0 0 0 3px rgba(167,139,250,0.35)" : "none",
+                    fontWeight:800,
+                    fontSize:13,
+                    cursor:"pointer",
+                    fontFamily:"'Space Grotesk',sans-serif",
+                  }}
+                >
+                  {index + 1}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display:"flex", gap:12, color:"#7a7f9e", fontSize:11, fontWeight:700, whiteSpace:"nowrap" }}>
+            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#16a34a", marginRight:5 }} />Completed</span>
+            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#b45309", marginRight:5 }} />Attempted</span>
+            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#1a1a2b", border:"1px solid #2b2b45", marginRight:5 }} />Not started</span>
+          </div>
+        </div>
+      )}
+
       <div style={problemWorkspaceStyle}>
 
-        
+
         <div style={problemPanelStyle}>
           <div style={{ display:"flex", borderBottom:"1px solid #1e1e2e", background:"#0d0d15", overflowX:"auto" }}>
             {["description","solution","submissions"].map(t=>(

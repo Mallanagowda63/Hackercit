@@ -156,8 +156,26 @@ async function getProctoringReports(filters = {}) {
     fetchedUsers.forEach((u) => resolvedUserMap.set(String(u.id), u));
   }
 
+  // The DB layer does not resolve `include` for attempts, so look the tests up directly.
+  const assignmentIds = [...new Set(attempts.map((a) => a.assignmentId).filter(Boolean))];
+  const assignmentsById = new Map(
+    (assignmentIds.length ? await prisma.testAssignment.findMany({ where: { id: { in: assignmentIds } } }) : [])
+      .map((assignment) => [String(assignment.id), assignment]),
+  );
+
+  // Test scores, so the admin sees how students flagged for malpractice scored.
+  const submissions = await prisma.assessmentSubmission.findMany({ orderBy: { createdAt: 'desc' } });
+  const latestSubmission = new Map();
+  submissions.forEach((sub) => {
+    const key = `${sub.assignmentId}:${sub.userId}`;
+    if (!latestSubmission.has(key)) latestSubmission.set(key, sub);
+  });
+
   const reports = attempts.map((attempt) => {
     const user = attempt.user || resolvedUserMap.get(String(attempt.userId)) || null;
+    const submission = latestSubmission.get(`${attempt.assignmentId}:${attempt.userId}`) || null;
+    const score = submission ? submission.totalScore : (attempt.score ?? null);
+    const maxScore = submission ? submission.maxScore : (attempt.maxScore ?? null);
     const events = Array.isArray(attempt.interruptions) ? attempt.interruptions : [];
     const totalRiskScore = events.reduce((sum, evt) => sum + (evt.score || 0), 0);
     const eventCounts = {};
@@ -177,7 +195,7 @@ async function getProctoringReports(filters = {}) {
     return {
       attemptId: attempt.id,
       assignmentId: attempt.assignmentId,
-      testTitle: attempt.assignment?.title || 'Coding Test',
+      testTitle: attempt.assignment?.title || assignmentsById.get(String(attempt.assignmentId))?.title || 'Deleted test',
       userId: attempt.userId,
       studentName,
       studentEmail: user?.email || 'Not Available',
@@ -192,6 +210,8 @@ async function getProctoringReports(filters = {}) {
       eventCounts,
       events,
       adminDecision: attempt.adminDecision || null,
+      score: score === undefined ? null : score,
+      maxScore: maxScore === undefined ? null : maxScore,
     };
   });
 
