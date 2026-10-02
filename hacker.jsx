@@ -317,15 +317,15 @@ function buildScheduledStart(dateValue, timeValue) {
 function resolveScheduleWindow(startDate, startTime, endDate, endTime) {
   const startsAt = buildScheduledStart(startDate, startTime);
   if (!startsAt) return { error: "Pick both a start date and a start time to schedule the test." };
-  if (startsAt.getTime() <= Date.now()) {
-    return { error: "The start time must be in the future. Use Start Now to begin immediately." };
-  }
+  // A start time that is now or already past opens the test right away.
+  const startsNow = startsAt.getTime() <= Date.now();
 
-  if (!endDate && !endTime) return { startsAt, endsAt: null };
+  if (!endDate && !endTime) return { startsAt, endsAt: null, startsNow };
   const endsAt = buildScheduledStart(endDate || startDate, endTime);
   if (!endsAt) return { error: "Pick an end time (and end date if it is a different day)." };
   if (endsAt.getTime() <= startsAt.getTime()) return { error: "The end time must be after the start time." };
-  return { startsAt, endsAt };
+  if (endsAt.getTime() <= Date.now()) return { error: "The end time has already passed. Pick a later end date/time." };
+  return { startsAt, endsAt, startsNow };
 }
 
 function formatPortalDate(value) {
@@ -2718,7 +2718,9 @@ function CodingPlatform() {
       setAdminTimerSeconds(duration * 60);
       setAdminSubmissionProblemId(createdAssignment?.problems?.[0]?.id || "");
       setPortalMessage(scheduledStart
-        ? `Test "${createdAssignment.title}" scheduled for ${formatPortalDate(scheduledStart)}. It will start automatically and notify students.`
+        ? (scheduleWindow.startsNow
+          ? `Test "${createdAssignment.title}" is LIVE now and stays open until ${formatPortalDate(scheduleWindow.endsAt || createdAssignment.endsAt)}.`
+          : `Test "${createdAssignment.title}" scheduled for ${formatPortalDate(scheduledStart)}. It will start automatically and notify students.`)
         : `Draft test "${createdAssignment.title}" saved. Start it now or schedule a date and time.`);
       await loadAdminPortalData(createdAssignment.id);
     } catch (error) {
@@ -2786,7 +2788,9 @@ function CodingPlatform() {
       setAdminScheduleTime("");
       setAdminScheduleEndDate("");
       setAdminScheduleEndTime("");
-      setPortalMessage(`Test scheduled for ${formatPortalDate(scheduledStart)}. It will start automatically and notify students.`);
+      setPortalMessage(data.startedNow
+        ? `Test is LIVE now and stays open until ${formatPortalDate(scheduleWindow.endsAt || data.assignment?.endsAt)}. ${data.notifiedStudents || 0} students notified.`
+        : `Test scheduled for ${formatPortalDate(scheduledStart)}. It will start automatically and notify students.`);
       await loadAdminPortalData(scheduledAssignment.id);
     } catch (error) {
       setPortalError(error.message || "Unable to schedule the test.");

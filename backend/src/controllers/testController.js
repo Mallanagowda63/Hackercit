@@ -292,13 +292,13 @@ exports.schedule = async (req, res) => {
       return res.status(400).json({ error: 'this test is already live' });
     }
 
-    const startsAt = new Date(req.body?.startsAt);
+    let startsAt = new Date(req.body?.startsAt);
     if (Number.isNaN(startsAt.getTime())) {
       return res.status(400).json({ error: 'valid start date and time required' });
     }
-    if (startsAt.getTime() <= Date.now()) {
-      return res.status(400).json({ error: 'start time must be in the future; use Start Now to begin immediately' });
-    }
+    // A start time that is now or already past means "open it right away" (kept open until endsAt).
+    const startsNow = startsAt.getTime() <= Date.now();
+    if (startsNow) startsAt = new Date();
 
     // The duration stays what the admin set (each student's time). An optional end time only
     // closes the window in which students can take the test.
@@ -313,17 +313,31 @@ exports.schedule = async (req, res) => {
       }
     }
 
+    if (endsAt.getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'end time must be in the future' });
+    }
+
     const scheduledAssignment = await prisma.testAssignment.update({
       where: { id },
       data: {
-        status: 'SCHEDULED',
+        status: startsNow ? 'LIVE' : 'SCHEDULED',
         startsAt,
         endsAt,
       },
     });
 
+    let notifiedStudents = 0;
+    if (startsNow) {
+      notifiedStudents = await notifyStudents({
+        type: 'TEST_STARTED',
+        title: `Test started: ${scheduledAssignment.title}`,
+        message: `Your assigned coding test "${scheduledAssignment.title}" is now live.`,
+        assignmentId: scheduledAssignment.id,
+      });
+    }
+
     const [fullAssignment] = await loadAssignmentsWithProblems({ id: scheduledAssignment.id });
-    return res.json({ assignment: fullAssignment });
+    return res.json({ assignment: fullAssignment, startedNow: startsNow, notifiedStudents });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'server error' });
