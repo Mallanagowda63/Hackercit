@@ -9021,66 +9021,6 @@ function CodingPlatform() {
           </div>
 
           <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 240 : 320}px, 1fr))`, gap:20, alignItems:"start" }}>
-            <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:22, overflow:"hidden", boxShadow:"0 18px 40px rgba(0,0,0,0.22)" }}>
-              <div style={{ padding:"20px 22px 16px", borderBottom:"1px solid #1c1d2a" }}>
-                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:8 }}>Problem List</div>
-                <div style={{ color:"#f5f6ff", fontSize:24, fontWeight:700 }}>Contest Problems</div>
-              </div>
-              <div style={{ padding:"0 14px 14px" }}>
-                <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 10px" }}>
-                  <thead>
-                    <tr>
-                      {["Problem Name", "Difficulty", "Status", "Score"].map((heading) => (
-                        <th key={heading} style={{ textAlign:"left", padding:"14px 16px 8px", fontSize:11, color:"#7a7f9e", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:"'Space Grotesk',sans-serif" }}>
-                          {heading}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {contestProblems.map((problem, index) => (
-                      <tr
-                        key={problem.id}
-                        onClick={() => {
-                          if (!contestEntered) {
-                            handleEnterContest(problem);
-                            return;
-                          }
-                          openProblem(problem, "contest");
-                        }}
-                        style={{ cursor:"pointer", transition:"transform 0.18s ease, filter 0.18s ease" }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.transform = "scale(1.01)";
-                          e.currentTarget.style.filter = "brightness(1.04)";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.transform = "scale(1)";
-                          e.currentTarget.style.filter = "none";
-                        }}
-                      >
-                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538", borderLeft:"1px solid #222538", borderRadius:"16px 0 0 16px" }}>
-                          <div style={{ color:"#f5f6ff", fontWeight:700, marginBottom:4 }}>{problem.title}</div>
-                          <div style={{ color:"#7f85a6", fontSize:12 }}>Problem #{problem.id}</div>
-                        </td>
-                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538" }}>
-                          <span style={S.badge(problem.difficulty)}>{problem.difficulty}</span>
-                        </td>
-                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538" }}>
-                          <span style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"8px 10px", borderRadius:999, background:problem.contestStatusMeta.background, border:`1px solid ${problem.contestStatusMeta.border}`, color:problem.contestStatusMeta.color, fontSize:12, fontWeight:700 }}>
-                            <span>{problem.contestStatusMeta.icon}</span>
-                            <span>{problem.contestStatusMeta.label}</span>
-                          </span>
-                        </td>
-                        <td style={{ padding:"16px", background:index % 2 === 0 ? "#12141d" : "#0d0f16", borderTop:"1px solid #222538", borderBottom:"1px solid #222538", borderRight:"1px solid #222538", borderRadius:"0 16px 16px 0", color:"#73f0b3", fontWeight:700, fontSize:16 }}>
-                          {problem.contestScore}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
             <div style={{ display:"grid", gap:18 }}>
               <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:22, padding:"20px 22px", boxShadow:"0 18px 40px rgba(0,0,0,0.22)" }}>
                 <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Round Status</div>
