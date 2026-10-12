@@ -1086,6 +1086,8 @@ function CodingPlatform() {
   // Exam camera proctoring: the exam stays blurred while the camera is off/covered or a phone is in view.
   const [cameraIssue, setCameraIssue]         = useState("");
   const [phoneDetected, setPhoneDetected]     = useState(false);
+  const [faceMissing, setFaceMissing]         = useState(false);
+  const [aiCheckStatus, setAiCheckStatus]     = useState("loading");
   const proctorBlock = !contestEntered
     ? null
     : cameraIssue
@@ -1100,7 +1102,13 @@ function CodingPlatform() {
           message: "A mobile phone was detected on camera. Put it away to continue. This has been recorded. Your timer keeps running.",
           action: null,
         }
-        : null;
+        : faceMissing
+          ? {
+            title: "Face Not Visible",
+            message: "Your face is not visible on camera. Sit facing the camera and keep it uncovered to continue. Your timer keeps running.",
+            action: null,
+          }
+          : null;
   const shieldActive = screenShield || Boolean(proctorBlock);
   const shieldActiveMessage = proctorBlock ? proctorBlock.message : shieldMessage;
   const shieldTitle = proctorBlock ? proctorBlock.title : undefined;
@@ -1901,6 +1909,7 @@ function CodingPlatform() {
     if (!contestEntered || currentUser.role === "admin") {
       setCameraIssue("");
       setPhoneDetected(false);
+      setFaceMissing(false);
       return undefined;
     }
     if (!contestCameraStream) {
@@ -1908,6 +1917,7 @@ function CodingPlatform() {
       return undefined;
     }
     setPhoneDetected(false);
+    setFaceMissing(false);
 
     let cancelled = false;
     const testId = activeAssignment?.id;
@@ -1925,8 +1935,17 @@ function CodingPlatform() {
     let darkChecks = 0;
     let phoneHits = 0;
     let phoneMisses = 0;
+    let faceMisses = 0;
+    let faceHits = 0;
     let cameraIncidentOpen = false;
     let phoneIncidentOpen = false;
+    let faceIncidentOpen = false;
+    // Frames come from the on-screen preview when it is showing (always playing), otherwise from
+    // a hidden video element on the same stream.
+    const frameSource = () => {
+      const preview = contestCameraPreviewRef.current;
+      return preview && preview.srcObject === contestCameraStream && preview.readyState >= 2 ? preview : video;
+    };
     let detector = null;
     let detecting = false;
 
@@ -1939,8 +1958,9 @@ function CodingPlatform() {
     };
 
     const averageBrightness = () => {
-      if (!context || video.readyState < 2) return null;
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const source = frameSource();
+      if (!context || source.readyState < 2) return null;
+      context.drawImage(source, 0, 0, canvas.width, canvas.height);
       const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
       let total = 0;
       for (let i = 0; i < data.length; i += 4) total += (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
@@ -1964,12 +1984,27 @@ function CodingPlatform() {
       cameraIncidentOpen = Boolean(issue);
     };
 
+    // One model pass per check: a phone in view, and whether the student (a person) is visible.
+    // A phone held over the camera hides the face, so that is caught by the face check.
     const checkPhone = async () => {
-      if (!detector || detecting || video.readyState < 2) return;
+      const source = frameSource();
+      if (!detector || detecting || source.readyState < 2) return;
       detecting = true;
       try {
-        const predictions = await detector.detect(video, 10, 0.5);
-        const seen = predictions.some((p) => p.class === "cell phone" && p.score >= 0.6);
+        const predictions = await detector.detect(source, 10, 0.3);
+        const seen = predictions.some((p) => p.class === "cell phone" && p.score >= 0.4);
+        const personVisible = predictions.some((p) => p.class === "person" && p.score >= 0.4);
+        faceMisses = personVisible ? 0 : faceMisses + 1;
+        faceHits = personVisible ? faceHits + 1 : 0;
+        // About 6s without the student in view blurs the exam; two checks with them back removes it.
+        if (faceMisses >= 4 && !faceIncidentOpen) {
+          faceIncidentOpen = true;
+          setFaceMissing(true);
+          logEvent("FACE_NOT_VISIBLE", "The student was not visible on camera.");
+        } else if (faceHits >= 2 && faceIncidentOpen) {
+          faceIncidentOpen = false;
+          setFaceMissing(false);
+        }
         phoneHits = seen ? phoneHits + 1 : 0;
         phoneMisses = seen ? 0 : phoneMisses + 1;
         // Two detections in a row to show the block, two clear checks in a row to remove it.
@@ -1994,11 +2029,16 @@ function CodingPlatform() {
       if (detector || detectorLoading || Date.now() - lastDetectorAttempt < 30000) return;
       detectorLoading = true;
       lastDetectorAttempt = Date.now();
+      if (!cancelled) setAiCheckStatus("loading");
       loadPhoneDetector()
         .then((model) => {
-          if (!cancelled) detector = model;
+          if (cancelled) return;
+          detector = model;
+          setAiCheckStatus("on");
         })
-        .catch(() => {})
+        .catch(() => {
+          if (!cancelled) setAiCheckStatus("off");
+        })
         .finally(() => {
           detectorLoading = false;
         });
@@ -2016,7 +2056,7 @@ function CodingPlatform() {
       checkCamera();
       ensureDetector();
       checkPhone();
-    }, 2000);
+    }, 1500);
 
     return () => {
       cancelled = true;
@@ -10061,6 +10101,11 @@ function CodingPlatform() {
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: contestCameraStream ? "#22c55e" : "#eab308", boxShadow: contestCameraStream ? "0 0 0 4px rgba(34,197,94,0.14)" : "none" }} />
               <span>{contestCameraStream ? "Camera On" : "Standby"}</span>
+              {contestCameraStream && (
+                <span style={{ color: aiCheckStatus === "on" ? "#86efac" : aiCheckStatus === "off" ? "#fca5a5" : "#fcd34d", fontSize: 9, letterSpacing: "0.04em" }}>
+                  · {aiCheckStatus === "on" ? "AI check on" : aiCheckStatus === "off" ? "AI check unavailable" : "AI check loading"}
+                </span>
+              )}
             </div>
             <button
               onClick={() => setCameraMinimized(!cameraMinimized)}
