@@ -537,9 +537,23 @@ function mapAssignmentRecord(assignment) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HIDDEN REFERENCE SOLUTIONS  (never shown to student – merged silently in bg)
 // ─────────────────────────────────────────────────────────────────────────────
+// A request that never got a response ("Failed to fetch": dropped/stale connection, brief network
+// blip) is retried a couple of times so students don't have to click Run/Submit twice. Requests
+// that reached the server and got an error response are not retried.
+async function fetchWithRetry(url, options = {}, retries = 2) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetch(url, options);
+    } catch (error) {
+      if (attempt >= retries || error?.name === "AbortError") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    }
+  }
+}
+
 async function requestExecutionResult({ language, sourceCode, fnName, testCases }) {
   try {
-    const response = await fetch(buildBackendApiUrl("/api/run"), {
+    const response = await fetchWithRetry(buildBackendApiUrl("/api/run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -558,6 +572,9 @@ async function requestExecutionResult({ language, sourceCode, fnName, testCases 
     return data;
   } catch (error) {
     const message = error.message || "Execution failed.";
+    if (/Failed to fetch|NetworkError|Load failed/i.test(message) && !IS_LOCAL_FRONTEND) {
+      throw new Error("Could not reach the server. Check your internet connection and try again.");
+    }
     const needsServerHint = /Failed to fetch|Cannot reach backend|not configured|received HTML/i.test(message);
     throw new Error(
       needsServerHint
@@ -1081,7 +1098,7 @@ function CodingPlatform() {
 
   const performApiRequest = async (path, options = {}) => {
     const hasBody = Boolean(options.body);
-    const response = await fetch(buildBackendApiUrl(path), {
+    const response = await fetchWithRetry(buildBackendApiUrl(path), {
       ...options,
       headers: {
         ...createAuthHeaders(authToken, hasBody),
