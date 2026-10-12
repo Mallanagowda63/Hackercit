@@ -538,15 +538,26 @@ function mapAssignmentRecord(assignment) {
 // HIDDEN REFERENCE SOLUTIONS  (never shown to student – merged silently in bg)
 // ─────────────────────────────────────────────────────────────────────────────
 // A request that never got a response ("Failed to fetch": dropped/stale connection, brief network
-// blip) is retried a couple of times so students don't have to click Run/Submit twice. Requests
-// that reached the server and got an error response are not retried.
+// blip) is retried a couple of times so students don't have to click Run/Submit twice. A request
+// with no answer after 90s (nginx gives up at 90s anyway) is abandoned and retried on a fresh
+// connection instead of leaving "Submitting..." spinning. Error responses are not retried.
+const REQUEST_ATTEMPT_TIMEOUT_MS = 90000;
+
 async function fetchWithRetry(url, options = {}, retries = 2) {
   for (let attempt = 0; ; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_ATTEMPT_TIMEOUT_MS);
     try {
-      return await fetch(url, options);
+      return await fetch(url, { ...options, signal: controller.signal });
     } catch (error) {
-      if (attempt >= retries || error?.name === "AbortError") throw error;
+      if (attempt >= retries) {
+        throw error?.name === "AbortError"
+          ? new Error("The server took too long to respond. Please try again.")
+          : error;
+      }
       await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
