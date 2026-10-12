@@ -30,6 +30,17 @@ const MAX_CONTEST_WARNINGS = 4;
 const PROBLEM_ACTION_BAR_HEIGHT = 66;
 // Shared test links look like /test/<testId>; opening one takes a student straight into that test.
 const TEST_LINK_ID = (window.location.pathname.match(/^\/test\/([0-9a-f]{24})\/?$/i) || [])[1] || null;
+// The test a student may see: the one from the link they opened last. It is remembered, so
+// going back to the home page (which leaves the /test/<id> address) keeps the same test.
+const STUDENT_TEST_LINK_STORAGE_KEY = "codearena.testLink";
+const STUDENT_TEST_ID = (() => {
+  try {
+    if (TEST_LINK_ID) window.localStorage?.setItem(STUDENT_TEST_LINK_STORAGE_KEY, TEST_LINK_ID);
+    return TEST_LINK_ID || window.localStorage?.getItem(STUDENT_TEST_LINK_STORAGE_KEY) || null;
+  } catch {
+    return TEST_LINK_ID;
+  }
+})();
 const EMPTY_CURRENT_USER = {
   id: "",
   role: "",
@@ -1500,10 +1511,12 @@ function CodingPlatform() {
         performApiRequest("/api/auth/me"),
       ]);
 
-      const liveAssignments = Array.isArray(assignmentData.assignments)
+      // A student only sees the test from the link they opened, never the other live tests.
+      const liveAssignments = (Array.isArray(assignmentData.assignments)
         ? assignmentData.assignments.map(mapAssignmentRecord).filter(Boolean)
-        : [];
-      const defaultAssignment = mapAssignmentRecord(assignmentData.assignment);
+        : []
+      ).filter((assignment) => STUDENT_TEST_ID && sameValue(assignment.id, STUDENT_TEST_ID));
+      const defaultAssignment = liveAssignments[0] || null;
       const availableLiveAssignments = liveAssignments.length
         ? liveAssignments
         : (defaultAssignment ? [defaultAssignment] : []);
@@ -3876,9 +3889,6 @@ function CodingPlatform() {
     p.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const activeContestAssignment = activeAssignment || (currentUser.role === "admin" && adminCurrentTest.status === "LIVE" ? adminCurrentTest : null);
-  const activeContestOptions = activeAssignments.length
-    ? activeAssignments
-    : (activeContestAssignment ? [activeContestAssignment] : []);
   const contestDisplayName = activeContestAssignment?.title
     || (adminCurrentTest.title === "Current Test" ? "Weekly Coding Contest #1" : adminCurrentTest.title);
   const contestStatus = !activeContestAssignment
@@ -8956,38 +8966,6 @@ function CodingPlatform() {
             </div>
           )}
 
-          {activeContestOptions.length > 1 && (
-            <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px", display:"grid", gap:12 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"center", flexWrap:"wrap" }}>
-                <div>
-                  <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:6 }}>Available Tests</div>
-                  <div style={{ color:"#eef0ff", fontWeight:700 }}>Choose the live test you want to attempt.</div>
-                </div>
-                <span style={{ color:"#73f0b3", fontSize:13, fontWeight:700 }}>{activeContestOptions.length} live</span>
-              </div>
-              <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-                {activeContestOptions.map((assignment) => (
-                  <button
-                    key={assignment.id}
-                    onClick={() => {
-                      setActiveAssignment(assignment);
-                      setAdminCurrentTest(assignment);
-                      setContestEntered(false);
-                      setContestSessionEndsAt(null);
-                      setContestResult(null);
-                    }}
-                    style={{
-                      ...S.btn(sameValue(activeContestAssignment?.id, assignment.id) ? "submit" : "default"),
-                      minHeight:42,
-                      color:sameValue(activeContestAssignment?.id, assignment.id) ? undefined : "#dfe2ff",
-                    }}
-                  >
-                    {assignment.title}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div style={{ background:"radial-gradient(circle at top left, rgba(124,106,247,0.22), rgba(10,10,15,0.98) 50%)", border:"1px solid #25253b", borderRadius:24, padding:"28px 28px 30px", boxShadow:"0 24px 70px rgba(0,0,0,0.32)" }}>
             <div style={{ display:"flex", justifyContent:"space-between", gap:20, alignItems:"flex-start", flexWrap:"wrap" }}>
