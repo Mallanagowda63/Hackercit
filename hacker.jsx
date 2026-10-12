@@ -1735,8 +1735,19 @@ function CodingPlatform() {
     }
 
     let cancelled = false;
+    let loading = false;
+    // Skip a refresh while the previous one is still running. Overlapping refreshes on a slow
+    // server fill the browser's few connections and leave Run/Submit/Final Submit queued behind them.
     const loadPortal = async () => {
-      if (cancelled) return;
+      if (cancelled || loading) return;
+      loading = true;
+      try {
+        await refreshPortal();
+      } finally {
+        loading = false;
+      }
+    };
+    const refreshPortal = async () => {
 
       if (currentUser.role === "admin") {
         await loadAdminPortalData();
