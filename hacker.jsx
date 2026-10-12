@@ -6514,6 +6514,9 @@ function CodingPlatform() {
                 <li><strong>Anti-Cheating Monitoring:</strong> Tab switching or unfocus triggers security warnings and auto-submits.</li>
                 <li><strong>No Copy/Paste:</strong> Copying, cutting, and pasting are disabled throughout the exam.</li>
                 <li><strong>Single Session:</strong> Your timer starts as soon as you click <em>Start Test Now</em>.</li>
+                <li><strong>Camera Required:</strong> Allow camera access when asked. The test will not start without your camera.</li>
+                <li><strong>Camera Must Stay On:</strong> If your camera turns off, is covered, or the room is too dark, the test is blurred until the camera works again. Your timer keeps running.</li>
+                <li><strong>No Mobile Phones:</strong> A phone seen on camera blurs the test until it is put away, and it is recorded as malpractice.</li>
               </ul>
             </div>
           </div>
@@ -8621,7 +8624,16 @@ function CodingPlatform() {
               <div style={{ display:"grid", gap:10, background:"#0f131c", border:"1px solid #24283a", borderRadius:16, padding:"14px 16px", color:"#d9dcf7", fontSize:14, lineHeight:1.7, marginBottom:16 }}>
                 <div>Problems: <strong>{contestProblems.length}</strong></div>
                 <div>Duration: <strong>{activeContestAssignment?.duration || adminCurrentTest.duration} minutes</strong></div>
-                <div>Camera: <strong>required before the test starts</strong></div>
+                <div>
+                  Camera: <strong>required before the test starts</strong>
+                  <ul style={{ margin:"6px 0 0", paddingLeft:20, color:"#b8bdd9", fontSize:13, lineHeight:1.6 }}>
+                    <li>Allow camera access when the browser asks. If you block it, the test will not start.</li>
+                    <li>Close Zoom, Teams, or any other app that uses the camera before starting.</li>
+                    <li>Sit in a well-lit room facing the camera. Do not cover the camera.</li>
+                    <li>If the camera turns off, is covered, or the room is too dark, the test is blurred until you turn it back on. Your timer keeps running.</li>
+                    <li>Keep your mobile phone away. A phone seen on camera blurs the test and is recorded as malpractice.</li>
+                  </ul>
+                </div>
                 <div>Final question: use <strong>Final Submit</strong> and confirm before ending the test.</div>
                 <div>Result: accepted, rejected, and not-attempted problems will be shown with your score.</div>
               </div>
@@ -9490,7 +9502,9 @@ function CodingPlatform() {
                 <li>Do not refresh the page.</li>
                 <li>Do not close the browser.</li>
                 <li>Keep your internet connection stable.</li>
-                <li>Camera/proctoring monitoring must remain active if required.</li>
+                <li>Allow camera access. The exam cannot start without your camera.</li>
+                <li>Keep your camera on and uncovered, in a well-lit room. Otherwise the exam is blurred until it works again.</li>
+                <li>Keep your mobile phone away. A phone on camera blurs the exam and is recorded as malpractice.</li>
               </ul>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
