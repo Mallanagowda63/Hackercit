@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
-const { getBadgePresentation, syncUserBadge } = require('../lib/badgeService');
+const { getBadgePresentation, syncBadgesForUsers, syncUserBadge } = require('../lib/badgeService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
 
@@ -412,9 +412,7 @@ exports.listStudents = async (req, res) => {
       where: { role: 'USER' },
       orderBy: [{ lastLoginAt: 'desc' }, { createdAt: 'desc' }],
     });
-    const studentsWithBadges = await Promise.all(
-      students.map(async (student) => await syncUserBadge(student.id) || student),
-    );
+    const studentsWithBadges = await syncBadgesForUsers(students);
 
     return res.json({
       students: studentsWithBadges.map((student) => ({
@@ -433,10 +431,10 @@ exports.listStudents = async (req, res) => {
 
 exports.listLoginEvents = async (req, res) => {
   try {
-    const events = await prisma.loginEvent.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
+    // Sort and limit in MongoDB: only the latest 100 events are read, not the whole history.
+    const collection = await prisma.loginEvent.collection();
+    const events = (await collection.find({}).sort({ createdAt: -1 }).limit(100).toArray())
+      .map(({ _id, ...event }) => ({ id: String(_id), ...event }));
 
     return res.json({ events });
   } catch (err) {

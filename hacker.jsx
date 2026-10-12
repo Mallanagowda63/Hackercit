@@ -1117,7 +1117,8 @@ function CodingPlatform() {
   const adminTextareaRef = useRef(null);
   const contestCameraPreviewRef = useRef(null);
   const shieldTimerRef = useRef(null);
-  const studentProblemBankRef = useRef({ problems: [], loadedAt: 0 });
+  // Last downloaded problem bank; the background refreshes reuse it for 2 minutes.
+  const problemBankCacheRef = useRef({ problems: [], loadedAt: 0 });
   const collectExamAnswersRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 1024);
   useEffect(() => {
@@ -1192,6 +1193,9 @@ function CodingPlatform() {
     return data;
   };
 
+  const isProblemBankFresh = () => problemBankCacheRef.current.problems.length > 0
+    && Date.now() - problemBankCacheRef.current.loadedAt < 120000;
+
   const loadProblemBank = async () => {
     setProblemBankLoading(true);
 
@@ -1201,6 +1205,7 @@ function CodingPlatform() {
         ? data.problems.map(mapProblemRecord).filter(Boolean)
         : [];
       setProblemBank(mappedProblems);
+      problemBankCacheRef.current = { problems: mappedProblems, loadedAt: Date.now() };
       return mappedProblems;
     } finally {
       setProblemBankLoading(false);
@@ -1230,9 +1235,9 @@ function CodingPlatform() {
     setPortalError("");
 
     try {
-      let problems = await loadProblemBank();
-
-      const [testsData, studentsData, loginEventData, leaderboardData] = await Promise.all([
+      // Everything loads at the same time; the problem bank is reused for 2 minutes.
+      const [problems, testsData, studentsData, loginEventData, leaderboardData] = await Promise.all([
+        isProblemBankFresh() ? problemBankCacheRef.current.problems : loadProblemBank(),
         performApiRequest("/api/tests"),
         performApiRequest("/api/auth/students"),
         performApiRequest("/api/auth/login-events"),
@@ -1837,14 +1842,9 @@ function CodingPlatform() {
       }
 
       // The problem bank rarely changes, so re-download it at most every 2 minutes.
-      const bankIsFresh = studentProblemBankRef.current.problems.length
-        && Date.now() - studentProblemBankRef.current.loadedAt < 120000;
-      const loadedProblems = bankIsFresh
-        ? studentProblemBankRef.current.problems
+      const loadedProblems = isProblemBankFresh()
+        ? problemBankCacheRef.current.problems
         : await loadProblemBank().catch(() => []);
-      if (!bankIsFresh && loadedProblems.length) {
-        studentProblemBankRef.current = { problems: loadedProblems, loadedAt: Date.now() };
-      }
       const codingOnlyProblems = loadedProblems.filter((p) => {
         const probType = p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding");
         const hasMcqTag = Array.isArray(p.tags) && p.tags.some((t) => String(t).toUpperCase() === "MCQ");

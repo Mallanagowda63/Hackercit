@@ -493,6 +493,22 @@ exports.listByUser = async (req, res) => {
 const LEADERBOARD_CACHE_MS = Number(process.env.LEADERBOARD_CACHE_MS || 15000);
 let leaderboardCache = { payload: null, builtAt: 0, pending: null };
 
+const LEADERBOARD_FIELDS = {
+  user: {
+    id: true, name: true, email: true, usn: true, department: true, role: true,
+    badgeTier: true, badgeIds: true, solvedProblemCount: true, lastLoginAt: true, createdAt: true,
+  },
+  submission: { id: true, userId: true, problemId: true, status: true, createdAt: true, problem: true },
+  assessmentSubmission: {
+    id: true, userId: true, assignmentId: true, createdAt: true, totalScore: true, maxScore: true, percentage: true,
+    'details.questions.status': true, 'details.questions.earnedMarks': true,
+  },
+  testAttempt: {
+    id: true, userId: true, assignmentId: true, status: true, createdAt: true, startedAt: true, startsAt: true,
+    submittedAt: true, finishedAt: true, score: true, maxScore: true, percentage: true,
+  },
+};
+
 exports.leaderboard = async (req, res) => {
   try {
     if (leaderboardCache.payload && Date.now() - leaderboardCache.builtAt < LEADERBOARD_CACHE_MS) {
@@ -524,11 +540,13 @@ async function buildLeaderboard() {
       orderBy: { startsAt: 'desc' },
     });
 
+    // Only the fields the leaderboard uses are read (not code, test results or exam answers).
     const students = await prisma.user.findMany({
       where: {
         role: { in: ['USER', 'STUDENT', 'user', 'student'] },
       },
       orderBy: [{ lastLoginAt: 'desc' }, { createdAt: 'desc' }],
+      select: LEADERBOARD_FIELDS.user,
     });
 
     if (!students.length) {
@@ -547,13 +565,16 @@ async function buildLeaderboard() {
         where: { userId: { in: students.map((student) => student.id) } },
         include: { problem: true },
         orderBy: { createdAt: 'asc' },
+        select: LEADERBOARD_FIELDS.submission,
       }),
       prisma.assessmentSubmission.findMany({
         orderBy: { createdAt: 'desc' },
+        select: LEADERBOARD_FIELDS.assessmentSubmission,
       }),
       prisma.testAttempt.findMany({
         where: { status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } },
         orderBy: { createdAt: 'desc' },
+        select: LEADERBOARD_FIELDS.testAttempt,
       }),
     ]);
 
@@ -590,6 +611,7 @@ async function buildLeaderboard() {
     if (activeAssignment?.problemIds?.length) {
       const contestProblems = await prisma.problem.findMany({
         where: { id: { in: activeAssignment.problemIds } },
+        select: { id: true, difficulty: true },
       });
       contestProblems.forEach((problem) => {
         problemsById.set(problem.id, problem);

@@ -209,11 +209,34 @@ function applySelect(document, select) {
   const result = {};
   for (const [key, include] of Object.entries(select)) {
     if (include) {
-      result[key] = document[key];
+      // A dotted key ("details.questions.status") keeps its top-level field, already trimmed by
+      // the database projection.
+      const rootKey = key.split(".")[0];
+      result[rootKey] = document[rootKey];
     }
   }
 
   return result;
+}
+
+// With `select`, only the selected fields (plus those needed to filter, sort and include) are
+// read from MongoDB instead of whole documents.
+function buildProjection(options = {}) {
+  if (!options.select) return null;
+
+  const projection = { _id: 1 };
+  const add = (key) => {
+    if (key && key !== "id") projection[key] = 1;
+  };
+  Object.entries(options.select).forEach(([key, include]) => include && add(key));
+  Object.keys(options.where || {}).forEach(add);
+  const sorters = Array.isArray(options.orderBy) ? options.orderBy : options.orderBy ? [options.orderBy] : [];
+  sorters.forEach((sorter) => Object.keys(sorter || {}).forEach(add));
+  if (options.include) {
+    add("problemId");
+    add("userId");
+  }
+  return projection;
 }
 
 function applyDefaults(modelName, data) {
@@ -363,6 +386,8 @@ async function initializeDatabase(db) {
     createIndexSafely(db.collection('AssessmentSubmission'), { assignmentId: 1, userId: 1 }),
     createIndexSafely(db.collection('TestAttempt'), { assignmentId: 1, userId: 1 }),
     createIndexSafely(db.collection('Notification'), { userId: 1 }),
+    createIndexSafely(db.collection('LoginEvent'), { createdAt: -1 }),
+    createIndexSafely(db.collection('Submission'), { status: 1 }),
   ]);
 }
 
@@ -382,9 +407,9 @@ class MongoModel {
     return collection.find({}).toArray();
   }
 
-  async loadMatchingDocuments(where) {
+  async loadMatchingDocuments(where, projection = null) {
     const collection = await this.collection();
-    const documents = await collection.find(buildPrefilter(where)).toArray();
+    const documents = await collection.find(buildPrefilter(where), projection ? { projection } : undefined).toArray();
     return documents.filter((document) => matchesWhere(document, where));
   }
 
@@ -405,17 +430,17 @@ class MongoModel {
   }
 
   async findUnique(options = {}) {
-    const [match] = await this.loadMatchingDocuments(options.where);
+    const [match] = await this.loadMatchingDocuments(options.where, buildProjection(options));
     return this.decorate(match, options);
   }
 
   async findFirst(options = {}) {
-    const documents = sortDocuments(await this.loadMatchingDocuments(options.where), options.orderBy);
+    const documents = sortDocuments(await this.loadMatchingDocuments(options.where, buildProjection(options)), options.orderBy);
     return this.decorate(documents[0], options);
   }
 
   async findMany(options = {}) {
-    let documents = sortDocuments(await this.loadMatchingDocuments(options.where), options.orderBy);
+    let documents = sortDocuments(await this.loadMatchingDocuments(options.where, buildProjection(options)), options.orderBy);
 
     if (typeof options.take === 'number') {
       documents = documents.slice(0, options.take);
