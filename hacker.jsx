@@ -9687,10 +9687,23 @@ function CodingPlatform() {
           </div>
 
           <div style={{ flex:1, overflowY:"auto", padding:isPhone ? 16 : 24, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
-            {activeTab === "description" && (
+            {activeTab === "description" && (() => {
+              // MCQ titles are usually a cut-off copy of the question. When the description just
+              // repeats the title, show the full question once as the heading instead of twice.
+              const plainText = (html) => String(html || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+              const isTheoryQuestion = p.type === "theory" || (Array.isArray(p.options) && p.options.length > 0);
+              const questionText = plainText(p.description);
+              const titleText = plainText(p.title).replace(/(\.\.\.|…)$/, "").trim();
+              const questionRepeatsTitle = isTheoryQuestion && Boolean(questionText) && Boolean(titleText)
+                && questionText.toLowerCase().startsWith(titleText.toLowerCase());
+              return (
               <>
                 <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
-                  <h1 style={S.problemTitle}>{p.id}. {p.title}</h1>
+                  {questionRepeatsTitle ? (
+                    <h1 style={{ ...S.problemTitle, fontSize: isPhone ? 20 : 26, lineHeight: 1.35 }}>{p.id}. {questionText}</h1>
+                  ) : (
+                    <h1 style={S.problemTitle}>{p.id}. {p.title}</h1>
+                  )}
                   <span style={S.badge(p.difficulty)}>{p.difficulty}</span>
                 </div>
                 {candidateCodingAnswers[p.dbId || p.id]?.submitted && (
@@ -9703,7 +9716,9 @@ function CodingPlatform() {
                 <div style={{ display:"flex", gap:8, marginBottom:20, flexWrap:"wrap" }}>
                   {p.tags.map(t=><span key={t} style={S.tag}>{t}</span>)}
                 </div>
-                <div style={S.problemBody} dangerouslySetInnerHTML={{ __html:p.description }} />
+                {!questionRepeatsTitle && (
+                  <div style={S.problemBody} dangerouslySetInnerHTML={{ __html:p.description }} />
+                )}
                 {parseExamplesList(p.examples).map((ex, i) => (
                   <div key={`ex-${p.id || p.number}-${i}`} style={{ marginBottom: 20 }}>
                     <div style={S.sectionLabel}>Example {i + 1}</div>
@@ -9729,14 +9744,17 @@ function CodingPlatform() {
                     </div>
                   </div>
                 ))}
-                <div style={{ marginTop:20 }}>
-                  <div style={S.sectionLabel}>Constraints</div>
-                  <ul style={{ margin:0, paddingLeft:18 }}>
-                    {p.constraints.map((c,i)=><li key={i} style={S.constraintItem} dangerouslySetInnerHTML={{ __html:c }} />)}
-                  </ul>
-                </div>
+                {Array.isArray(p.constraints) && p.constraints.length > 0 && (
+                  <div style={{ marginTop:20 }}>
+                    <div style={S.sectionLabel}>Constraints</div>
+                    <ul style={{ margin:0, paddingLeft:18 }}>
+                      {p.constraints.map((c,i)=><li key={i} style={S.constraintItem} dangerouslySetInnerHTML={{ __html:c }} />)}
+                    </ul>
+                  </div>
+                )}
               </>
-            )}
+              );
+            })()}
 
             {activeTab === "solution" && (
               solved.has(p.id) ? (
