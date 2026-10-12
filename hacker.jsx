@@ -156,7 +156,7 @@ function DevOrbitLogo({ onClick, lightSurface = false, showPartner = true, showB
   );
 }
 
-function ScreenShield({ active, message }) {
+function ScreenShield({ active, message, title, action }) {
   if (!active) return null;
   return (
     <div
@@ -177,13 +177,22 @@ function ScreenShield({ active, message }) {
         pointerEvents: "auto",
       }}
     >
-      <div style={{ fontSize: 48, marginBottom: 16 }}>🛡️</div>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>{title ? "📷" : "🛡️"}</div>
       <h2 style={{ fontSize: 24, fontWeight: 700, margin: "0 0 12px", color: "#f8fafc" }}>
-        Screen Shield Active
+        {title || "Screen Shield Active"}
       </h2>
       <p style={{ fontSize: 15, color: "#94a3b8", maxWidth: 440, margin: 0, lineHeight: 1.6 }}>
         {message || "Screen capture or window blur was detected."}
       </p>
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          style={{ marginTop: 20, padding: "10px 22px", borderRadius: 10, border: "none", background: "#22c55e", color: "#04130a", fontWeight: 800, fontSize: 14, cursor: "pointer" }}
+        >
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }
@@ -560,6 +569,40 @@ async function fetchWithRetry(url, options = {}, retries = 2) {
       clearTimeout(timer);
     }
   }
+}
+
+// Phone detection during exams: TensorFlow.js + COCO-SSD (its "cell phone" class), loaded only
+// when an exam starts. If it cannot load, the exam continues without phone detection.
+const loadedScripts = new Map();
+function loadScriptOnce(src) {
+  if (!loadedScripts.has(src)) {
+    loadedScripts.set(src, new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = () => {
+        loadedScripts.delete(src);
+        reject(new Error(`Failed to load ${src}`));
+      };
+      document.head.appendChild(script);
+    }));
+  }
+  return loadedScripts.get(src);
+}
+
+let phoneDetectorPromise = null;
+function loadPhoneDetector() {
+  if (!phoneDetectorPromise) {
+    phoneDetectorPromise = loadScriptOnce("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js")
+      .then(() => loadScriptOnce("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"))
+      .then(() => window.cocoSsd.load({ base: "lite_mobilenet_v2" }))
+      .catch((error) => {
+        phoneDetectorPromise = null;
+        throw error;
+      });
+  }
+  return phoneDetectorPromise;
 }
 
 async function requestExecutionResult({ language, sourceCode, fnName, testCases }) {
@@ -1057,6 +1100,28 @@ function CodingPlatform() {
   const [errorBanner, setErrorBanner]         = useState(null);
   const [screenShield, setScreenShield]       = useState(false);
   const [shieldMessage, setShieldMessage]     = useState("Screen capture is disabled in this demo.");
+  // Exam camera proctoring: the exam stays blurred while the camera is off/covered or a phone is in view.
+  const [cameraIssue, setCameraIssue]         = useState("");
+  const [phoneDetected, setPhoneDetected]     = useState(false);
+  const proctorBlock = !contestEntered
+    ? null
+    : cameraIssue
+      ? {
+        title: "Camera Required",
+        message: `${cameraIssue} The test is hidden until your camera is on. Your timer keeps running.`,
+        action: { label: "Turn camera on", onClick: () => requestContestCameraPermission() },
+      }
+      : phoneDetected
+        ? {
+          title: "Phone Detected",
+          message: "A mobile phone was detected on camera. Put it away to continue. This has been recorded. Your timer keeps running.",
+          action: null,
+        }
+        : null;
+  const shieldActive = screenShield || Boolean(proctorBlock);
+  const shieldActiveMessage = proctorBlock ? proctorBlock.message : shieldMessage;
+  const shieldTitle = proctorBlock ? proctorBlock.title : undefined;
+  const shieldAction = proctorBlock ? proctorBlock.action : null;
   const textareaRef = useRef(null);
   const adminTextareaRef = useRef(null);
   const contestCameraPreviewRef = useRef(null);
@@ -1839,6 +1904,127 @@ function CodingPlatform() {
     };
   }, [contestEntered, activeAssignment?.id, authToken, currentUser.role]);
 
+  // Camera proctoring while the exam is open: every 2s check the camera is live and not covered,
+  // and look for a phone in the picture. Either one blurs the exam (see proctorBlock) until fixed,
+  // and each new incident is logged for the malpractice report.
+  useEffect(() => {
+    if (!contestEntered || currentUser.role === "admin") {
+      setCameraIssue("");
+      setPhoneDetected(false);
+      return undefined;
+    }
+    if (!contestCameraStream) {
+      setCameraIssue("Your camera is off.");
+      return undefined;
+    }
+    setPhoneDetected(false);
+
+    let cancelled = false;
+    const testId = activeAssignment?.id;
+    const track = contestCameraStream.getVideoTracks()[0] || null;
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = contestCameraStream;
+    video.play().catch(() => {});
+    const canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 24;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    let darkChecks = 0;
+    let phoneHits = 0;
+    let phoneMisses = 0;
+    let cameraIncidentOpen = false;
+    let phoneIncidentOpen = false;
+    let detector = null;
+    let detecting = false;
+
+    const logEvent = (eventType, reason) => {
+      if (!authToken || !testId) return;
+      performApiRequest("/api/proctoring/events", {
+        method: "POST",
+        body: JSON.stringify({ assignmentId: testId, eventType, metadata: { reason } }),
+      }).catch(() => {});
+    };
+
+    const averageBrightness = () => {
+      if (!context || video.readyState < 2) return null;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+      let total = 0;
+      for (let i = 0; i < data.length; i += 4) total += (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+      return total / (data.length / 4);
+    };
+
+    const checkCamera = () => {
+      let issue = "";
+      if (!track || track.readyState !== "live" || !contestCameraStream.active) {
+        issue = "Your camera turned off or was disconnected.";
+      } else if (track.muted || !track.enabled) {
+        issue = "Your camera is not sending video.";
+      } else {
+        const brightness = averageBrightness();
+        darkChecks = brightness !== null && brightness < 15 ? darkChecks + 1 : 0;
+        if (darkChecks >= 3) issue = "Your camera is covered or the room is too dark.";
+      }
+
+      setCameraIssue(issue);
+      if (issue && !cameraIncidentOpen) logEvent("CAMERA_OFF", issue);
+      cameraIncidentOpen = Boolean(issue);
+    };
+
+    const checkPhone = async () => {
+      if (!detector || detecting || video.readyState < 2) return;
+      detecting = true;
+      try {
+        const predictions = await detector.detect(video, 10, 0.5);
+        const seen = predictions.some((p) => p.class === "cell phone" && p.score >= 0.6);
+        phoneHits = seen ? phoneHits + 1 : 0;
+        phoneMisses = seen ? 0 : phoneMisses + 1;
+        // Two detections in a row to show the block, two clear checks in a row to remove it.
+        if (phoneHits >= 2 && !phoneIncidentOpen) {
+          phoneIncidentOpen = true;
+          setPhoneDetected(true);
+          logEvent("PHONE_DETECTED", "A mobile phone was detected on camera.");
+        } else if (phoneMisses >= 2 && phoneIncidentOpen) {
+          phoneIncidentOpen = false;
+          setPhoneDetected(false);
+        }
+      } catch {
+      } finally {
+        detecting = false;
+      }
+    };
+
+    loadPhoneDetector()
+      .then((model) => {
+        if (!cancelled) detector = model;
+      })
+      .catch(() => {});
+
+    const handleTrackChange = () => checkCamera();
+    track?.addEventListener("ended", handleTrackChange);
+    track?.addEventListener("mute", handleTrackChange);
+    track?.addEventListener("unmute", handleTrackChange);
+
+    checkCamera();
+    const interval = setInterval(() => {
+      if (cancelled) return;
+      checkCamera();
+      checkPhone();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      track?.removeEventListener("ended", handleTrackChange);
+      track?.removeEventListener("mute", handleTrackChange);
+      track?.removeEventListener("unmute", handleTrackChange);
+      video.srcObject = null;
+    };
+  }, [contestEntered, contestCameraStream, activeAssignment?.id, authToken, currentUser.role]);
+
   useEffect(() => {
     if (!linkTestId || !authToken || !currentUser.id || currentUser.role === "admin") return undefined;
     if (contestEntered || view === "thankYou") return undefined;
@@ -2143,11 +2329,13 @@ function CodingPlatform() {
     }
   };
 
+  // Returns true when the camera is on, otherwise the message to show the student.
   const requestContestCameraPermission = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
+      const message = "Camera access is not supported in this browser. Use the latest Google Chrome or Microsoft Edge to take the test.";
       setContestCameraStatus("unavailable");
-      setContestCameraError("Camera access is not supported in this browser.");
-      return false;
+      setContestCameraError(message);
+      return message;
     }
 
     setContestCameraStatus("requesting");
@@ -2169,14 +2357,16 @@ function CodingPlatform() {
     } catch (error) {
       const reason = String(error?.name || "");
       const message = reason === "NotAllowedError"
-        ? "Camera permission was denied. Continuing without active video feed."
+        ? "Camera permission is blocked. Click the camera icon in the browser address bar, choose Allow, then try again. The test cannot start without your camera."
         : reason === "NotFoundError"
-          ? "No camera was found on this device. Continuing in standard mode."
-          : "Unable to access camera hardware. Continuing in standard mode.";
+          ? "No camera was found on this device. The test cannot start without a working camera."
+          : reason === "NotReadableError"
+            ? "Your camera is being used by another app (Zoom, Teams, Camera app). Close that app and try again."
+            : "Unable to start your camera. Check that it is connected and try again. The test cannot start without your camera.";
 
       setContestCameraStatus("unavailable");
       setContestCameraError(message);
-      return false;
+      return message;
     }
   };
 
@@ -2207,11 +2397,20 @@ function CodingPlatform() {
     // Trigger fullscreen synchronously during click event context
     requestContestFullscreen().catch(() => {});
 
-    // Try camera permission gracefully without blocking user if absent/denied
+    // The camera is required: the test does not start until camera permission is given.
+    let cameraResult;
     try {
-      await requestContestCameraPermission();
+      cameraResult = await requestContestCameraPermission();
     } catch {
+      cameraResult = "Unable to start your camera. The test cannot start without your camera.";
+    }
+    if (cameraResult !== true) {
       setContestCameraStatus("unavailable");
+      setPortalError(cameraResult);
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+      return;
     }
 
     if (authToken && currentUser.id && activeContestAssignment?.id) {
@@ -4800,10 +4999,10 @@ function CodingPlatform() {
 
   if (view === "home") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={screenShield} message={shieldMessage} />
+      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
-      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
           <DevOrbitLogo />
@@ -7032,9 +7231,9 @@ function CodingPlatform() {
 
   if (view === "admin") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={screenShield} message={shieldMessage} />
+      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
-      <div style={{ ...S.adminApp, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.adminApp, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.adminNav}>
           <DevOrbitLogo lightSurface onClick={()=>setView("home")} />
@@ -8026,10 +8225,10 @@ function CodingPlatform() {
   // ── PROBLEM LIST ───────────────────────────────────────────────────────────
   if (view === "list") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={screenShield} message={shieldMessage} />
+      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
-      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <nav style={S.nav}>
         <DevOrbitLogo onClick={()=>setView("home")} />
@@ -8182,10 +8381,10 @@ function CodingPlatform() {
 
   if (view === "profile") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={screenShield} message={shieldMessage} />
+      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
-      <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
         <nav style={{ ...S.nav, background:"#0b1220", borderBottom:"1px solid #1e293b" }}>
           <DevOrbitLogo onClick={()=>setView("home")} />
@@ -8407,9 +8606,9 @@ function CodingPlatform() {
 
   if (view === "contest") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={screenShield} message={shieldMessage} />
+      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
-      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         {contestInstructionsOpen && (
           <div style={S.modalBackdrop}>
@@ -8961,10 +9160,10 @@ function CodingPlatform() {
 
   if (view === "leaderboard") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={screenShield} message={shieldMessage} />
+      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
       {renderLiveTestPopupModal()}
-      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
         <nav style={S.nav}>
         <DevOrbitLogo onClick={()=>setView("home")} />
@@ -9231,9 +9430,9 @@ function CodingPlatform() {
 
   return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={screenShield} message={shieldMessage} />
+      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
-      <div style={{ ...S.app, opacity: screenShield ? 0 : 1, pointerEvents: screenShield ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: screenShield ? "none" : "auto" }}>
+      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
       {exitExamConfirmModalOpen && (
         <div style={S.modalBackdrop} onClick={() => setExitExamConfirmModalOpen(false)}>
           <div style={{ ...S.modalCard, width: "min(520px, 92vw)", padding: "28px", border: "1px solid #7f1d1d" }} onClick={(e) => e.stopPropagation()}>

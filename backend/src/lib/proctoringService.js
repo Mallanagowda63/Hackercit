@@ -16,6 +16,8 @@ const EVENT_CONFIG = {
   EXAM_STARTED: { score: 0, severity: 'INFO' },
   EXAM_SUBMITTED: { score: 0, severity: 'INFO' },
   EXAM_TIMEOUT: { score: 0, severity: 'INFO' },
+  CAMERA_OFF: { score: 10, severity: 'MEDIUM' },
+  PHONE_DETECTED: { score: 20, severity: 'HIGH' },
 };
 
 function calculateProctoringStatus(score, hasManualRejection = false) {
