@@ -1,3 +1,4 @@
+const { ObjectId } = require('mongodb');
 const prisma = require('../prismaClient');
 const { inCurrentRun } = require('./testController');
 const { executeSubmission } = require('../lib/executionService');
@@ -5,22 +6,32 @@ const { executeSubmission } = require('../lib/executionService');
 async function attachRankToResult(result, assignmentId) {
   if (!result || !assignmentId) return result;
 
-  const allSubmissions = await prisma.assessmentSubmission.findMany({
-    where: { assignmentId },
-    orderBy: [
-      { totalScore: 'desc' },
-      { createdAt: 'asc' },
-    ],
-  });
+  // Count in MongoDB instead of loading every result (each holds full answers/code) on every submit.
+  const collection = await prisma.assessmentSubmission.collection();
+  const assignmentIds = ObjectId.isValid(assignmentId)
+    ? [String(assignmentId), new ObjectId(String(assignmentId))]
+    : [assignmentId];
+  const forAssignment = { assignmentId: { $in: assignmentIds } };
+  const score = Number(result.totalScore || 0);
+  const createdAt = new Date(result.createdAt);
 
-  const index = allSubmissions.findIndex((sub) => sub.id === result.id || sub.userId === result.userId);
-  const rank = index !== -1 ? index + 1 : 1;
+  const [ahead, totalParticipants] = await Promise.all([
+    collection.countDocuments({
+      ...forAssignment,
+      $or: [
+        { totalScore: { $gt: score } },
+        { totalScore: score, createdAt: { $lt: createdAt } },
+      ],
+    }),
+    collection.countDocuments(forAssignment),
+  ]);
+  const rank = ahead + 1;
 
   return {
     ...result,
     rank,
     userRank: rank,
-    totalParticipants: allSubmissions.length,
+    totalParticipants,
   };
 }
 

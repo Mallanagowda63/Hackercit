@@ -487,8 +487,38 @@ exports.listByUser = async (req, res) => {
   res.json({ submissions: list });
 };
 
+// The leaderboard is identical for every student and every student's browser polls it, so one
+// build is shared for a few seconds (and concurrent requests wait on the same build) instead of
+// reloading every user, submission and result from MongoDB per request.
+const LEADERBOARD_CACHE_MS = Number(process.env.LEADERBOARD_CACHE_MS || 15000);
+let leaderboardCache = { payload: null, builtAt: 0, pending: null };
+
 exports.leaderboard = async (req, res) => {
   try {
+    if (leaderboardCache.payload && Date.now() - leaderboardCache.builtAt < LEADERBOARD_CACHE_MS) {
+      return res.json(leaderboardCache.payload);
+    }
+
+    if (!leaderboardCache.pending) {
+      leaderboardCache.pending = buildLeaderboard()
+        .then((payload) => {
+          leaderboardCache = { payload, builtAt: Date.now(), pending: null };
+          return payload;
+        })
+        .catch((error) => {
+          leaderboardCache.pending = null;
+          throw error;
+        });
+    }
+
+    return res.json(await leaderboardCache.pending);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+async function buildLeaderboard() {
     const activeAssignment = await prisma.testAssignment.findFirst({
       where: { status: 'LIVE' },
       orderBy: { startsAt: 'desc' },
@@ -502,14 +532,14 @@ exports.leaderboard = async (req, res) => {
     });
 
     if (!students.length) {
-      return res.json({
+      return {
         leaderboard: [],
         contestLeaderboard: [],
         activeAssignmentId: activeAssignment?.id || null,
         activeAssignmentTitle: activeAssignment?.title || null,
         submittedCount: 0,
         totalRegisteredCount: 0,
-      });
+      };
     }
 
     const [submissions, assessmentSubmissions, testAttempts] = await Promise.all([
@@ -603,16 +633,12 @@ exports.leaderboard = async (req, res) => {
     leaderboard = applyRanks(leaderboard, 'overall');
     leaderboard = applyRanks(leaderboard, 'global');
 
-    return res.json({
+    return {
       leaderboard,
       contestLeaderboard: contestRanked,
       activeAssignmentId: activeAssignment?.id || null,
       activeAssignmentTitle: activeAssignment?.title || null,
       submittedCount: contestRanked.length,
       totalRegisteredCount: students.length,
-    });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: 'server error' });
-  }
-};
+    };
+}

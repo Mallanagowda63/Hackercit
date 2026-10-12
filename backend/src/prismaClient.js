@@ -358,6 +358,11 @@ async function initializeDatabase(db) {
     createIndexSafely(db.collection('ResetToken'), { token: 1 }, { unique: true }),
     createIndexSafely(db.collection('Problem'), { slug: 1 }, { unique: true }),
     createIndexSafely(db.collection('Problem'), { legacyId: 1 }, { unique: true, sparse: true }),
+    // Lookups made on every exam submit, attempt update and leaderboard build.
+    createIndexSafely(db.collection('Submission'), { userId: 1, problemId: 1 }),
+    createIndexSafely(db.collection('AssessmentSubmission'), { assignmentId: 1, userId: 1 }),
+    createIndexSafely(db.collection('TestAttempt'), { assignmentId: 1, userId: 1 }),
+    createIndexSafely(db.collection('Notification'), { userId: 1 }),
   ]);
 }
 

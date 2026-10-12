@@ -1033,6 +1033,7 @@ function CodingPlatform() {
   const adminTextareaRef = useRef(null);
   const contestCameraPreviewRef = useRef(null);
   const shieldTimerRef = useRef(null);
+  const studentProblemBankRef = useRef({ problems: [], loadedAt: 0 });
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 1024);
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth || 1024);
@@ -1725,7 +1726,29 @@ function CodingPlatform() {
         return;
       }
 
-      const loadedProblems = await loadProblemBank().catch(() => []);
+      // During an exam only check that the test is still live. The full refresh (problem bank,
+      // leaderboard, submissions) from every student at once is what stalled exam submissions.
+      if (contestEntered) {
+        const data = await performApiRequest("/api/tests/active").catch(() => null);
+        if (cancelled || !data) return;
+        const liveIds = [data.assignment, ...(Array.isArray(data.assignments) ? data.assignments : [])]
+          .filter(Boolean)
+          .map((item) => item.id);
+        if (activeContestAssignment?.id && !liveIds.some((id) => sameValue(id, activeContestAssignment.id))) {
+          finishContest("Ended because the admin stopped the test.");
+        }
+        return;
+      }
+
+      // The problem bank rarely changes, so re-download it at most every 2 minutes.
+      const bankIsFresh = studentProblemBankRef.current.problems.length
+        && Date.now() - studentProblemBankRef.current.loadedAt < 120000;
+      const loadedProblems = bankIsFresh
+        ? studentProblemBankRef.current.problems
+        : await loadProblemBank().catch(() => []);
+      if (!bankIsFresh && loadedProblems.length) {
+        studentProblemBankRef.current = { problems: loadedProblems, loadedAt: Date.now() };
+      }
       const codingOnlyProblems = loadedProblems.filter((p) => {
         const probType = p.type || (Array.isArray(p.options) && p.options.length ? "theory" : "coding");
         const hasMcqTag = Array.isArray(p.tags) && p.tags.some((t) => String(t).toUpperCase() === "MCQ");
@@ -1743,7 +1766,7 @@ function CodingPlatform() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [authToken, currentUser.id, currentUser.role, portalRefreshTick]);
+  }, [authToken, currentUser.id, currentUser.role, portalRefreshTick, contestEntered]);
 
   useEffect(() => {
     if (!linkTestId || !authToken || !currentUser.id || currentUser.role === "admin") return undefined;
