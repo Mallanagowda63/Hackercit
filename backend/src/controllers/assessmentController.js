@@ -52,6 +52,49 @@ exports.submitAssessment = async (req, res) => {
       return res.status(404).json({ error: 'assignment not found' });
     }
 
+    const outcome = await finalizeAssessment(assignment, userId, { theoryAnswers, codingAnswers, isAutoSubmit });
+    if (outcome.error) {
+      return res.status(400).json({ error: outcome.error });
+    }
+    if (outcome.alreadySubmitted) {
+      return res.status(200).json({
+        ok: true,
+        alreadySubmitted: true,
+        message: 'Exam already submitted.',
+        result: outcome.result,
+      });
+    }
+
+    return res.status(201).json({
+      ok: true,
+      result: outcome.result,
+    });
+  } catch (error) {
+    console.error('Error submitting assessment:', error);
+    return res.status(500).json({ error: 'Failed to evaluate assessment submission.' });
+  }
+};
+
+async function attemptsCollection() {
+  return prisma.testAttempt.collection();
+}
+
+function attemptObjectId(attempt) {
+  return ObjectId.isValid(String(attempt.id)) ? new ObjectId(String(attempt.id)) : attempt.id;
+}
+
+// Marks the attempt so the auto-submit job knows this exam is already graded.
+async function markAttemptSubmitted(assignmentId, userId) {
+  const collection = await attemptsCollection();
+  const ids = ObjectId.isValid(String(assignmentId)) ? [String(assignmentId), new ObjectId(String(assignmentId))] : [assignmentId];
+  await collection.updateMany(
+    { assignmentId: { $in: ids }, userId: { $in: ObjectId.isValid(String(userId)) ? [String(userId), new ObjectId(String(userId))] : [userId] }, assessmentSubmittedAt: { $exists: false } },
+    { $set: { assessmentSubmittedAt: new Date() } },
+  );
+}
+
+// Grades and stores a student's exam. Shared by the Submit button and the auto-submit job.
+async function finalizeAssessment(assignment, userId, { theoryAnswers = {}, codingAnswers = {}, isAutoSubmit = false } = {}) {
     // Duplicate submission protection: if student already submitted this exam, return existing result
     const existingSubmission = await prisma.assessmentSubmission.findFirst({
       where: { assignmentId: assignment.id, userId },
@@ -59,18 +102,13 @@ exports.submitAssessment = async (req, res) => {
     });
 
     if (existingSubmission && inCurrentRun(existingSubmission, assignment, 'createdAt')) {
-      const rankedExisting = await attachRankToResult(existingSubmission, assignment.id);
-      return res.status(200).json({
-        ok: true,
-        alreadySubmitted: true,
-        message: 'Exam already submitted.',
-        result: rankedExisting,
-      });
+      await markAttemptSubmitted(assignment.id, userId);
+      return { alreadySubmitted: true, result: await attachRankToResult(existingSubmission, assignment.id) };
     }
 
     const problemIds = assignment.problemIds || [];
     if (!problemIds.length) {
-      return res.status(400).json({ error: 'assignment contains no questions' });
+      return { error: 'assignment contains no questions' };
     }
 
     const problems = await prisma.problem.findMany({
@@ -291,12 +329,14 @@ exports.submitAssessment = async (req, res) => {
       await prisma.testAttempt.update({
         where: { id: existingAttempt.id },
         data: {
-          status: attemptStatus,
+          // Keep the status set when the attempt ended (time up / malpractice) for the reports.
+          status: ['INTERRUPTED', 'COMPLETED'].includes(existingAttempt.status) ? existingAttempt.status : attemptStatus,
           submittedAt: new Date(),
-          finishedAt: new Date(),
+          finishedAt: existingAttempt.finishedAt || new Date(),
           score: totalScore,
           maxScore,
           percentage,
+          assessmentSubmittedAt: new Date(),
         },
       });
     } else {
@@ -312,21 +352,110 @@ exports.submitAssessment = async (req, res) => {
           score: totalScore,
           maxScore,
           percentage,
+          assessmentSubmittedAt: new Date(),
         },
       });
     }
 
-    const rankedResult = await attachRankToResult(assessmentSubmission, assignment.id);
+    return { result: await attachRankToResult(assessmentSubmission, assignment.id) };
+}
 
-    return res.status(201).json({
-      ok: true,
-      result: rankedResult,
+// Saves the student's current answers on their attempt while they work (autosave), so nothing is
+// lost if the browser closes or the final submit never reaches the server. `final` records that
+// the student pressed Final Submit.
+exports.saveDraft = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { theoryAnswers = {}, codingAnswers = {}, final = false } = req.body || {};
+    const assignment = await prisma.testAssignment.findUnique({ where: { id } });
+    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+
+    const attempt = await prisma.testAttempt.findFirst({
+      where: { assignmentId: assignment.id, userId: req.user.id },
+      orderBy: [{ startedAt: 'desc' }],
     });
+    if (!attempt || !inCurrentRun(attempt, assignment)) {
+      return res.status(404).json({ error: 'attempt not found' });
+    }
+    if (attempt.assessmentSubmittedAt) {
+      return res.json({ ok: true, alreadySubmitted: true });
+    }
+
+    const now = new Date();
+    const update = { draftAnswers: { theoryAnswers, codingAnswers }, draftSavedAt: now };
+    if (final && !attempt.submitRequestedAt) update.submitRequestedAt = now;
+
+    // $set only these fields so a concurrent attempt update (warnings, finish) is not overwritten.
+    const collection = await attemptsCollection();
+    await collection.updateOne({ _id: attemptObjectId(attempt) }, { $set: update });
+    return res.json({ ok: true, savedAt: now });
   } catch (error) {
-    console.error('Error submitting assessment:', error);
-    return res.status(500).json({ error: 'Failed to evaluate assessment submission.' });
+    console.error('Error saving exam draft:', error);
+    return res.status(500).json({ error: 'Failed to save answers.' });
   }
 };
+
+// After this long without a successful submit, the server submits the saved answers itself.
+const AUTO_SUBMIT_AFTER_MS = Number(process.env.EXAM_AUTO_SUBMIT_AFTER_MS || 5 * 60 * 1000);
+
+function attemptDeadline(attempt, assignment) {
+  const deadlines = [];
+  const startedAt = new Date(attempt.startedAt).getTime();
+  if (Number.isFinite(startedAt)) deadlines.push(startedAt + (assignment.durationMinutes || 60) * 60 * 1000);
+  const endsAt = assignment.endsAt ? new Date(assignment.endsAt).getTime() : NaN;
+  if (Number.isFinite(endsAt)) deadlines.push(endsAt);
+  return deadlines.length ? Math.min(...deadlines) : NaN;
+}
+
+// Submits exams that were never submitted, from the autosaved answers: Final Submit pressed but
+// never reached the server, time ran out / test ended, or the student closed the browser.
+// Only attempts with autosaved answers are considered (older attempts are left untouched).
+async function autoSubmitPendingAttempts() {
+  const collection = await attemptsCollection();
+  const pending = await collection.find({
+    draftSavedAt: { $exists: true },
+    assessmentSubmittedAt: { $exists: false },
+  }).toArray();
+  if (!pending.length) return 0;
+
+  const now = Date.now();
+  const assignmentCache = new Map();
+  let submitted = 0;
+
+  for (const raw of pending) {
+    const attempt = { ...raw, id: String(raw._id) };
+    const assignmentId = String(attempt.assignmentId);
+    if (!assignmentCache.has(assignmentId)) {
+      assignmentCache.set(assignmentId, await prisma.testAssignment.findUnique({ where: { id: assignmentId } }));
+    }
+    const assignment = assignmentCache.get(assignmentId);
+    if (!assignment || !inCurrentRun(attempt, assignment)) continue;
+
+    const triggers = [
+      attempt.submitRequestedAt ? new Date(attempt.submitRequestedAt).getTime() : NaN,
+      attempt.status !== 'IN_PROGRESS' && attempt.finishedAt ? new Date(attempt.finishedAt).getTime() : NaN,
+      attemptDeadline(attempt, assignment),
+    ].filter(Number.isFinite);
+    if (!triggers.length || now - Math.min(...triggers) < AUTO_SUBMIT_AFTER_MS) continue;
+
+    try {
+      const draft = attempt.draftAnswers || {};
+      await finalizeAssessment(assignment, String(attempt.userId), {
+        theoryAnswers: draft.theoryAnswers || {},
+        codingAnswers: draft.codingAnswers || {},
+        isAutoSubmit: true,
+      });
+      await markAttemptSubmitted(assignment.id, String(attempt.userId));
+      submitted += 1;
+    } catch (error) {
+      console.error('Auto-submit failed for attempt', attempt.id, error);
+    }
+  }
+
+  return submitted;
+}
+
+exports.autoSubmitPendingAttempts = autoSubmitPendingAttempts;
 
 exports.getAssessmentResult = async (req, res) => {
   try {

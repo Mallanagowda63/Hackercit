@@ -19,6 +19,7 @@ router.get('/:id/result', requireAuth, assessmentController.getAssessmentResult)
 router.post('/:id/attempts/start', requireAuth, controller.startAttempt);
 router.post('/:id/attempts/interrupt', requireAuth, controller.recordInterruption);
 router.post('/:id/attempts/finish', requireAuth, controller.finishAttempt);
+router.post('/:id/attempts/draft', requireAuth, assessmentController.saveDraft);
 router.get('/:id/report', requireAuth, requireRole('ADMIN'), controller.report);
 router.post('/:id/feedback', requireAuth, feedbackController.submitFeedback);
 router.get('/:id/feedback', requireAuth, requireRole('ADMIN'), feedbackController.listFeedback);

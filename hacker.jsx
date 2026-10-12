@@ -1062,6 +1062,7 @@ function CodingPlatform() {
   const contestCameraPreviewRef = useRef(null);
   const shieldTimerRef = useRef(null);
   const studentProblemBankRef = useRef({ problems: [], loadedAt: 0 });
+  const collectExamAnswersRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 1024);
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth || 1024);
@@ -1807,6 +1808,37 @@ function CodingPlatform() {
     };
   }, [authToken, currentUser.id, currentUser.role, portalRefreshTick, contestEntered]);
 
+  // Autosave: while the exam is open, store the student's answers on the server every 20s (only
+  // when they changed), so they are kept even if the browser closes or Final Submit fails.
+  useEffect(() => {
+    const testId = activeAssignment?.id;
+    if (!contestEntered || !testId || !authToken || currentUser.role === "admin") return undefined;
+
+    let cancelled = false;
+    let saving = false;
+    let lastSaved = "";
+    const saveAnswers = async () => {
+      if (cancelled || saving || !collectExamAnswersRef.current) return;
+      const body = JSON.stringify(collectExamAnswersRef.current());
+      if (body === lastSaved) return;
+      saving = true;
+      try {
+        await performApiRequest(`/api/tests/${testId}/attempts/draft`, { method: "POST", body });
+        lastSaved = body;
+      } catch {
+      } finally {
+        saving = false;
+      }
+    };
+
+    saveAnswers();
+    const interval = setInterval(saveAnswers, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [contestEntered, activeAssignment?.id, authToken, currentUser.role]);
+
   useEffect(() => {
     if (!linkTestId || !authToken || !currentUser.id || currentUser.role === "admin") return undefined;
     if (contestEntered || view === "thankYou") return undefined;
@@ -1987,12 +2019,32 @@ function CodingPlatform() {
   const finishContest = async (reason = "Submitted", sessionProgress = contestSessionProgress) => {
     const interrupted = /ended because|restricted key|switched away|fullscreen/i.test(reason);
     if (authToken && currentUser.id && activeContestAssignment?.id) {
+      const testId = activeContestAssignment.id;
+      const answers = collectExamAnswersRef.current ? collectExamAnswersRef.current() : null;
+      // Save the answers first: if the submit below never reaches the server, the server
+      // auto-submits these saved answers a few minutes later.
+      if (answers) {
+        try {
+          await performApiRequest(`/api/tests/${testId}/attempts/draft`, {
+            method: "POST",
+            body: JSON.stringify({ ...answers, final: true }),
+          });
+        } catch {}
+      }
       try {
-        await performApiRequest(`/api/tests/${activeContestAssignment.id}/attempts/finish`, {
+        await performApiRequest(`/api/tests/${testId}/attempts/finish`, {
           method: "POST",
           body: JSON.stringify({ reason, interrupted }),
         });
       } catch {}
+      // Time up / test stopped / warnings: submit the answers too (in the background, since
+      // grading can take a while).
+      if (answers) {
+        performApiRequest(`/api/tests/${testId}/submit`, {
+          method: "POST",
+          body: JSON.stringify({ ...answers, isAutoSubmit: true }),
+        }).catch(() => {});
+      }
     }
     setContestResult(buildContestResult(reason, sessionProgress));
     const finishedTest = activeContestAssignment?.id
@@ -4924,25 +4976,61 @@ function CodingPlatform() {
     </div>
   );
 
+  // The student's current exam answers, including code typed in the editor but not yet run.
+  const collectExamAnswers = () => {
+    const codingAnswers = { ...candidateCodingAnswers };
+    const problem = selectedProblem;
+    const isContestProblem = problem && contestProblemSet.some((item) => sameValue(item.id, problem.id));
+    const isTheory = problem && (problem.type === "theory" || (Array.isArray(problem.options) && problem.options.length > 0));
+    const isStarterCode = problem && String(code || "").trim() === String(problem.starterCode?.[lang] || "").trim();
+    if (contestEntered && isContestProblem && !isTheory && String(code || "").trim() && !isStarterCode) {
+      const previous = codingAnswers[problem.dbId] || codingAnswers[problem.id] || {};
+      if (previous.code !== code) {
+        const entry = { ...previous, code, language: lang };
+        if (problem.id) codingAnswers[problem.id] = entry;
+        if (problem.dbId) codingAnswers[problem.dbId] = entry;
+      }
+    }
+    return { theoryAnswers: candidateTheoryAnswers, codingAnswers };
+  };
+  collectExamAnswersRef.current = collectExamAnswers;
+
   const handleFinalSubmitAssessment = async () => {
     const testId = activeContestAssignment?.id || adminCurrentTest?.id;
     if (!testId) return;
 
-    setSubmittingAssessment(true);
-    try {
-      const data = await performApiRequest(`/api/tests/${testId}/submit`, {
-        method: "POST",
-        body: JSON.stringify({
-          theoryAnswers: candidateTheoryAnswers,
-          codingAnswers: candidateCodingAnswers,
-        }),
-      });
-
+    const finishExamScreen = () => {
       setFinalSubmitConfirmOpen(false);
       setContestEntered(false);
       showThankYouScreen({ id: testId, title: activeContestAssignment?.title || adminCurrentTest?.title || "Assessment" });
+    };
+
+    setSubmittingAssessment(true);
+    const answers = collectExamAnswers();
+    // Save the answers first (small, quick request). If grading below cannot reach the server,
+    // the server submits these saved answers by itself within a few minutes.
+    let answersSaved = false;
+    try {
+      await performApiRequest(`/api/tests/${testId}/attempts/draft`, {
+        method: "POST",
+        body: JSON.stringify({ ...answers, final: true }),
+      });
+      answersSaved = true;
+    } catch {}
+
+    try {
+      await performApiRequest(`/api/tests/${testId}/submit`, {
+        method: "POST",
+        body: JSON.stringify(answers),
+      });
+      finishExamScreen();
     } catch (err) {
-      setPortalError(err.message || "Failed to submit assessment.");
+      if (answersSaved) {
+        finishExamScreen();
+        setPortalMessage("Your answers are saved. Your exam will be submitted automatically within a few minutes.");
+      } else {
+        setPortalError(err.message || "Failed to submit assessment.");
+      }
     } finally {
       setSubmittingAssessment(false);
     }
