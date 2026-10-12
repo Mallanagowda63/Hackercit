@@ -571,6 +571,167 @@ async function fetchWithRetry(url, options = {}, retries = 2) {
   }
 }
 
+// ── MCQ Excel import ────────────────────────────────────────────────────────
+// Sheet layout (header row optional):  [question] | opA | opB | opC | opD | cort(op)
+// e.g. "The ratio of boys to girls ... ?" | 15 | 18 | 20 | 25 | C(20)
+// The answer is the option letter, optionally with the option's value in brackets: "C", "C(20)",
+// "C) 20", "Option C". A bare value ("20") is matched to the option with that text. When both a
+// letter and a value are given they must agree, otherwise the row is rejected so nothing is
+// imported with a wrong answer. Optional extra columns: Marks, Category, Difficulty, Explanation.
+const MCQ_OPTION_LETTERS = ["A", "B", "C", "D"];
+
+function normalizeMcqText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function sameMcqValue(left, right) {
+  const a = normalizeMcqText(left).toLowerCase();
+  const b = normalizeMcqText(right).toLowerCase();
+  if (a === b) return true;
+  const numA = Number(a.replace(/,/g, ""));
+  const numB = Number(b.replace(/,/g, ""));
+  return a !== "" && b !== "" && Number.isFinite(numA) && Number.isFinite(numB) && numA === numB;
+}
+
+function findMcqColumns(rows) {
+  for (let r = 0; r < Math.min(rows.length, 5); r += 1) {
+    const cells = (rows[r] || []).map((cell) => normalizeMcqText(cell).toLowerCase());
+    const optionCols = {};
+    cells.forEach((cell, c) => {
+      const m = cell.match(/^op(?:tion)?\s*[-_.]?\s*([a-d])$/);
+      if (m) optionCols[m[1].toUpperCase()] = c;
+    });
+    if (Object.keys(optionCols).length < 2) continue;
+
+    const findCol = (pattern) => cells.findIndex((cell) => pattern.test(cell));
+    const used = new Set(Object.values(optionCols));
+    const answer = findCol(/^(cor+e?c?t|cort|ans|answer|key|right)/);
+    if (answer >= 0) used.add(answer);
+    let question = findCol(/^(q|ques|question|questions|q\.?\s*no|statement)\b/);
+    if (question < 0) {
+      // Header cell above the questions is often empty (as in the template): use the first free column.
+      question = cells.findIndex((_, c) => !used.has(c));
+      if (question < 0) question = 0;
+    }
+    return {
+      headerRow: r,
+      question,
+      options: MCQ_OPTION_LETTERS.map((letter) => (letter in optionCols ? optionCols[letter] : -1)),
+      answer,
+      marks: findCol(/^marks?$/),
+      category: findCol(/^(category|topic|subject)$/),
+      difficulty: findCol(/^(difficulty|level)$/),
+      explanation: findCol(/^(explanation|solution)$/),
+    };
+  }
+  // No header row: columns A-F are question, A, B, C, D, answer.
+  return { headerRow: -1, question: 0, options: [1, 2, 3, 4], answer: 5, marks: -1, category: -1, difficulty: -1, explanation: -1 };
+}
+
+function parseMcqAnswer(rawAnswer, options) {
+  const raw = normalizeMcqText(rawAnswer);
+  if (!raw) return { error: "Correct answer is empty." };
+
+  // Letter form: "C", "c", "(C)", "C)", "C.", "Option C", "opC", "C(20)", "C - 20", "C) 20".
+  // The letter must stand alone, so an answer like "Delhi" is not read as option D.
+  const m = raw.match(/^(?:op(?:tion)?\s*[-_.:]?\s*)?\(?\s*([a-d])\s*\)?(?=$|[\s(\[.:\-])\s*[.:\-]?\s*(.*)$/i);
+  if (m) {
+    const letter = m[1].toUpperCase();
+    const index = MCQ_OPTION_LETTERS.indexOf(letter);
+    const value = normalizeMcqText(m[2]).replace(/^[(\[]\s*/, "").replace(/\s*[)\]]$/, "");
+    if (!normalizeMcqText(options[index])) return { error: `Answer is option ${letter}, but option ${letter} is empty.` };
+    if (value && !sameMcqValue(value, options[index])) {
+      const other = options.findIndex((opt) => sameMcqValue(value, opt));
+      return {
+        error: other >= 0
+          ? `Answer "${raw}" does not match: option ${letter} is "${options[index]}", but "${value}" is option ${MCQ_OPTION_LETTERS[other]}.`
+          : `Answer "${raw}" does not match: option ${letter} is "${options[index]}", not "${value}".`,
+      };
+    }
+    return { index };
+  }
+
+  // Value form: the answer is the text of one option.
+  const matches = options.map((opt, i) => (sameMcqValue(raw, opt) ? i : -1)).filter((i) => i >= 0);
+  if (matches.length === 1) return { index: matches[0] };
+  if (matches.length > 1) return { error: `Answer "${raw}" matches more than one option.` };
+  return { error: `Answer "${raw}" is not an option letter (A-D) and does not match any option.` };
+}
+
+function parseMcqSheetRows(rows, defaults = {}) {
+  const cols = findMcqColumns(rows);
+  const cell = (row, c) => (c >= 0 ? normalizeMcqText(row[c]) : "");
+  const results = [];
+
+  rows.forEach((row, r) => {
+    if (r <= cols.headerRow) return;
+    if (!row || row.every((value) => !normalizeMcqText(value))) return;
+
+    const statement = cell(row, cols.question);
+    const rawOptions = cols.options.map((c) => cell(row, c));
+    const lastFilled = rawOptions.reduce((last, opt, i) => (opt ? i : last), -1);
+    const options = rawOptions.slice(0, lastFilled + 1);
+    const problems = [];
+
+    if (!statement) problems.push("Question text is empty.");
+    if (options.filter(Boolean).length < 2) problems.push("Needs at least 2 options.");
+    if (options.some((opt) => !opt)) problems.push("An option in the middle is empty (fill options in order A, B, C, D).");
+    const seen = new Map();
+    options.forEach((opt, i) => {
+      const key = opt.toLowerCase();
+      if (opt && seen.has(key)) problems.push(`Options ${MCQ_OPTION_LETTERS[seen.get(key)]} and ${MCQ_OPTION_LETTERS[i]} are the same ("${opt}").`);
+      else seen.set(key, i);
+    });
+
+    let correctAnswerIndex = -1;
+    const rawAnswer = cell(row, cols.answer);
+    if (!problems.length) {
+      const parsed = parseMcqAnswer(rawAnswer, options);
+      if (parsed.error) problems.push(parsed.error);
+      else correctAnswerIndex = parsed.index;
+    }
+
+    const marks = Number(cell(row, cols.marks));
+    results.push({
+      tempId: `xlsx_row_${r + 1}`,
+      rowNumber: r + 1,
+      title: statement.length > 80 ? `${statement.slice(0, 80)}...` : statement,
+      statement,
+      options,
+      correctAnswerIndex,
+      correctAnswer: correctAnswerIndex >= 0 ? options[correctAnswerIndex] : "",
+      rawAnswer,
+      marks: Number.isFinite(marks) && marks > 0 ? marks : (defaults.marks || 2),
+      category: cell(row, cols.category) || defaults.category || "Other",
+      sheetCategory: cell(row, cols.category),
+      difficulty: cell(row, cols.difficulty) || defaults.difficulty || "Easy",
+      explanation: cell(row, cols.explanation),
+      problems,
+      isMalformed: problems.length > 0,
+    });
+  });
+
+  return results;
+}
+
+let sheetJsPromise = null;
+function loadSheetJs() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!sheetJsPromise) {
+    sheetJsPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      script.onload = () => (window.XLSX ? resolve(window.XLSX) : reject(new Error("Excel reader did not load.")));
+      script.onerror = () => {
+        sheetJsPromise = null;
+        reject(new Error("Could not load the Excel reader. Check the internet connection and try again."));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return sheetJsPromise;
+}
+
 // Phone detection during exams: TensorFlow.js + COCO-SSD (its "cell phone" class). The library is
 // loaded by index.html with the page; the model is prepared as soon as a student logs in. If it
 // cannot load, the exam continues and loading is retried in the background.
@@ -1005,6 +1166,8 @@ function CodingPlatform() {
   const [pdfDraftQuestions, setPdfDraftQuestions] = useState([]);
   const [pdfEditingIndex, setPdfEditingIndex] = useState(null);
   const [pdfImporting, setPdfImporting] = useState(false);
+  const [mcqImportCategory, setMcqImportCategory] = useState("Other");
+  const [mcqImportFileName, setMcqImportFileName] = useState("");
 
   const [mcqModalOpen, setMcqModalOpen] = useState(false);
   const [mcqEditingProblem, setMcqEditingProblem] = useState(null);
@@ -1229,14 +1392,16 @@ function CodingPlatform() {
     }
   };
 
-  const loadAdminPortalData = async (preferredAssignmentId = adminCurrentTest?.id) => {
+  // `background`: the 20s auto-refresh, which may reuse the problem bank downloaded in the last 2
+  // minutes. Every other call (after adding, editing or importing questions) downloads it fresh.
+  const loadAdminPortalData = async (preferredAssignmentId = adminCurrentTest?.id, { background = false } = {}) => {
     setAdminAssignmentsLoading(true);
     setPortalError("");
 
     try {
       // Everything loads at the same time; the problem bank is reused for 2 minutes.
       const [problems, testsData, studentsData, leaderboardData] = await Promise.all([
-        isProblemBankFresh() ? problemBankCacheRef.current.problems : loadProblemBank(),
+        background && isProblemBankFresh() ? problemBankCacheRef.current.problems : loadProblemBank(),
         performApiRequest("/api/tests"),
         performApiRequest("/api/auth/students"),
         performApiRequest("/api/submissions/leaderboard"),
@@ -1820,7 +1985,7 @@ function CodingPlatform() {
     const refreshPortal = async () => {
 
       if (currentUser.role === "admin") {
-        await loadAdminPortalData();
+        await loadAdminPortalData(undefined, { background: true });
         return;
       }
 
@@ -6570,50 +6735,66 @@ function CodingPlatform() {
   const renderPdfUploadModal = () => {
     if (!pdfModalOpen) return null;
 
-    const handlePdfFileSelect = (e) => {
+    // Reads the first sheet of an Excel file in the browser and turns each row into an MCQ.
+    const handleExcelFileSelect = async (e) => {
       const file = e.target.files?.[0];
+      e.target.value = "";
       if (!file) return;
 
-      setPdfStage("uploading");
-      setPdfProgressText("Uploading PDF document...");
+      setMcqImportFileName(file.name);
+      setPdfStage("extracting");
+      setPdfProgressText(`Reading ${file.name}...`);
 
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        const text = evt.target.result;
-        setPdfStage("extracting");
-        setPdfProgressText("Extracting questions and options A/B/C/D...");
+      try {
+        const XLSX = await loadSheetJs();
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "", blankrows: false });
+        const questions = parseMcqSheetRows(rows);
+        if (!questions.length) {
+          throw new Error("No questions found in the first sheet. Put one question per row: question, opA, opB, opC, opD, correct answer.");
+        }
 
-        setTimeout(async () => {
-          setPdfStage("processing");
-          setPdfProgressText("Detecting correct answers, marks, and categories...");
-
-          try {
-            const data = await performApiRequest("/api/problems/upload-mcq-pdf", {
-              method: "POST",
-              body: JSON.stringify({ rawText: text }),
-            });
-
-            setPdfDraftQuestions(data.questions || []);
-            setPdfStage("ready");
-            setPdfProgressText("");
-          } catch (err) {
-            setPortalError(err.message || "Failed to extract questions from file.");
-            setPdfStage("idle");
+        // Do not import a question twice: skip ones already in the bank or repeated in this file.
+        const bankStatements = new Set(problemBank
+          .filter((problem) => problem.type === "theory" || (Array.isArray(problem.options) && problem.options.length))
+          .map((problem) => normalizeMcqText(String(problem.description || problem.statement || "").replace(/<[^>]*>/g, " ")).toLowerCase()));
+        const seenInFile = new Map();
+        questions.forEach((question) => {
+          const key = question.statement.toLowerCase();
+          if (!key) return;
+          if (seenInFile.has(key)) {
+            question.problems.push(`Same question as row ${seenInFile.get(key)}.`);
+          } else {
+            seenInFile.set(key, question.rowNumber);
+            if (bankStatements.has(key)) question.problems.push("Already in the question bank.");
           }
-        }, 600);
-      };
+          question.isMalformed = question.problems.length > 0;
+        });
 
-      reader.readAsText(file);
+        setPdfDraftQuestions(questions);
+        setPdfStage("ready");
+        setPdfProgressText("");
+      } catch (err) {
+        setPortalError(err.message || "Could not read the Excel file.");
+        setPdfStage("idle");
+      }
     };
 
+    const validMcqs = pdfDraftQuestions.filter((q) => !q.isMalformed);
+    const rejectedMcqs = pdfDraftQuestions.filter((q) => q.isMalformed);
+
     const handleImportAllPdfs = async () => {
-      if (!pdfDraftQuestions.length) return;
+      if (!validMcqs.length) return;
       setPdfImporting(true);
 
       try {
+        // Only rows that passed every check are imported.
         const data = await performApiRequest("/api/problems/import-mcq-bulk", {
           method: "POST",
-          body: JSON.stringify({ questions: pdfDraftQuestions }),
+          body: JSON.stringify({
+            questions: validMcqs.map((q) => ({ ...q, category: q.sheetCategory || mcqImportCategory })),
+          }),
         });
 
         const createdCount = data.count || data.problems?.length || 0;
@@ -6660,10 +6841,10 @@ function CodingPlatform() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e293b", paddingBottom: 12 }}>
             <div>
               <div style={{ fontSize: 11, fontWeight: 800, color: "#38bdf8", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                BULK MCQ PDF IMPORTER
+                BULK MCQ EXCEL IMPORTER
               </div>
               <div style={{ fontSize: 22, fontWeight: 800, color: "#f8fafc" }}>
-                Upload & Extract MCQ Questions
+                Upload MCQ Questions from Excel
               </div>
             </div>
             <button
@@ -6682,46 +6863,89 @@ function CodingPlatform() {
             </div>
           ) : !pdfDraftQuestions.length ? (
             <div style={{ border: "2px dashed #334155", borderRadius: 16, padding: "40px", textAlign: "center", background: "#1e293b" }}>
-              <div style={{ fontSize: 32, marginBottom: 10 }}>📄</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#f8fafc", marginBottom: 6 }}>Select MCQ PDF or Text Document</div>
-              <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16 }}>Supports formatted questions (Q1. Statement, A/B/C/D options, Correct Answer)</div>
-              <input type="file" accept=".pdf,.txt,.doc" onChange={handlePdfFileSelect} style={{ display: "none" }} id="pdf_mcq_input" />
+              <div style={{ fontSize: 32, marginBottom: 10 }}>📊</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#f8fafc", marginBottom: 6 }}>Select MCQ Excel File (.xlsx, .xls, .csv)</div>
+              <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 12 }}>One question per row, in the first sheet:</div>
+              <div style={{ overflowX: "auto", marginBottom: 12 }}>
+                <table style={{ margin: "0 auto", borderCollapse: "collapse", fontSize: 12, color: "#e2e8f0", background: "#0f172a" }}>
+                  <thead>
+                    <tr>
+                      {["Question", "opA", "opB", "opC", "opD", "cort(op)"].map((h) => (
+                        <th key={h} style={{ border: "1px solid #334155", padding: "6px 10px", color: "#38bdf8" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      {["The ratio of boys to girls is 3:2. If there are 30 boys, how many girls?", "15", "18", "20", "25", "C(20)"].map((v, i) => (
+                        <td key={i} style={{ border: "1px solid #334155", padding: "6px 10px", maxWidth: 260 }}>{v}</td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16, lineHeight: 1.6 }}>
+                Correct answer: the option letter, e.g. <strong>C</strong> or <strong>C(20)</strong>. If you also write the value, it must match that option.<br />
+                Optional columns: Marks, Category, Difficulty, Explanation. Rows with any problem are shown and not imported.
+              </div>
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleExcelFileSelect} style={{ display: "none" }} id="pdf_mcq_input" />
               <label htmlFor="pdf_mcq_input" style={{ ...S.adminButton("submit"), padding: "10px 24px", cursor: "pointer" }}>
-                📁 Select MCQ Document
+                📁 Select Excel File
               </label>
             </div>
           ) : (
             <>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ fontSize: 14, fontWeight: 800, color: "#4ade80" }}>
-                  Extracted {pdfDraftQuestions.length} Question(s) — Ready for Review & Import
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: "#4ade80" }}>
+                    {validMcqs.length} question(s) ready to import{mcqImportFileName ? ` from ${mcqImportFileName}` : ""}
+                  </div>
+                  {rejectedMcqs.length > 0 && (
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#f87171", marginTop: 4 }}>
+                      {rejectedMcqs.length} row(s) need fixing and will NOT be imported (shown in red below)
+                    </div>
+                  )}
                 </div>
-                <button
-                  onClick={handleImportAllPdfs}
-                  disabled={pdfImporting}
-                  style={{
-                    padding: "10px 24px",
-                    borderRadius: 10,
-                    border: "none",
-                    background: "linear-gradient(135deg, #10b981, #059669)",
-                    color: "#ffffff",
-                    fontWeight: 800,
-                    cursor: pdfImporting ? "not-allowed" : "pointer",
-                    opacity: pdfImporting ? 0.6 : 1,
-                  }}
-                >
-                  {pdfImporting ? "Importing..." : `IMPORT ALL (${pdfDraftQuestions.length} QUESTIONS)`}
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <label style={{ fontSize: 12, color: "#94a3b8" }}>
+                    Category{" "}
+                    <select value={mcqImportCategory} onChange={(e) => setMcqImportCategory(e.target.value)} style={{ ...S.adminInput, width: 110, padding: "6px 8px", fontSize: 12 }}>
+                      {questionCategories.map((category) => <option key={category}>{category}</option>)}
+                    </select>
+                  </label>
+                  <button
+                    onClick={() => { setPdfDraftQuestions([]); setPdfStage("idle"); }}
+                    style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#cbd5e1", fontWeight: 700, cursor: "pointer" }}
+                  >
+                    Choose another file
+                  </button>
+                  <button
+                    onClick={handleImportAllPdfs}
+                    disabled={pdfImporting || !validMcqs.length}
+                    style={{
+                      padding: "10px 24px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: "linear-gradient(135deg, #10b981, #059669)",
+                      color: "#ffffff",
+                      fontWeight: 800,
+                      cursor: pdfImporting || !validMcqs.length ? "not-allowed" : "pointer",
+                      opacity: pdfImporting || !validMcqs.length ? 0.6 : 1,
+                    }}
+                  >
+                    {pdfImporting ? "Importing..." : `IMPORT ${validMcqs.length} QUESTION(S)`}
+                  </button>
+                </div>
               </div>
 
               <div style={{ display: "grid", gap: 14 }}>
                 {pdfDraftQuestions.map((q, idx) => (
                   <div key={q.tempId || idx} style={{ background: "#1e293b", border: `1px solid ${q.isMalformed ? "#f87171" : "#334155"}`, borderRadius: 14, padding: "16px", display: "grid", gap: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontWeight: 800, color: "#38bdf8", fontSize: 14 }}>Q{idx + 1}. {q.title}</span>
+                      <span style={{ fontWeight: 800, color: "#38bdf8", fontSize: 14 }}>{q.rowNumber ? `Row ${q.rowNumber}` : `Q${idx + 1}`}</span>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: q.isMalformed ? "rgba(239,68,68,0.2)" : "rgba(34,197,94,0.2)", color: q.isMalformed ? "#f87171" : "#4ade80" }}>
-                          {q.isMalformed ? "⚠️ Malformed" : "Valid"}
+                          {q.isMalformed ? "⚠️ Not imported" : "Ready"}
                         </span>
                         <button
                           onClick={() => setPdfDraftQuestions(pdfDraftQuestions.filter((_, i) => i !== idx))}
@@ -6732,20 +6956,30 @@ function CodingPlatform() {
                       </div>
                     </div>
 
-                    <div style={{ color: "#e2e8f0", fontSize: 13 }}>{q.statement}</div>
+                    <div style={{ color: "#e2e8f0", fontSize: 14, fontWeight: 600 }}>{q.statement || <em style={{ color: "#f87171" }}>(no question text)</em>}</div>
 
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      {q.options.map((opt, oIdx) => (
-                        <div key={oIdx} style={{ background: "#0f172a", border: "1px solid #334155", padding: "8px 12px", borderRadius: 8, fontSize: 12, color: opt === q.correctAnswer ? "#4ade80" : "#cbd5e1" }}>
-                          <strong>{String.fromCharCode(65 + oIdx)}.</strong> {opt} {opt === q.correctAnswer && "✓"}
-                        </div>
-                      ))}
+                      {q.options.map((opt, oIdx) => {
+                        const isCorrect = oIdx === (q.correctAnswerIndex ?? q.options.indexOf(q.correctAnswer));
+                        return (
+                          <div key={oIdx} style={{ background: isCorrect ? "rgba(34,197,94,0.12)" : "#0f172a", border: `1px solid ${isCorrect ? "#22c55e" : "#334155"}`, padding: "8px 12px", borderRadius: 8, fontSize: 12, color: isCorrect ? "#4ade80" : "#cbd5e1" }}>
+                            <strong>{String.fromCharCode(65 + oIdx)}.</strong> {opt || <em>(empty)</em>} {isCorrect && "✓ correct"}
+                          </div>
+                        );
+                      })}
                     </div>
 
-                    <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 16 }}>
-                      <span>Correct Answer: <strong style={{ color: "#4ade80" }}>{q.correctAnswer}</strong></span>
+                    {q.isMalformed && Array.isArray(q.problems) && (
+                      <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: 8, padding: "8px 12px", color: "#fca5a5", fontSize: 12, display: "grid", gap: 4 }}>
+                        {q.problems.map((problem, pIdx) => <div key={pIdx}>✗ {problem}</div>)}
+                      </div>
+                    )}
+
+                    <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 16, flexWrap: "wrap" }}>
+                      <span>Answer in sheet: <strong style={{ color: "#e2e8f0" }}>{q.rawAnswer || "—"}</strong></span>
+                      {!q.isMalformed && <span>Correct option: <strong style={{ color: "#4ade80" }}>{String.fromCharCode(65 + q.correctAnswerIndex)} ({q.correctAnswer})</strong></span>}
                       <span>Marks: <strong>{q.marks}</strong></span>
-                      <span>Category: <strong>{q.category}</strong></span>
+                      <span>Category: <strong>{q.sheetCategory || mcqImportCategory}</strong></span>
                     </div>
                   </div>
                 ))}
@@ -7759,7 +7993,7 @@ function CodingPlatform() {
                         gap: 6,
                       }}
                     >
-                      <span style={{ fontSize: 16 }}>↑</span> UPLOAD MCQ PDF
+                      <span style={{ fontSize: 16 }}>↑</span> UPLOAD MCQ EXCEL
                     </button>
                   </div>
                 </div>
@@ -7903,7 +8137,7 @@ function CodingPlatform() {
                           })
                         ) : (
                           <div style={{ color: "#94a3b8", fontSize: 12, textAlign: "center", padding: "20px", background: "#090d16", borderRadius: 12, border: "1px dashed #334155" }}>
-                            No theory MCQ questions found. Use <strong>+ ADD MCQ QUESTION</strong> or <strong>↑ UPLOAD MCQ PDF</strong> above to add test MCQs.
+                            No theory MCQ questions found. Use <strong>+ ADD MCQ QUESTION</strong> or <strong>↑ UPLOAD MCQ EXCEL</strong> above to add test MCQs.
                           </div>
                         )}
                       </div>
@@ -8164,7 +8398,7 @@ function CodingPlatform() {
                             gap: 8,
                           }}
                         >
-                          <span style={{ fontSize: 16, fontWeight: 900 }}>↑</span> UPLOAD MCQ PDF
+                          <span style={{ fontSize: 16, fontWeight: 900 }}>↑</span> UPLOAD MCQ EXCEL
                         </button>
                       </div>
                     )}
