@@ -571,32 +571,15 @@ async function fetchWithRetry(url, options = {}, retries = 2) {
   }
 }
 
-// Phone detection during exams: TensorFlow.js + COCO-SSD (its "cell phone" class), loaded only
-// when an exam starts. If it cannot load, the exam continues without phone detection.
-const loadedScripts = new Map();
-function loadScriptOnce(src) {
-  if (!loadedScripts.has(src)) {
-    loadedScripts.set(src, new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = src;
-      script.async = true;
-      script.onload = resolve;
-      script.onerror = () => {
-        loadedScripts.delete(src);
-        reject(new Error(`Failed to load ${src}`));
-      };
-      document.head.appendChild(script);
-    }));
-  }
-  return loadedScripts.get(src);
-}
-
+// Phone detection during exams: TensorFlow.js + COCO-SSD (its "cell phone" class). The library is
+// loaded by index.html with the page; the model is prepared as soon as a student logs in. If it
+// cannot load, the exam continues and loading is retried in the background.
 let phoneDetectorPromise = null;
 function loadPhoneDetector() {
   if (!phoneDetectorPromise) {
-    phoneDetectorPromise = loadScriptOnce("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js")
-      .then(() => loadScriptOnce("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"))
-      .then(() => window.cocoSsd.load({ base: "lite_mobilenet_v2" }))
+    phoneDetectorPromise = (window.cocoSsd
+      ? window.cocoSsd.load({ base: "lite_mobilenet_v2" })
+      : Promise.reject(new Error("Phone detection library did not load.")))
       .catch((error) => {
         phoneDetectorPromise = null;
         throw error;
@@ -1904,6 +1887,13 @@ function CodingPlatform() {
     };
   }, [contestEntered, activeAssignment?.id, authToken, currentUser.role]);
 
+  // Prepare the phone detection model as soon as a student is logged in, so it is ready before
+  // they start an exam.
+  useEffect(() => {
+    if (!authToken || !currentUser.id || currentUser.role === "admin") return;
+    loadPhoneDetector().catch(() => {});
+  }, [authToken, currentUser.id, currentUser.role]);
+
   // Camera proctoring while the exam is open: every 2s check the camera is live and not covered,
   // and look for a phone in the picture. Either one blurs the exam (see proctorBlock) until fixed,
   // and each new incident is logged for the malpractice report.
@@ -1997,11 +1987,23 @@ function CodingPlatform() {
       }
     };
 
-    loadPhoneDetector()
-      .then((model) => {
-        if (!cancelled) detector = model;
-      })
-      .catch(() => {});
+    // Usually already loaded at login; if loading failed, retry every 30s during the exam.
+    let detectorLoading = false;
+    let lastDetectorAttempt = 0;
+    const ensureDetector = () => {
+      if (detector || detectorLoading || Date.now() - lastDetectorAttempt < 30000) return;
+      detectorLoading = true;
+      lastDetectorAttempt = Date.now();
+      loadPhoneDetector()
+        .then((model) => {
+          if (!cancelled) detector = model;
+        })
+        .catch(() => {})
+        .finally(() => {
+          detectorLoading = false;
+        });
+    };
+    ensureDetector();
 
     const handleTrackChange = () => checkCamera();
     track?.addEventListener("ended", handleTrackChange);
@@ -2012,6 +2014,7 @@ function CodingPlatform() {
     const interval = setInterval(() => {
       if (cancelled) return;
       checkCamera();
+      ensureDetector();
       checkPhone();
     }, 2000);
 
