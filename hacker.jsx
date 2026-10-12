@@ -797,16 +797,12 @@ const SUPPORTED_LANGUAGES = Object.freeze([
   { id: "python", name: "Python 3", label: "Python 3" },
   { id: "javascript", name: "JavaScript", label: "JavaScript (Node.js)" },
   { id: "java", name: "Java", label: "Java 17" },
-  { id: "cpp", name: "C++", label: "C++ (GCC)" },
-  { id: "c", name: "C", label: "C (GCC)" },
 ]);
 
 const DEFAULT_STARTER_CODE = Object.freeze({
   python: `# Write your Python solution here\nimport sys\n\ndef main():\n    lines = sys.stdin.read().split()\n    if not lines:\n        return\n    if len(lines) >= 2:\n        a, b = int(lines[0]), int(lines[1])\n        print(a + b)\n\nif __name__ == "__main__":\n    main()\n`,
   javascript: `// Write your JavaScript solution here\nconst fs = require('fs');\n\nfunction main() {\n  const input = fs.readFileSync('/dev/stdin', 'utf-8').trim().split(/\\s+/);\n  if (input.length >= 2) {\n    const a = parseInt(input[0], 10);\n    const b = parseInt(input[1], 10);\n    console.log(a + b);\n  }\n}\n\nmain();\n`,
   java: `// Write your Java solution here\nimport java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        if (scanner.hasNextInt()) {\n            int a = scanner.nextInt();\n            int b = scanner.nextInt();\n            System.out.println(a + b);\n        }\n    }\n}\n`,
-  cpp: `// Write your C++ solution here\n#include <iostream>\nusing namespace std;\n\nint main() {\n    int a, b;\n    if (cin >> a >> b) {\n        cout << (a + b) << endl;\n    }\n    return 0;\n}\n`,
-  c: `/* Write your C solution here */\n#include <stdio.h>\n\nint main() {\n    int a, b;\n    if (scanf("%d %d", &a, &b) == 2) {\n        printf("%d\\n", a + b);\n    }\n    return 0;\n}\n`,
 });
 
 function formatCode(code = "", language = "python") {
