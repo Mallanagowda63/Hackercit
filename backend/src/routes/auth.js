@@ -10,6 +10,5 @@ router.post('/forgot', controller.forgotPassword);
 router.post('/reset', controller.resetPassword);
 router.get('/me', controller.me);
 router.get('/students', requireAuth, requireRole('ADMIN'), controller.listStudents);
-router.get('/login-events', requireAuth, requireRole('ADMIN'), controller.listLoginEvents);
 
 module.exports = router;

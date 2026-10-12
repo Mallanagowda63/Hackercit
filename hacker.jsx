@@ -881,7 +881,6 @@ function CodingPlatform() {
   const [liveTestPopupDismissedId, setLiveTestPopupDismissedId] = useState(null);
   const [studentNotifications, setStudentNotifications] = useState([]);
   const [notificationCount, setNotificationCount] = useState(0);
-  const [loginEvents, setLoginEvents]         = useState([]);
   const [portalMessage, setPortalMessage]     = useState("");
   const [portalError, setPortalError]         = useState("");
   const [adminSyncingProblems, setAdminSyncingProblems] = useState(false);
@@ -1236,11 +1235,10 @@ function CodingPlatform() {
 
     try {
       // Everything loads at the same time; the problem bank is reused for 2 minutes.
-      const [problems, testsData, studentsData, loginEventData, leaderboardData] = await Promise.all([
+      const [problems, testsData, studentsData, leaderboardData] = await Promise.all([
         isProblemBankFresh() ? problemBankCacheRef.current.problems : loadProblemBank(),
         performApiRequest("/api/tests"),
         performApiRequest("/api/auth/students"),
-        performApiRequest("/api/auth/login-events"),
         performApiRequest("/api/submissions/leaderboard"),
       ]);
 
@@ -1306,7 +1304,6 @@ function CodingPlatform() {
       setRegisteredStudents(mappedRegisteredStudents);
       setActiveUsers(mappedStudents);
       setParticipantsCount(mappedStudents.length);
-      setLoginEvents(Array.isArray(loginEventData.events) ? loginEventData.events : []);
       if (currentAssignment?.id && currentAssignment.status === "ENDED") {
         const reportData = await performApiRequest(`/api/tests/${currentAssignment.id}/report`);
         setAdminTestReport(reportData.report || null);
@@ -2667,7 +2664,6 @@ function CodingPlatform() {
     setActiveAssignment(null);
     setStudentNotifications([]);
     setNotificationCount(0);
-    setLoginEvents([]);
     setPortalMessage("");
     setPortalError("");
     setLeaderboard([]);
@@ -4197,9 +4193,6 @@ function CodingPlatform() {
       .map((student) => String(student.department || "").trim())
       .filter(Boolean)
   ).size;
-  const adminLoginEvents = loginEvents.filter((event) => (
-    event.role === "ADMIN" || event.email === currentUser.email
-  ));
   const displayedProblemBank = problemBank.filter((problem) => {
     const categoryMatch = questionCategoryFilter === "All" || getProblemCategory(problem) === questionCategoryFilter;
     const probType = problem.type || (Array.isArray(problem.options) && problem.options.length ? "theory" : "coding");
@@ -4387,40 +4380,11 @@ function CodingPlatform() {
           </div>
           <div style={S.adminSubCard}>
             <div style={S.adminSectionTitle}>Login Count</div>
-            <div style={{ color:ADMIN_THEME.primary, fontWeight:800, fontSize:24 }}>{currentUser.loginCount || adminLoginEvents.length || 0}</div>
+            <div style={{ color:ADMIN_THEME.primary, fontWeight:800, fontSize:24 }}>{currentUser.loginCount || 0}</div>
           </div>
         </div>
       </div>
 
-      <div style={S.adminCard}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:12 }}>
-          <div>
-            <div style={S.adminSectionTitle}>Login Logs</div>
-            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>Recent admin authentication activity</div>
-          </div>
-          <div style={{ color:ADMIN_THEME.primary, fontSize:13, fontWeight:700 }}>{adminLoginEvents.length} records</div>
-        </div>
-        <div style={{ display:"grid", gap:10 }}>
-          {adminLoginEvents.slice(0, 12).map((event) => (
-            <div key={event.id} style={S.adminSubCard}>
-              <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:6 }}>
-                <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{event.email}</div>
-                <div style={{ color:ADMIN_THEME.primary, fontSize:12, fontWeight:700 }}>{event.eventType}</div>
-              </div>
-              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginBottom:6 }}>
-                {event.role} | {formatPortalDate(event.createdAt)}
-              </div>
-              <div style={{ color:ADMIN_THEME.textMuted, fontSize:12, wordBreak:"break-word" }}>
-                {event.ip || "IP unavailable"} | {event.userAgent || "Browser info unavailable"}
-              </div>
-            </div>
-          ))}
-
-          {!adminLoginEvents.length && (
-            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>No admin login logs yet.</div>
-          )}
-        </div>
-      </div>
     </div>
   );
 

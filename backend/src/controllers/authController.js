@@ -45,28 +45,6 @@ function serializeUser(user) {
   };
 }
 
-function extractRequestIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
-  }
-
-  return req.socket?.remoteAddress || req.ip || null;
-}
-
-async function recordAuthEvent(req, user, eventType) {
-  await prisma.loginEvent.create({
-    data: {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      eventType,
-      ip: extractRequestIp(req),
-      userAgent: req.headers['user-agent'] || null,
-    },
-  });
-}
-
 async function sendVerificationEmail(user, token) {
   // Simple transporter; in prod use SES/SendGrid or SMTP credentials
   const transporter = nodemailer.createTransport({
@@ -227,7 +205,6 @@ exports.register = async (req, res) => {
     const inOneDay = new Date(Date.now() + 24 * 3600 * 1000);
     await prisma.verificationToken.create({ data: { token, userId: user.id, expiresAt: inOneDay } });
     await sendVerificationEmail(user, token);
-    await recordAuthEvent(req, user, 'SIGNUP');
 
     const authToken = signToken(user);
     return res.status(201).json({ token: authToken, user: serializeUser(user) });
@@ -354,7 +331,6 @@ exports.login = async (req, res) => {
         loginCount: { increment: 1 },
       },
     });
-    await recordAuthEvent(req, updatedUser, 'LOGIN');
 
     const userWithBadge = await syncUserBadge(updatedUser.id);
     const token = signToken(userWithBadge || updatedUser);
@@ -429,19 +405,3 @@ exports.listStudents = async (req, res) => {
   }
 };
 
-exports.listLoginEvents = async (req, res) => {
-  try {
-    // Sort and limit in MongoDB: only the latest 100 events are read, not the whole history.
-    const collection = await prisma.loginEvent.collection();
-    const events = (await collection.find({}).sort({ createdAt: -1 }).limit(100).toArray())
-      .map(({ _id, ...event }) => ({ id: String(_id), ...event }));
-
-    return res.json({ events });
-  } catch (err) {
-    console.error(err);
-    if (isDatabaseConnectionError(err)) {
-      return sendDatabaseConnectionError(res, err);
-    }
-    return res.status(500).json({ error: 'server error' });
-  }
-};

@@ -292,9 +292,6 @@ function applyDefaults(modelName, data) {
       assignmentId: null,
       createdAt: now,
     },
-    loginEvent: {
-      createdAt: now,
-    },
     testFeedback: {
       comment: '',
       createdAt: now,
@@ -386,7 +383,6 @@ async function initializeDatabase(db) {
     createIndexSafely(db.collection('AssessmentSubmission'), { assignmentId: 1, userId: 1 }),
     createIndexSafely(db.collection('TestAttempt'), { assignmentId: 1, userId: 1 }),
     createIndexSafely(db.collection('Notification'), { userId: 1 }),
-    createIndexSafely(db.collection('LoginEvent'), { createdAt: -1 }),
     createIndexSafely(db.collection('Submission'), { status: 1 }),
   ]);
 }
@@ -586,7 +582,6 @@ prisma = {
   testAssignment: new MongoModel('testAssignment', 'TestAssignment'),
   testAttempt: new MongoModel('testAttempt', 'TestAttempt'),
   notification: new MongoModel('notification', 'Notification'),
-  loginEvent: new MongoModel('loginEvent', 'LoginEvent'),
   assessmentSubmission: new MongoModel('assessmentSubmission', 'AssessmentSubmission'),
   testFeedback: new MongoModel('testFeedback', 'TestFeedback'),
   async $transaction(operations) {

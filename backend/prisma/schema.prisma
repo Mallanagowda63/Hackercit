@@ -22,7 +22,6 @@ model User {
   submissions           Submission[]
   assessmentSubmissions AssessmentSubmission[]
   testAttempts          TestAttempt[]
-  loginEvents           LoginEvent[]
   notifications         Notification[]
   verificationTokens    VerificationToken[]
   resetTokens           ResetToken[]
@@ -154,18 +153,6 @@ model Notification {
   createdAt    DateTime         @default(now())
 }
 
-model LoginEvent {
-  id        String        @id @default(auto()) @map("_id") @db.ObjectId
-  user      User          @relation(fields: [userId], references: [id])
-  userId    String        @db.ObjectId
-  email     String
-  role      Role
-  eventType AuthEventType
-  ip        String?
-  userAgent String?
-  createdAt DateTime      @default(now())
-}
-
 enum Role {
   ADMIN
   SETTER
@@ -208,7 +195,3 @@ enum NotificationType {
   TEST_ENDED
 }
 
-enum AuthEventType {
-  SIGNUP
-  LOGIN
-}
