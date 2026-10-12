@@ -5290,6 +5290,7 @@ function CodingPlatform() {
     const headers = [
       "Rank",
       "Student Name",
+      "USN",
       "Email",
       "Department",
       "Total Score",
@@ -5297,14 +5298,18 @@ function CodingPlatform() {
       "Percentage",
       "Theory Score",
       "Coding Score",
-      "Status",
+      "Result",
+      "Warnings",
+      "Finish Reason",
       "Time Used (Mins)",
       "Submission Date"
     ];
+    const csvText = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
 
     const rows = students.map((s) => [
-      s.rank,
+      s.rank || "-",
       `"${s.studentName || s.student?.name || 'Unknown Student'}"`,
+      csvText(s.studentUsn || s.student?.usn || "Not Available"),
       `"${s.studentEmail || s.student?.email || 'Not Available'}"`,
       `"${s.studentDepartment || s.student?.department || 'Not Available'}"`,
       s.totalScore,
@@ -5312,7 +5317,9 @@ function CodingPlatform() {
       `"${s.percentage}%"`,
       s.theoryScore,
       s.codingScore,
-      `"${s.status}"`,
+      csvText(s.result || s.status),
+      s.warnings || 0,
+      csvText(s.finishReason),
       s.timeUsedMinutes,
       `"${s.submittedAt ? new Date(s.submittedAt).toLocaleString() : 'N/A'}"`
     ]);
@@ -5424,9 +5431,19 @@ function CodingPlatform() {
           <>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
               <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
-                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>TOTAL STUDENTS</div>
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>TOOK THE EXAM</div>
                 <div style={{ fontSize: 26, fontWeight: 800, color: "#38bdf8", marginTop: 4 }}>{stats.totalStudents || 0}</div>
-                <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>{stats.completedStudents || 0} Completed</div>
+                <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>{stats.completedStudents || 0} Graded</div>
+              </div>
+
+              <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
+                <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 12, fontWeight: 700 }}>RESULTS</div>
+                <div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 12, fontWeight: 700 }}>
+                  <span style={{ color: "#4ade80" }}>Submitted: {stats.submitted || 0}</span>
+                  <span style={{ color: "#38bdf8" }}>Auto-submitted: {stats.autoSubmitted || 0}</span>
+                  <span style={{ color: "#f87171" }}>Malpractice: {stats.malpractice || 0}</span>
+                  <span style={{ color: "#facc15" }}>Not submitted: {(stats.notSubmitted || 0) + (stats.inProgress || 0)}</span>
+                </div>
               </div>
 
               <div style={{ ...S.adminSubCard, background: "rgba(30, 41, 59, 0.7)", border: "1px solid #334155" }}>
@@ -5572,16 +5589,16 @@ function CodingPlatform() {
                         <th style={{ padding: "10px" }}>Score</th>
                         <th style={{ padding: "10px" }}>Percentage</th>
                         <th style={{ padding: "10px" }}>Breakdown</th>
-                        <th style={{ padding: "10px" }}>Status</th>
+                        <th style={{ padding: "10px" }}>Result</th>
                         <th style={{ padding: "10px" }}>Time Used</th>
                         <th style={{ padding: "10px", textAlign: "right" }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredStudents.map((s) => (
-                        <tr key={s.submissionId} style={{ borderBottom: `1px solid ${ADMIN_THEME.divider}` }}>
+                        <tr key={s.submissionId || `attempt-${s.userId}`} style={{ borderBottom: `1px solid ${ADMIN_THEME.divider}` }}>
                           <td style={{ padding: "12px 10px", fontWeight: 800 }}>
-                            {s.rank === 1 ? "🥇 1" : s.rank === 2 ? "🥈 2" : s.rank === 3 ? "🥉 3" : s.rank}
+                            {s.rank === 1 ? "🥇 1" : s.rank === 2 ? "🥈 2" : s.rank === 3 ? "🥉 3" : (s.rank || "—")}
                           </td>
                           <td style={{ padding: "12px 10px" }}>
                             <div style={{ fontWeight: 700 }}>{s.studentName}</div>
@@ -5597,12 +5614,22 @@ function CodingPlatform() {
                             Theory: {s.theoryScore} | Coding: {s.codingScore}
                           </td>
                           <td style={{ padding: "12px 10px" }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: "rgba(34, 197, 94, 0.14)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
-                              {s.status}
-                            </span>
+                            {(() => {
+                              const result = s.result || s.status;
+                              const color = /^Malpractice/.test(result) ? "#f87171" : /^Auto/.test(result) ? "#38bdf8" : /^Submitted|^Completed/.test(result) ? "#4ade80" : "#facc15";
+                              return (
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: "rgba(148, 163, 184, 0.12)", color, border: `1px solid ${color}55`, whiteSpace: "nowrap" }}>
+                                  {result}
+                                </span>
+                              );
+                            })()}
+                            {s.warnings > 0 && (
+                              <div style={{ color: "#fca5a5", fontSize: 11, marginTop: 4 }}>⚠ {s.warnings} warning{s.warnings === 1 ? "" : "s"}</div>
+                            )}
                           </td>
                           <td style={{ padding: "12px 10px", color: ADMIN_THEME.textSecondary }}>{s.timeUsedMinutes} mins</td>
                           <td style={{ padding: "12px 10px", textAlign: "right" }}>
+                            {s.submissionId ? (
                             <button
                               onClick={() => openStudentReportModal(testInfo.id, s.userId)}
                               style={{
@@ -5618,6 +5645,9 @@ function CodingPlatform() {
                             >
                               👁 VIEW REPORT
                             </button>
+                            ) : (
+                              <span style={{ color: ADMIN_THEME.textSecondary, fontSize: 11 }}>{s.finishReason || "No answers graded"}</span>
+                            )}
                           </td>
                         </tr>
                       ))}

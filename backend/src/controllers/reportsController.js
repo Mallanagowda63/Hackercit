@@ -167,8 +167,35 @@ exports.getTestReport = async (req, res) => {
       }
     });
 
+    // Every student who started the exam, so students whose exam never got submitted (lost submit,
+    // malpractice, closed browser) are in the report too, not only the graded ones.
+    const attempts = await prisma.testAttempt.findMany({ where: { assignmentId: testId } });
+    const latestAttemptByUser = new Map();
+    attempts
+      .sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0))
+      .forEach((attempt) => {
+        const key = String(attempt.userId);
+        if (!latestAttemptByUser.has(key)) latestAttemptByUser.set(key, attempt);
+      });
+    const isLive = assignment.status === 'LIVE';
+
+    // SUBMITTED = Final Submit; COMPLETED / AUTO_SUBMITTED = time up, test stopped or server
+    // auto-submit; INTERRUPTED = ended for warnings or rejected in the proctoring review.
+    const describeResult = (attempt, hasSubmission) => {
+      if (attempt?.status === 'INTERRUPTED') return hasSubmission ? 'Malpractice (submitted)' : 'Malpractice (not submitted)';
+      if (hasSubmission) return !attempt || attempt.status === 'SUBMITTED' ? 'Submitted' : 'Auto-submitted';
+      if (attempt?.status === 'IN_PROGRESS' && isLive) return 'In progress';
+      return 'Not submitted';
+    };
+    const attemptDetails = (attempt) => ({
+      warnings: Number(attempt?.interruptionCount || 0),
+      finishReason: attempt?.finishReason || '',
+      startedAt: attempt?.startedAt || null,
+    });
+
     // Rank calculation (Score desc, then submission time asc)
     const rankedSubmissions = uniqueUserSubmissions.map((sub, idx) => {
+      const attempt = latestAttemptByUser.get(String(sub.userId)) || null;
       const u = sub.user;
       const studentName = formatStudentName(u);
       const studentUsn = formatStudentUsn(u);
@@ -197,17 +224,74 @@ exports.getTestReport = async (req, res) => {
         theoryScore: sub.theoryScore,
         codingScore: sub.codingScore,
         status: sub.percentage !== undefined ? 'Completed' : 'In Progress',
+        result: describeResult(attempt, true),
+        ...attemptDetails(attempt),
         submittedAt: sub.createdAt,
         timeUsedMinutes: timeUsed,
       };
     });
+
+    const unsubmittedAttempts = [...latestAttemptByUser.values()].filter((attempt) => !seenUsers.has(attempt.userId) && !seenUsers.has(String(attempt.userId)));
+    const unsubmittedUsers = unsubmittedAttempts.length
+      ? await prisma.user.findMany({
+        where: { id: { in: unsubmittedAttempts.map((attempt) => String(attempt.userId)) } },
+        select: { id: true, name: true, email: true, usn: true, department: true },
+      })
+      : [];
+    const unsubmittedUserById = new Map(unsubmittedUsers.map((u) => [String(u.id), u]));
+    const unsubmittedRows = unsubmittedAttempts.map((attempt) => {
+      const u = unsubmittedUserById.get(String(attempt.userId)) || null;
+      const studentName = formatStudentName(u);
+      const startedMs = new Date(attempt.startedAt || 0).getTime();
+      const endMs = attempt.finishedAt ? new Date(attempt.finishedAt).getTime() : Date.now();
+      return {
+        rank: null,
+        submissionId: null,
+        userId: attempt.userId,
+        student: {
+          id: u?.id || attempt.userId,
+          name: studentName,
+          usn: formatStudentUsn(u),
+          email: formatStudentEmail(u),
+          department: formatStudentDept(u),
+        },
+        studentName,
+        studentEmail: formatStudentEmail(u),
+        studentUsn: formatStudentUsn(u),
+        studentDepartment: formatStudentDept(u),
+        totalScore: 0,
+        maxScore: rankedSubmissions[0]?.maxScore || 0,
+        percentage: 0,
+        theoryScore: 0,
+        codingScore: 0,
+        status: 'Not Submitted',
+        result: describeResult(attempt, false),
+        ...attemptDetails(attempt),
+        submittedAt: null,
+        timeUsedMinutes: Number.isFinite(startedMs) && startedMs > 0
+          ? Math.min(Math.round(Math.max(0, endMs - startedMs) / 60000), assignment.durationMinutes || 120)
+          : 0,
+      };
+    });
+    const allStudentRows = [...rankedSubmissions, ...unsubmittedRows];
+    const countResult = (prefix) => allStudentRows.filter((row) => row.result.startsWith(prefix)).length;
+    const resultCounts = {
+      tookExam: allStudentRows.length,
+      submitted: countResult('Submitted'),
+      autoSubmitted: countResult('Auto-submitted'),
+      malpractice: countResult('Malpractice'),
+      notSubmitted: countResult('Not submitted'),
+      inProgress: countResult('In progress'),
+    };
 
     const top3 = rankedSubmissions.slice(0, 3).map((student) => ({
       ...student,
       medal: student.rank === 1 ? '🥇' : student.rank === 2 ? '🥈' : '🥉',
     }));
 
-    const totalStudents = rankedSubmissions.length;
+    // Scores/averages below are over graded exams only; the student counts include everyone who started.
+    const gradedCount = rankedSubmissions.length;
+    const totalStudents = allStudentRows.length;
     const completedStudents = rankedSubmissions.filter((s) => s.status === 'Completed').length;
     const inProgressStudents = totalStudents - completedStudents;
 
@@ -220,16 +304,16 @@ exports.getTestReport = async (req, res) => {
     let avgCodingScore = 0;
     let maxCodingScore = 0;
 
-    if (totalStudents > 0) {
+    if (gradedCount > 0) {
       const sumScore = rankedSubmissions.reduce((sum, s) => sum + s.totalScore, 0);
       const sumPercentage = rankedSubmissions.reduce((sum, s) => sum + s.percentage, 0);
       const sumTheory = rankedSubmissions.reduce((sum, s) => sum + s.theoryScore, 0);
       const sumCoding = rankedSubmissions.reduce((sum, s) => sum + s.codingScore, 0);
 
-      avgScore = Math.round((sumScore / totalStudents) * 10) / 10;
-      avgPercentage = Math.round((sumPercentage / totalStudents) * 10) / 10;
-      avgTheoryScore = Math.round((sumTheory / totalStudents) * 10) / 10;
-      avgCodingScore = Math.round((sumCoding / totalStudents) * 10) / 10;
+      avgScore = Math.round((sumScore / gradedCount) * 10) / 10;
+      avgPercentage = Math.round((sumPercentage / gradedCount) * 10) / 10;
+      avgTheoryScore = Math.round((sumTheory / gradedCount) * 10) / 10;
+      avgCodingScore = Math.round((sumCoding / gradedCount) * 10) / 10;
 
       highestScore = Math.max(...rankedSubmissions.map((s) => s.totalScore));
       lowestScore = Math.min(...rankedSubmissions.map((s) => s.totalScore));
@@ -257,9 +341,10 @@ exports.getTestReport = async (req, res) => {
         avgTheoryScore,
         avgCodingScore,
         maxScore: rankedSubmissions[0]?.maxScore || 0,
+        ...resultCounts,
       },
       top3,
-      students: rankedSubmissions,
+      students: allStudentRows,
     });
   } catch (error) {
     console.error('Error in getTestReport:', error);
