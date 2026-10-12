@@ -1245,7 +1245,6 @@ function CodingPlatform() {
   const [contestSessionProgress, setContestSessionProgress] = useState({});
   const [contestResult, setContestResult] = useState(null);
   const [finalSubmitConfirmOpen, setFinalSubmitConfirmOpen] = useState(false);
-  const [cameraMinimized, setCameraMinimized] = useState(false);
   const [startExamModalOpen, setStartExamModalOpen] = useState(false);
   const [exitExamConfirmModalOpen, setExitExamConfirmModalOpen] = useState(false);
   const [pendingNavigationAction, setPendingNavigationAction] = useState(null);
@@ -10220,8 +10219,8 @@ function CodingPlatform() {
           style={{
             position: "fixed",
             right: isPhone ? 12 : 20,
-            bottom: cameraMinimized ? 20 : 80,
-            width: cameraMinimized ? 160 : (isPhone ? 150 : 200),
+            bottom: 80,
+            width: isPhone ? 150 : 200,
             background: "#090b14",
             border: "1px solid #2a3550",
             borderRadius: 16,
@@ -10241,15 +10240,8 @@ function CodingPlatform() {
                 </span>
               )}
             </div>
-            <button
-              onClick={() => setCameraMinimized(!cameraMinimized)}
-              style={{ background: "none", border: "none", color: "#93c5fd", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: 0 }}
-            >
-              {cameraMinimized ? "Expand" : "Minimize"}
-            </button>
           </div>
-          {!cameraMinimized && (
-            contestCameraStream ? (
+          {contestCameraStream ? (
               <video
                 ref={contestCameraPreviewRef}
                 autoPlay
@@ -10268,8 +10260,7 @@ function CodingPlatform() {
               <div style={{ padding: "12px 10px", textAlign: "center", color: "#94a3b8", fontSize: 11 }}>
                 ⚠ Camera preview unavailable. Proctoring monitoring active.
               </div>
-            )
-          )}
+            )}
         </div>
       )}
     </div>
