@@ -1058,8 +1058,6 @@ function CodingPlatform() {
   const [activeAssignments, setActiveAssignments] = useState([]);
   const [showLiveTestPopup, setShowLiveTestPopup] = useState(false);
   const [liveTestPopupDismissedId, setLiveTestPopupDismissedId] = useState(null);
-  const [studentNotifications, setStudentNotifications] = useState([]);
-  const [notificationCount, setNotificationCount] = useState(0);
   const [portalMessage, setPortalMessage]     = useState("");
   const [portalError, setPortalError]         = useState("");
   const [adminSyncingProblems, setAdminSyncingProblems] = useState(false);
@@ -1511,9 +1509,8 @@ function CodingPlatform() {
 
   const loadStudentPortalData = async (availableProblems = problemBank) => {
     try {
-      const [assignmentData, notificationData, leaderboardData, submissionData, profileData] = await Promise.all([
+      const [assignmentData, leaderboardData, submissionData, profileData] = await Promise.all([
         performApiRequest("/api/tests/active"),
-        performApiRequest("/api/notifications"),
         performApiRequest("/api/submissions/leaderboard"),
         performApiRequest(`/api/submissions/user/${currentUser.id}`),
         performApiRequest("/api/auth/me"),
@@ -1550,9 +1547,6 @@ function CodingPlatform() {
         setContestSessionEndsAt(null);
       }
 
-      const notifications = Array.isArray(notificationData.notifications)
-        ? notificationData.notifications
-        : [];
       const nextLeaderboard = Array.isArray(leaderboardData.leaderboard)
         ? leaderboardData.leaderboard
         : [];
@@ -1565,8 +1559,6 @@ function CodingPlatform() {
       setSolved(progress.solved);
       setAttemptedProblems(progress.attempted);
       setUserSubmissions(submissions);
-      setStudentNotifications(notifications);
-      setNotificationCount(Number(notificationData.unreadCount || 0));
 
       if (profileData.user) {
         const refreshedUser = normalizeAuthenticatedUser(profileData.user, currentUser);
@@ -1578,23 +1570,6 @@ function CodingPlatform() {
       setLeaderboard([]);
       setUserSubmissions([]);
       setPortalError(error.message || "Unable to load your current test.");
-    }
-  };
-
-  const markNotificationAsRead = async (notificationId) => {
-    try {
-      await performApiRequest(`/api/notifications/${notificationId}/read`, {
-        method: "POST",
-      });
-
-      setStudentNotifications((prev) => prev.map((notification) => (
-        notification.id === notificationId
-          ? { ...notification, read: true }
-          : notification
-      )));
-      setNotificationCount((prev) => Math.max(0, prev - 1));
-    } catch (error) {
-      setPortalError(error.message || "Unable to update notification.");
     }
   };
 
@@ -2858,8 +2833,6 @@ function CodingPlatform() {
     setProblemBank([]);
     setAdminAssignments([]);
     setActiveAssignment(null);
-    setStudentNotifications([]);
-    setNotificationCount(0);
     setPortalMessage("");
     setPortalError("");
     setLeaderboard([]);
@@ -3296,7 +3269,7 @@ function CodingPlatform() {
       setActiveAssignment(startedAssignment);
       setAdminCurrentTest(startedAssignment);
       setAdminSubmissionProblemId(startedAssignment?.problems?.[0]?.id || "");
-      setPortalMessage(`Test started. Notifications were sent to ${data.notifiedStudents || 0} logged-in students.`);
+      setPortalMessage("Test started.");
       await loadAdminPortalData(startedAssignment.id);
     } catch (error) {
       setPortalError(error.message || "Unable to start the test.");
@@ -3337,7 +3310,7 @@ function CodingPlatform() {
       setAdminScheduleEndDate("");
       setAdminScheduleEndTime("");
       setPortalMessage(data.startedNow
-        ? `Test is LIVE now and stays open until ${formatPortalDate(scheduleWindow.endsAt || data.assignment?.endsAt)}. ${data.notifiedStudents || 0} students notified.`
+        ? `Test is LIVE now and stays open until ${formatPortalDate(scheduleWindow.endsAt || data.assignment?.endsAt)}.`
         : `Test scheduled for ${formatPortalDate(scheduledStart)}. It will start automatically and notify students.`);
       await loadAdminPortalData(scheduledAssignment.id);
     } catch (error) {
@@ -3493,7 +3466,7 @@ function CodingPlatform() {
       const stoppedAssignment = mapAssignmentRecord(data.assignment);
       setAdminCurrentTest(stoppedAssignment);
       setAdminTimerSeconds(0);
-      setPortalMessage(`Test stopped. Notifications were sent to ${data.notifiedStudents || 0} logged-in students.`);
+      setPortalMessage("Test stopped.");
       await loadAdminPortalData(stoppedAssignment.id);
     } catch (error) {
       setPortalError(error.message || "Unable to stop the test.");
@@ -4396,7 +4369,6 @@ function CodingPlatform() {
       : (probType === "coding" && (!Array.isArray(problem.options) || problem.options.length === 0));
     return categoryMatch && typeMatch;
   });
-  const latestUnreadNotification = studentNotifications.find((notification) => !notification.read) || studentNotifications[0] || null;
   const formatDurationFromMs = (ms = 0) => {
     const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -8534,11 +8506,6 @@ function CodingPlatform() {
           <span style={S.navBtnHint(false)}>See the top performers</span>
         </button>
         <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-          {notificationCount > 0 && (
-            <span style={{ padding:"6px 10px", borderRadius:999, background:"#111b22", border:"1px solid #1d4f5d", color:"#7ce7ff", fontSize:12, fontWeight:700 }}>
-              {notificationCount} new
-            </span>
-          )}
           <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
           {currentAchievement && <AchievementBadge tier={currentUser.badgeTier} compact />}
           <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
@@ -8546,22 +8513,6 @@ function CodingPlatform() {
       </nav>
 
       <div style={{ maxWidth:1100, margin:isPhone ? "20px auto" : "32px auto", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box" }}>
-        {latestUnreadNotification && (
-          <div style={{ background:"#101926", border:"1px solid #243c5a", borderRadius:16, padding:"16px 18px", marginBottom:18, display:"flex", justifyContent:"space-between", gap:16, alignItems:"center", flexWrap:"wrap" }}>
-            <div>
-              <div style={{ color:"#93c5fd", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>
-                Student Notification
-              </div>
-              <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>{latestUnreadNotification.title}</div>
-              <div style={{ color:"#9fb4ff", fontSize:13 }}>{latestUnreadNotification.message}</div>
-            </div>
-            {!latestUnreadNotification.read && (
-              <button onClick={() => markNotificationAsRead(latestUnreadNotification.id)} style={{ ...S.btn("default"), color:"#dfe2ff" }}>
-                Mark Read
-              </button>
-            )}
-          </div>
-        )}
 
         {portalError && (
           <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13, marginBottom:18 }}>
@@ -8694,11 +8645,6 @@ function CodingPlatform() {
             <span style={S.navBtnHint(true)}>Dashboard overview</span>
           </button>
           <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-            {notificationCount > 0 && (
-              <span style={{ padding:"6px 10px", borderRadius:999, background:"#111b22", border:"1px solid #1d4f5d", color:"#7ce7ff", fontSize:12, fontWeight:700 }}>
-                {notificationCount} new
-              </span>
-            )}
             <div style={{ width:34, height:34, borderRadius:"50%", background:`linear-gradient(135deg, ${profileAvatarGradient[0]}, ${profileAvatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#081018", boxShadow:"0 0 18px rgba(96,165,250,0.28)" }}>{profileAvatarLabel}</div>
           </div>
         </nav>
@@ -8978,22 +8924,6 @@ function CodingPlatform() {
         </nav>
 
         <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
-          {latestUnreadNotification && (
-            <div style={{ background:"#101926", border:"1px solid #243c5a", borderRadius:16, padding:"16px 18px", display:"flex", justifyContent:"space-between", gap:16, alignItems:"center", flexWrap:"wrap" }}>
-              <div>
-                <div style={{ color:"#93c5fd", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>
-                  Student Notification
-                </div>
-                <div style={{ color:"#eef0ff", fontWeight:700, marginBottom:6 }}>{latestUnreadNotification.title}</div>
-                <div style={{ color:"#9fb4ff", fontSize:13 }}>{latestUnreadNotification.message}</div>
-              </div>
-              {!latestUnreadNotification.read && (
-                <button onClick={() => markNotificationAsRead(latestUnreadNotification.id)} style={{ ...S.btn("default"), color:"#dfe2ff" }}>
-                  Mark Read
-                </button>
-              )}
-            </div>
-          )}
 
           {portalError && (
             <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13 }}>

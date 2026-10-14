@@ -101,30 +101,10 @@ async function getLiveSnapshot() {
   }
 }
 
-async function notifyStudents({ type, title, message, assignmentId }) {
-  const students = await prisma.user.findMany({
-    where: {
-      role: 'USER',
-      loginCount: { gt: 0 },
-    },
-    select: { id: true },
-  });
-
-  if (students.length) {
-    await prisma.$transaction(
-      students.map((student) => prisma.notification.create({
-        data: {
-          userId: student.id,
-          type,
-          title,
-          message,
-          assignmentId,
-        },
-      })),
-    );
-  }
-
-  return students.length;
+// Students are no longer sent "test started" notifications (they went to every student for every
+// college's test). Kept as a no-op so the callers stay unchanged.
+async function notifyStudents() {
+  return 0;
 }
 
 // The DB wrapper's updates are read-then-write, so activation runs one at a time
@@ -558,32 +538,10 @@ exports.stop = async (req, res) => {
       },
     });
 
-    const students = await prisma.user.findMany({
-      where: {
-        role: 'USER',
-        loginCount: { gt: 0 },
-      },
-      select: { id: true },
-    });
-
-    if (students.length) {
-      await prisma.$transaction(
-        students.map((student) => prisma.notification.create({
-          data: {
-            userId: student.id,
-            type: 'TEST_ENDED',
-            title: `Test stopped: ${stoppedAssignment.title}`,
-            message: `The coding test "${stoppedAssignment.title}" has been stopped by the admin.`,
-            assignmentId: stoppedAssignment.id,
-          },
-        })),
-      );
-    }
-
     const [fullAssignment] = await loadAssignmentsWithProblems({ id: stoppedAssignment.id });
     return res.json({
       assignment: fullAssignment,
-      notifiedStudents: students.length,
+      notifiedStudents: 0,
     });
   } catch (err) {
     console.error(err);
