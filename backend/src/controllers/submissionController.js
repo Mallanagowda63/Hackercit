@@ -138,7 +138,13 @@ function calculateScopeMetrics(submissions, problemsById, options = {}) {
       && submission.status !== 'ACCEPTED'
     )).length;
 
-    penaltyMs += Math.max(0, acceptedAt - (referenceStart || acceptedAt));
+    // In a test, time counts from the test start (contest style). In practice (overall), each
+    // problem counts only from the student's first try on it: measuring every problem from their
+    // first-ever submission added up weeks of calendar time ("1129h").
+    const problemStart = options.assignmentStartAt
+      ? referenceStart
+      : new Date(entries[0].createdAt).getTime();
+    penaltyMs += Math.max(0, acceptedAt - (problemStart || acceptedAt));
     penaltyMs += wrongBeforeAccepted * 5 * 60 * 1000;
   });
 
