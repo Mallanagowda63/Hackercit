@@ -2026,7 +2026,9 @@ function CodingPlatform() {
     };
 
     loadPortal();
-    const interval = setInterval(loadPortal, currentUser.role === "admin" ? 20000 : 15000);
+    // Students refresh every 45s (hundreds of them poll at once); a scheduled test still opens on
+    // time through nextScheduledStartAt, and the exam itself is unaffected.
+    const interval = setInterval(loadPortal, currentUser.role === "admin" ? 20000 : 45000);
 
     return () => {
       cancelled = true;
@@ -2264,7 +2266,7 @@ function CodingPlatform() {
     };
 
     loadLinkInfo();
-    const interval = setInterval(loadLinkInfo, 5000);
+    const interval = setInterval(loadLinkInfo, 15000);
     return () => {
       cancelled = true;
       clearInterval(interval);

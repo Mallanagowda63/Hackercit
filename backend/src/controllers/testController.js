@@ -32,7 +32,7 @@ function serializeAssignment(assignment, problems = [], attempt = null) {
 
 async function closeExpiredAssignments() {
   const now = new Date();
-  await prisma.testAssignment.updateMany({
+  const { count } = await prisma.testAssignment.updateMany({
     where: {
       status: 'LIVE',
       endsAt: { lt: now },
@@ -41,6 +41,64 @@ async function closeExpiredAssignments() {
       status: 'ENDED',
     },
   });
+  if (count) invalidateLiveSnapshot();
+}
+
+// Every student polls /api/tests/active. The live tests and their questions are the same for all
+// of them, so they are built once and shared for a few seconds; only each student's own attempt is
+// looked up per request. Any change to tests (admin actions, a test going live or ending) clears it.
+const LIVE_SNAPSHOT_MS = 5000;
+let liveSnapshot = { builtAt: 0, data: null, pending: null };
+
+function invalidateLiveSnapshot() {
+  liveSnapshot = { builtAt: 0, data: null, pending: null };
+}
+
+async function getLiveSnapshot() {
+  if (liveSnapshot.data && Date.now() - liveSnapshot.builtAt < LIVE_SNAPSHOT_MS) return liveSnapshot.data;
+  if (liveSnapshot.pending) return liveSnapshot.pending;
+
+  const pending = (async () => {
+    const assignments = await prisma.testAssignment.findMany({
+      where: { status: 'LIVE' },
+      orderBy: [{ createdAt: 'desc' }],
+    });
+    const uniqueProblemIds = [...new Set(assignments.flatMap((assignment) => assignment.problemIds || []))];
+    const problems = uniqueProblemIds.length
+      ? await prisma.problem.findMany({ where: { id: { in: uniqueProblemIds } } })
+      : [];
+    const problemsById = new Map(problems.map((problem) => [problem.id, problem]));
+    const problemsFor = (assignment, isCandidate) => (assignment.problemIds || [])
+      .map((problemId) => problemsById.get(problemId))
+      .filter(Boolean)
+      .map((problem) => serializeProblem(problem, { includeContent: true, isCandidate }));
+
+    const upcoming = await prisma.testAssignment.findMany({
+      where: { status: 'SCHEDULED' },
+      select: { id: true, startsAt: true },
+    });
+    const nextStartsAt = upcoming
+      .map((assignment) => new Date(assignment.startsAt).getTime())
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)[0];
+
+    return {
+      assignments,
+      candidateProblems: new Map(assignments.map((assignment) => [assignment.id, problemsFor(assignment, true)])),
+      staffProblems: new Map(assignments.map((assignment) => [assignment.id, problemsFor(assignment, false)])),
+      nextStartsAt: nextStartsAt ? new Date(nextStartsAt).toISOString() : null,
+    };
+  })();
+
+  liveSnapshot = { ...liveSnapshot, pending };
+  try {
+    const data = await pending;
+    if (liveSnapshot.pending === pending) liveSnapshot = { builtAt: Date.now(), data, pending: null };
+    return data;
+  } catch (error) {
+    if (liveSnapshot.pending === pending) liveSnapshot = { ...liveSnapshot, pending: null };
+    throw error;
+  }
 }
 
 async function notifyStudents({ type, title, message, assignmentId }) {
@@ -106,6 +164,7 @@ async function activateScheduledAssignments() {
         assignmentId: assignment.id,
       });
     }
+    if (due.length) invalidateLiveSnapshot();
   })();
 
   try {
@@ -115,9 +174,26 @@ async function activateScheduledAssignments() {
   }
 }
 
-async function refreshAssignmentStatuses() {
-  await activateScheduledAssignments();
-  await closeExpiredAssignments();
+// Called on most test requests (and every 5s by the server); at most one run every few seconds,
+// and requests arriving while one runs wait for it instead of starting another.
+const STATUS_REFRESH_MS = 3000;
+let lastStatusRefreshAt = 0;
+let statusRefreshInFlight = null;
+
+async function refreshAssignmentStatuses({ force = false } = {}) {
+  if (statusRefreshInFlight) return statusRefreshInFlight;
+  if (!force && Date.now() - lastStatusRefreshAt < STATUS_REFRESH_MS) return undefined;
+
+  statusRefreshInFlight = (async () => {
+    await activateScheduledAssignments();
+    await closeExpiredAssignments();
+  })();
+  try {
+    return await statusRefreshInFlight;
+  } finally {
+    lastStatusRefreshAt = Date.now();
+    statusRefreshInFlight = null;
+  }
 }
 
 async function loadAssignmentsWithProblems(where = {}, options = {}) {
@@ -175,19 +251,39 @@ exports.active = async (req, res) => {
   try {
     await refreshAssignmentStatuses();
     const isCandidate = req.user?.role !== 'ADMIN' && req.user?.role !== 'SETTER';
-    const assignments = await loadAssignmentsWithProblems(
-      { status: 'LIVE' },
-      req.user?.role === 'USER' ? { isCandidate, userId: req.user.id } : { isCandidate },
-    );
-    const upcoming = await prisma.testAssignment.findMany({ where: { status: 'SCHEDULED' } });
-    const nextStartsAt = upcoming
-      .map((assignment) => new Date(assignment.startsAt).getTime())
-      .filter(Number.isFinite)
-      .sort((a, b) => a - b)[0];
+    const snapshot = await getLiveSnapshot();
+
+    // The student's own attempt per live test (the page only needs its status).
+    const attemptByAssignmentId = new Map();
+    if (req.user?.role === 'USER' && snapshot.assignments.length) {
+      const assignmentById = new Map(snapshot.assignments.map((assignment) => [assignment.id, assignment]));
+      const attempts = await prisma.testAttempt.findMany({
+        where: {
+          userId: req.user.id,
+          assignmentId: { in: snapshot.assignments.map((assignment) => assignment.id) },
+        },
+        orderBy: [{ startedAt: 'desc' }],
+        select: {
+          id: true, userId: true, assignmentId: true, status: true, startedAt: true, finishedAt: true,
+          submittedAt: true, createdAt: true, interruptionCount: true, finishReason: true,
+        },
+      });
+      attempts.forEach((attempt) => {
+        if (!inCurrentRun(attempt, assignmentById.get(attempt.assignmentId))) return;
+        if (!attemptByAssignmentId.has(attempt.assignmentId)) attemptByAssignmentId.set(attempt.assignmentId, attempt);
+      });
+    }
+
+    const problemsByAssignment = isCandidate ? snapshot.candidateProblems : snapshot.staffProblems;
+    const assignments = snapshot.assignments.map((assignment) => serializeAssignment(
+      assignment,
+      problemsByAssignment.get(assignment.id) || [],
+      attemptByAssignmentId.get(assignment.id) || null,
+    ));
     return res.json({
       assignment: assignments[0] || null,
       assignments,
-      nextStartsAt: nextStartsAt ? new Date(nextStartsAt).toISOString() : null,
+      nextStartsAt: snapshot.nextStartsAt,
     });
   } catch (err) {
     console.error(err);
@@ -239,7 +335,7 @@ exports.create = async (req, res) => {
 
 exports.start = async (req, res) => {
   try {
-    await refreshAssignmentStatuses();
+    await refreshAssignmentStatuses({ force: true });
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
@@ -280,7 +376,7 @@ exports.start = async (req, res) => {
 
 exports.schedule = async (req, res) => {
   try {
-    await refreshAssignmentStatuses();
+    await refreshAssignmentStatuses({ force: true });
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
@@ -346,7 +442,7 @@ exports.schedule = async (req, res) => {
 
 exports.unschedule = async (req, res) => {
   try {
-    await refreshAssignmentStatuses();
+    await refreshAssignmentStatuses({ force: true });
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
@@ -440,10 +536,11 @@ exports.remove = async (req, res) => {
 
 exports.refreshAssignmentStatuses = refreshAssignmentStatuses;
 exports.inCurrentRun = inCurrentRun;
+exports.invalidateLiveSnapshot = invalidateLiveSnapshot;
 
 exports.stop = async (req, res) => {
   try {
-    await refreshAssignmentStatuses();
+    await refreshAssignmentStatuses({ force: true });
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });

@@ -52,29 +52,14 @@ exports.listReportsOverview = async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
 
+    // Only the score fields this overview shows (not every answer and line of code).
     const submissions = await prisma.assessmentSubmission.findMany({
-      include: {
-        user: {
-          select: { id: true, name: true, email: true, usn: true, department: true },
-        },
-      },
       orderBy: { createdAt: 'desc' },
+      select: { id: true, assignmentId: true, userId: true, percentage: true, totalScore: true, maxScore: true, createdAt: true },
     });
-
-    // Explicit Batch User Resolution to handle raw DB string IDs
-    const missingUserIds = [...new Set(submissions.filter((s) => !s.user && s.userId).map((s) => s.userId))];
-    let resolvedUserMap = new Map();
-    if (missingUserIds.length) {
-      const fetchedUsers = await prisma.user.findMany({
-        where: { id: { in: missingUserIds } },
-        select: { id: true, name: true, email: true, usn: true, department: true },
-      });
-      fetchedUsers.forEach((u) => resolvedUserMap.set(String(u.id), u));
-    }
 
     const submissionsByAssignment = new Map();
     submissions.forEach((sub) => {
-      sub.user = sub.user || resolvedUserMap.get(String(sub.userId)) || null;
       const list = submissionsByAssignment.get(sub.assignmentId) || [];
       list.push(sub);
       submissionsByAssignment.set(sub.assignmentId, list);
@@ -144,6 +129,12 @@ exports.getTestReport = async (req, res) => {
         { totalScore: 'desc' },
         { createdAt: 'asc' },
       ],
+      // Scores only: the answers and code are loaded when one student's report is opened.
+      select: {
+        id: true, userId: true, assignmentId: true, createdAt: true, totalScore: true, maxScore: true,
+        percentage: true, theoryScore: true, codingScore: true,
+        'details.maxTheoryScore': true, 'details.maxCodingScore': true,
+      },
     });
 
     // Explicit Batch User Resolution to resolve raw DB user documents
@@ -169,7 +160,10 @@ exports.getTestReport = async (req, res) => {
 
     // Every student who started the exam, so students whose exam never got submitted (lost submit,
     // malpractice, closed browser) are in the report too, not only the graded ones.
-    const attempts = await prisma.testAttempt.findMany({ where: { assignmentId: testId } });
+    const attempts = await prisma.testAttempt.findMany({
+      where: { assignmentId: testId },
+      select: { id: true, userId: true, assignmentId: true, status: true, startedAt: true, finishedAt: true, interruptionCount: true, finishReason: true },
+    });
     const latestAttemptByUser = new Map();
     attempts
       .sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0))

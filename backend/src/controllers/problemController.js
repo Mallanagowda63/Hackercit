@@ -97,11 +97,27 @@ async function createProblemWithAutoNumber(data, options = {}) {
   throw new Error('unable to assign a unique problem number');
 }
 
+// Every logged-in student downloads the problem list, so each variant of it is built once and
+// reused for a short time. Adding, editing, importing or deleting questions clears it.
+const PROBLEM_LIST_CACHE_MS = 30000;
+const problemListCache = new Map();
+
+function clearProblemListCache() {
+  problemListCache.clear();
+}
+exports.clearProblemListCache = clearProblemListCache;
+
 exports.list = async (req, res) => {
   try {
     const includeContent = ['1', 'true', 'full'].includes(String(req.query.includeContent || req.query.full || '').toLowerCase());
     const typeParam = String(req.query.type || '').trim().toLowerCase();
     const includeAll = ['1', 'true', 'all'].includes(String(req.query.includeAll || req.query.all || '').toLowerCase());
+
+    const cacheKey = `${includeContent}|${typeParam}|${includeAll}`;
+    const cached = problemListCache.get(cacheKey);
+    if (cached && Date.now() - cached.builtAt < PROBLEM_LIST_CACHE_MS) {
+      return res.json(cached.payload);
+    }
 
     const where = {};
     if (typeParam === 'theory') {
@@ -122,9 +138,11 @@ exports.list = async (req, res) => {
       ],
     });
 
-    return res.json({
+    const payload = {
       problems: problems.map((problem) => serializeProblem(problem, { includeContent })),
-    });
+    };
+    problemListCache.set(cacheKey, { builtAt: Date.now(), payload });
+    return res.json(payload);
   } catch (err) {
     return sendProblemError(res, err);
   }

@@ -5,15 +5,21 @@ const feedbackController = require('../controllers/feedbackController');
 const assessmentController = require('../controllers/assessmentController');
 const { requireAuth, requireRole } = require('../middleware/authMiddleware');
 
+// Admin changes to tests clear the shared live-test data students poll, once the change is done.
+const clearsLiveTests = (req, res, next) => {
+  res.on('finish', controller.invalidateLiveSnapshot);
+  next();
+};
+
 router.get('/', requireAuth, requireRole('ADMIN'), controller.list);
 router.get('/active', requireAuth, controller.active);
 router.get('/:id/info', requireAuth, controller.info);
-router.post('/', requireAuth, requireRole('ADMIN'), controller.create);
-router.post('/:id/start', requireAuth, requireRole('ADMIN'), controller.start);
-router.delete('/:id', requireAuth, requireRole('ADMIN'), controller.remove);
-router.post('/:id/schedule', requireAuth, requireRole('ADMIN'), controller.schedule);
-router.post('/:id/unschedule', requireAuth, requireRole('ADMIN'), controller.unschedule);
-router.post('/:id/stop', requireAuth, requireRole('ADMIN'), controller.stop);
+router.post('/', requireAuth, requireRole('ADMIN'), clearsLiveTests, controller.create);
+router.post('/:id/start', requireAuth, requireRole('ADMIN'), clearsLiveTests, controller.start);
+router.delete('/:id', requireAuth, requireRole('ADMIN'), clearsLiveTests, controller.remove);
+router.post('/:id/schedule', requireAuth, requireRole('ADMIN'), clearsLiveTests, controller.schedule);
+router.post('/:id/unschedule', requireAuth, requireRole('ADMIN'), clearsLiveTests, controller.unschedule);
+router.post('/:id/stop', requireAuth, requireRole('ADMIN'), clearsLiveTests, controller.stop);
 router.post('/:id/submit', requireAuth, assessmentController.submitAssessment);
 router.get('/:id/result', requireAuth, assessmentController.getAssessmentResult);
 router.post('/:id/attempts/start', requireAuth, controller.startAttempt);
