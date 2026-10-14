@@ -147,6 +147,11 @@ async function getProctoringReports(filters = {}) {
       assignment: { select: { id: true, title: true, durationMinutes: true, status: true } },
     },
     orderBy: { startedAt: 'desc' },
+    // Only what this report shows: not the autosaved answers and code stored on each attempt.
+    select: {
+      id: true, userId: true, assignmentId: true, status: true, startedAt: true, finishedAt: true,
+      finishReason: true, interruptions: true, adminDecision: true, proctoringStatus: true, score: true, maxScore: true,
+    },
   });
 
   const missingUserIds = [...new Set(attempts.filter((a) => !a.user && a.userId).map((a) => a.userId))];
@@ -162,12 +167,15 @@ async function getProctoringReports(filters = {}) {
   // The DB layer does not resolve `include` for attempts, so look the tests up directly.
   const assignmentIds = [...new Set(attempts.map((a) => a.assignmentId).filter(Boolean))];
   const assignmentsById = new Map(
-    (assignmentIds.length ? await prisma.testAssignment.findMany({ where: { id: { in: assignmentIds } } }) : [])
+    (assignmentIds.length ? await prisma.testAssignment.findMany({ where: { id: { in: assignmentIds } }, select: { id: true, title: true } }) : [])
       .map((assignment) => [String(assignment.id), assignment]),
   );
 
   // Test scores, so the admin sees how students flagged for malpractice scored.
-  const submissions = await prisma.assessmentSubmission.findMany({ orderBy: { createdAt: 'desc' } });
+  const submissions = await prisma.assessmentSubmission.findMany({
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, assignmentId: true, userId: true, totalScore: true, maxScore: true, createdAt: true },
+  });
   const latestSubmission = new Map();
   submissions.forEach((sub) => {
     const key = `${sub.assignmentId}:${sub.userId}`;

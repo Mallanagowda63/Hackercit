@@ -1412,7 +1412,8 @@ function CodingPlatform() {
   // `background`: the 20s auto-refresh, which may reuse the problem bank downloaded in the last 2
   // minutes. Every other call (after adding, editing or importing questions) downloads it fresh.
   const loadAdminPortalData = async (preferredAssignmentId = adminCurrentTest?.id, { background = false } = {}) => {
-    setAdminAssignmentsLoading(true);
+    // The 20s background refresh updates quietly; only the first load and admin actions show the banner.
+    if (!background) setAdminAssignmentsLoading(true);
     setPortalError("");
 
     try {
