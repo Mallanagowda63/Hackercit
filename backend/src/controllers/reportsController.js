@@ -122,7 +122,7 @@ exports.getTestReport = async (req, res) => {
       where: { assignmentId: testId },
       include: {
         user: {
-          select: { id: true, name: true, email: true, usn: true, department: true },
+          select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
         },
       },
       orderBy: [
@@ -143,7 +143,7 @@ exports.getTestReport = async (req, res) => {
     if (missingUserIds.length) {
       const fetchedUsers = await prisma.user.findMany({
         where: { id: { in: missingUserIds } },
-        select: { id: true, name: true, email: true, usn: true, department: true },
+        select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
       });
       fetchedUsers.forEach((u) => resolvedUserMap.set(String(u.id), u));
     }
@@ -212,6 +212,7 @@ exports.getTestReport = async (req, res) => {
         studentEmail,
         studentUsn,
         studentDepartment,
+        studentPhone: u?.phone || '',
         totalScore: sub.totalScore,
         maxScore: sub.maxScore,
         percentage: sub.percentage,
@@ -229,7 +230,7 @@ exports.getTestReport = async (req, res) => {
     const unsubmittedUsers = unsubmittedAttempts.length
       ? await prisma.user.findMany({
         where: { id: { in: unsubmittedAttempts.map((attempt) => String(attempt.userId)) } },
-        select: { id: true, name: true, email: true, usn: true, department: true },
+        select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
       })
       : [];
     const unsubmittedUserById = new Map(unsubmittedUsers.map((u) => [String(u.id), u]));
@@ -253,6 +254,7 @@ exports.getTestReport = async (req, res) => {
         studentEmail: formatStudentEmail(u),
         studentUsn: formatStudentUsn(u),
         studentDepartment: formatStudentDept(u),
+        studentPhone: u?.phone || '',
         totalScore: 0,
         maxScore: rankedSubmissions[0]?.maxScore || 0,
         percentage: 0,
@@ -361,7 +363,7 @@ exports.getStudentDetailReport = async (req, res) => {
 
     const user = await prisma.user.findUnique({
       where: { id: studentId },
-      select: { id: true, name: true, email: true, usn: true, department: true },
+      select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
     });
 
     if (!user) {
@@ -462,7 +464,7 @@ exports.getCodingSubmissionDetail = async (req, res) => {
     const submission = await prisma.submission.findUnique({
       where: { id: submissionId },
       include: {
-        user: { select: { id: true, name: true, email: true, usn: true, department: true } },
+        user: { select: { id: true, name: true, email: true, usn: true, department: true, phone: true } },
         problem: { select: { id: true, title: true, statement: true, difficulty: true, marks: true } },
       },
     });
@@ -474,7 +476,7 @@ exports.getCodingSubmissionDetail = async (req, res) => {
     if (!submission.user && submission.userId) {
       submission.user = await prisma.user.findUnique({
         where: { id: submission.userId },
-        select: { id: true, name: true, email: true, usn: true, department: true },
+        select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
       });
     }
 

@@ -582,6 +582,16 @@ async function fetchWithRetry(url, options = {}, retries = 2) {
   }
 }
 
+// Indian mobile number: 10 digits starting 6-9, optionally written with +91 / 91 / 0, spaces or
+// dashes. Returns the 10 digits, or "" when it is not a valid mobile number (same rule as the server).
+function normalizeMobileNumber(value) {
+  let digits = String(value || "").replace(/[\s\-().]/g, "");
+  if (digits.startsWith("+91")) digits = digits.slice(3);
+  else if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  else if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);
+  return /^[6-9]\d{9}$/.test(digits) ? digits : "";
+}
+
 // ── MCQ Excel import ────────────────────────────────────────────────────────
 // Sheet layout (header row optional):  [question] | opA | opB | opC | opD | cort(op)
 // e.g. "The ratio of boys to girls ... ?" | 15 | 18 | 20 | 25 | C(20)
@@ -1036,6 +1046,7 @@ function CodingPlatform() {
   const [authName, setAuthName]               = useState("");
   const [authUsn, setAuthUsn]                 = useState("");
   const [authDepartment, setAuthDepartment]   = useState("");
+  const [authPhone, setAuthPhone]             = useState("");
   const [authError, setAuthError]             = useState("");
   const [authSubmitting, setAuthSubmitting]   = useState(false);
   const [authPoliciesAccepted, setAuthPoliciesAccepted] = useState(false);
@@ -1446,6 +1457,7 @@ function CodingPlatform() {
         status: student.lastLoginAt ? "Logged In" : "Registered",
         email: student.email,
         usn: student.usn || "--",
+        phone: student.phone || "",
         loginCount: student.loginCount || 0,
         lastLoginAt: student.lastLoginAt || null,
         createdAt: student.createdAt || null,
@@ -2699,6 +2711,7 @@ function CodingPlatform() {
     setAuthName("");
     setAuthUsn("");
     setAuthDepartment("");
+    setAuthPhone("");
     setAuthEmail("");
     setAuthPassword("");
     setAuthError("");
@@ -2712,6 +2725,7 @@ function CodingPlatform() {
     setAuthName("");
     setAuthUsn("");
     setAuthDepartment("");
+    setAuthPhone("");
     setAuthEmail("");
     setAuthPassword("");
     setAuthError("");
@@ -2724,6 +2738,7 @@ function CodingPlatform() {
     setAuthName("");
     setAuthUsn("");
     setAuthDepartment("");
+    setAuthPhone("");
     setAuthEmail("");
     setAuthPassword("");
     setAuthError("");
@@ -2734,6 +2749,7 @@ function CodingPlatform() {
     const name = authName.trim();
     const usn = authUsn.trim();
     const department = authDepartment.trim();
+    const phone = normalizeMobileNumber(authPhone);
     const email = authEmail.trim();
     const password = authPassword.trim();
     const emailPattern = /^[A-Z0-9._%+-]+@gmail\.com$/i;
@@ -2758,6 +2774,10 @@ function CodingPlatform() {
         setAuthError("Enter name and department to sign up.");
         return;
       }
+      if (!phone) {
+        setAuthError("Enter a valid 10-digit mobile number.");
+        return;
+      }
     }
 
     if (!IS_ADMIN_ENTRY && !emailPattern.test(email)) {
@@ -2770,7 +2790,7 @@ function CodingPlatform() {
     try {
       const endpoint = authMode === "signup" ? "/api/auth/register" : "/api/auth/login";
       const payload = authMode === "signup"
-        ? { email, password, name, usn, department, role: authRole }
+        ? { email, password, name, usn, department, phone, role: authRole }
         : { email, password, role: authRole };
 
       const response = await fetch(buildBackendApiUrl(endpoint), {
@@ -4486,7 +4506,7 @@ function CodingPlatform() {
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr>
-              {["Student", "Department", "Badge", "Status", "Last Login", "Logins"].map((heading) => (
+              {["Student", "Mobile", "Department", "Badge", "Status", "Last Login", "Logins"].map((heading) => (
                 <th key={heading} style={S.adminTableHead}>{heading}</th>
               ))}
             </tr>
@@ -4498,6 +4518,7 @@ function CodingPlatform() {
                   <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{student.name}</div>
                   <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{student.email}</div>
                 </td>
+                <td style={S.adminTableCell}>{student.phone || "--"}</td>
                 <td style={S.adminTableCell}>{student.department || "--"}</td>
                 <td style={S.adminTableCell}>
                   {student.badgeTier ? (
@@ -5269,6 +5290,20 @@ function CodingPlatform() {
                         </div>
 
                         <div>
+                          <label style={S.fieldLabel}>Mobile Number</label>
+                          <input
+                            type="tel"
+                            inputMode="numeric"
+                            autoComplete="tel"
+                            maxLength={16}
+                            value={authPhone}
+                            onChange={e=>{ setAuthPhone(e.target.value); if (authError) setAuthError(""); }}
+                            style={S.input}
+                            placeholder="10-digit mobile number"
+                          />
+                        </div>
+
+                        <div>
                           <label style={S.fieldLabel}>Department</label>
                           <select
                             value={authDepartment}
@@ -5669,6 +5704,7 @@ function CodingPlatform() {
       "Rank",
       "Student Name",
       "USN",
+      "Mobile",
       "Email",
       "Department",
       "Total Score",
@@ -5688,6 +5724,7 @@ function CodingPlatform() {
       s.rank || "-",
       `"${s.studentName || s.student?.name || 'Unknown Student'}"`,
       csvText(s.studentUsn || s.student?.usn || "Not Available"),
+      csvText(s.studentPhone || "Not Available"),
       `"${s.studentEmail || s.student?.email || 'Not Available'}"`,
       `"${s.studentDepartment || s.student?.department || 'Not Available'}"`,
       s.totalScore,

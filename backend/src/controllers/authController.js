@@ -22,6 +22,16 @@ function toClientRole(role) {
   return 'student';
 }
 
+// Indian mobile number: 10 digits starting 6-9, optionally written with +91 / 91 / 0, spaces or
+// dashes. Returns the 10 digits, or "" when it is not a valid mobile number.
+function normalizeMobileNumber(value) {
+  let digits = String(value || "").replace(/[\s\-().]/g, "");
+  if (digits.startsWith("+91")) digits = digits.slice(3);
+  else if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  else if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);
+  return /^[6-9]\d{9}$/.test(digits) ? digits : "";
+}
+
 function serializeUser(user) {
   const badge = getBadgePresentation(user);
 
@@ -31,6 +41,7 @@ function serializeUser(user) {
     name: user.name || '',
     usn: user.usn || '',
     department: user.department || '',
+    phone: user.phone || '',
     role: toClientRole(effectiveRole(user)),
     dbRole: effectiveRole(user),
     verified: Boolean(user.verified),
@@ -159,7 +170,7 @@ function sendDatabaseConnectionError(res, error) {
 }
 
 exports.register = async (req, res) => {
-  const { email, password, name, role, usn, department } = req.body;
+  const { email, password, name, role, usn, department, phone } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'email+password required' });
   try {
     const normalizedRole = normalizeRole(role);
@@ -175,6 +186,8 @@ exports.register = async (req, res) => {
 
     if (!trimmedName) return res.status(400).json({ error: 'name required' });
     if (!trimmedDepartment) return res.status(400).json({ error: 'department required' });
+    const mobileNumber = normalizeMobileNumber(phone);
+    if (!mobileNumber) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: 'email in use' });
@@ -195,6 +208,7 @@ exports.register = async (req, res) => {
         // treat multiple admin accounts as the same `null` USN value.
         usn: trimmedUsn || undefined,
         department: trimmedDepartment || undefined,
+        phone: mobileNumber,
         lastLoginAt,
         loginCount: 1,
       },
