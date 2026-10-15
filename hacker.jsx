@@ -1090,6 +1090,12 @@ function CodingPlatform() {
   const [monitorError, setMonitorError]       = useState("");
   const [monitorFilter, setMonitorFilter]     = useState("all");
   const [monitorSearch, setMonitorSearch]     = useState("");
+  // Student Activity window (opened from the admin Leaderboard / Student List).
+  const [activityUserId, setActivityUserId]   = useState("");
+  const [activityData, setActivityData]       = useState(null);
+  const [activityError, setActivityError]     = useState("");
+  const [activityTab, setActivityTab]         = useState("problems");
+  const [activityCode, setActivityCode]       = useState(null);
   const [adminTimerSeconds, setAdminTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [adminWarning, setAdminWarning]       = useState("");
   const [attendanceTableOpen, setAttendanceTableOpen] = useState(false);
@@ -1461,6 +1467,7 @@ function CodingPlatform() {
 
       const students = Array.isArray(studentsData.students) ? studentsData.students : [];
       const mappedRegisteredStudents = students.map((student) => ({
+        id: student.id,
         name: student.name || student.email,
         department: student.department || "Department pending",
         status: student.lastLoginAt ? "Logged In" : "Registered",
@@ -4485,7 +4492,7 @@ function CodingPlatform() {
                 <tr key={`${leaderboardMode}-${entry.userId || entry.username}`}>
                   <td style={S.adminTableCell}>{stats.rank || "--"}</td>
                   <td style={S.adminTableCell}>
-                    <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{entry.username}</div>
+                    <button type="button" onClick={() => openStudentActivity(entry.userId)} title="See everything this student has done" style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:ADMIN_THEME.primary, fontWeight:700, fontSize:"inherit", textAlign:"left", textDecoration:"underline" }}>{entry.username}</button>
                     <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{entry.email || entry.department || "Student"}</div>
                     <div style={{ marginTop:6 }}>
                       <span style={{ color:levelMeta.color, background:levelMeta.background, border:`1px solid ${levelMeta.border}`, borderRadius:999, padding:"3px 8px", fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase" }}>
@@ -4523,6 +4530,175 @@ function CodingPlatform() {
       )}
     </div>
   );
+
+  // ── Student Activity: everything one student has done ───────────────────
+  const openStudentActivity = async (userId) => {
+    if (!userId) return;
+    setActivityUserId(userId);
+    setActivityData(null);
+    setActivityError("");
+    setActivityTab("problems");
+    setActivityCode(null);
+    try {
+      const data = await performApiRequest(`/api/admin/reports/students/${userId}/activity`);
+      setActivityData(data);
+    } catch (error) {
+      setActivityError(error.message || "Could not load this student's activity.");
+    }
+  };
+
+  const openActivitySubmissionCode = async (submissionId) => {
+    setActivityCode({ loading: true });
+    try {
+      const data = await performApiRequest(`/api/admin/reports/submissions/${submissionId}`);
+      setActivityCode(data.submission || null);
+    } catch (error) {
+      setActivityCode({ error: error.message || "Could not load this submission." });
+    }
+  };
+
+  const renderStudentActivityModal = () => {
+    if (!activityUserId) return null;
+    const close = () => { setActivityUserId(""); setActivityData(null); setActivityCode(null); };
+    const student = activityData?.student;
+    const stats = activityData?.stats || {};
+    const rankEntry = leaderboard.find((entry) => sameValue(entry.userId, activityUserId));
+    const when = (value) => (value ? formatPortalDate(value) : "--");
+    const statusColor = (status) => (status === "ACCEPTED" || status === "Submitted" ? ADMIN_THEME.success
+      : status === "Malpractice" || /ERROR|WRONG/.test(String(status)) ? ADMIN_THEME.error
+        : ADMIN_THEME.warning);
+    const cell = { ...S.adminTableCell, fontSize:13 };
+    const tabs = [
+      ["problems", `Problems (${stats.problemsSolved || 0} solved / ${stats.problemsTried || 0} tried)`],
+      ["submissions", `Submissions (${stats.totalSubmissions || 0})`],
+      ["exams", `Exams (${stats.examsTaken || 0})`],
+    ];
+
+    return (
+      <div style={S.modalBackdrop} onClick={close}>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{ width:"min(1040px, 96vw)", maxHeight:"calc(100vh - 40px)", overflowY:"auto", background:ADMIN_THEME.background, borderRadius:20, padding:22, display:"grid", gap:16, color:ADMIN_THEME.text, fontFamily:"'Outfit','Space Grotesk',sans-serif" }}
+        >
+          <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"flex-start" }}>
+            <div>
+              <div style={S.adminSectionTitle}>Student Activity</div>
+              <div style={{ fontSize:24, fontWeight:800 }}>{student?.name || "Loading..."}</div>
+              {student && (
+                <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, marginTop:4 }}>
+                  {[student.usn !== "Not Available" ? student.usn : "", student.email, student.phone, student.department].filter(Boolean).join(" · ")}
+                  <br />Joined {when(student.createdAt)} · Last login {when(student.lastLoginAt)} · {student.loginCount || 0} logins
+                </div>
+              )}
+            </div>
+            <button type="button" onClick={close} style={S.adminButton("default")}>✕ Close</button>
+          </div>
+
+          {activityError && <div style={S.adminAlert("error")}>{activityError}</div>}
+          {!activityData && !activityError && <div style={{ ...S.adminCard, textAlign:"center", color:ADMIN_THEME.textSecondary }}>Loading activity...</div>}
+
+          {activityData && (
+            <>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:12 }}>
+                {[
+                  ["Leaderboard rank", rankEntry?.overall?.rank ? `#${rankEntry.overall.rank}` : "--", rankEntry?.overall?.score ? `${rankEntry.overall.score} points` : ""],
+                  ["Problems solved", stats.problemsSolved || 0, Object.entries(stats.solvedByDifficulty || {}).map(([d, n]) => `${d} ${n}`).join(" · ")],
+                  ["Submissions", stats.totalSubmissions || 0, `${stats.acceptedSubmissions || 0} accepted (${stats.acceptanceRate || 0}%)`],
+                  ["Active days", stats.activeDays || 0, stats.lastActivityAt ? `last ${when(stats.lastActivityAt)}` : "no submissions yet"],
+                  ["Exams taken", stats.examsTaken || 0, ""],
+                  ["Languages", Object.keys(stats.languages || {}).length || 0, Object.entries(stats.languages || {}).map(([l, n]) => `${l} ${n}`).join(" · ")],
+                ].map(([label, value, hint]) => (
+                  <div key={label} style={S.adminCard}>
+                    <div style={{ ...S.adminSectionTitle, marginBottom:6 }}>{label}</div>
+                    <div style={{ fontSize:26, fontWeight:800, color:ADMIN_THEME.primary }}>{value}</div>
+                    {hint && <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{hint}</div>}
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                {tabs.map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => setActivityTab(id)} style={S.adminButton(activityTab === id ? "submit" : "default")}>{label}</button>
+                ))}
+              </div>
+
+              <div style={S.adminTableWrap}>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  {activityTab === "problems" && (
+                    <>
+                      <thead><tr>{["Problem", "Difficulty", "Status", "Attempts", "Solved on", "Language"].map((h) => <th key={h} style={S.adminTableHead}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {activityData.problems.length ? activityData.problems.map((p) => (
+                          <tr key={p.problemId}>
+                            <td style={{ ...cell, fontWeight:700 }}>{p.title}</td>
+                            <td style={cell}>{p.difficulty}</td>
+                            <td style={{ ...cell, color:p.solved ? ADMIN_THEME.success : ADMIN_THEME.warning, fontWeight:700 }}>{p.solved ? "Solved" : "Tried, not solved"}</td>
+                            <td style={cell}>{p.attempts}</td>
+                            <td style={cell}>{p.solved ? when(p.solvedAt) : "--"}</td>
+                            <td style={cell}>{p.languages.join(", ") || "--"}</td>
+                          </tr>
+                        )) : <tr><td colSpan="6" style={{ ...cell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No practice problems tried yet.</td></tr>}
+                      </tbody>
+                    </>
+                  )}
+                  {activityTab === "submissions" && (
+                    <>
+                      <thead><tr>{["When", "Problem", "Language", "Result", "Run time", "Code"].map((h) => <th key={h} style={S.adminTableHead}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {activityData.submissions.length ? activityData.submissions.map((sub) => (
+                          <tr key={sub.id}>
+                            <td style={cell}>{when(sub.createdAt)}</td>
+                            <td style={{ ...cell, fontWeight:700 }}>{sub.title} <span style={{ color:ADMIN_THEME.textMuted, fontWeight:400 }}>({sub.difficulty})</span></td>
+                            <td style={cell}>{sub.language || "--"}</td>
+                            <td style={{ ...cell, color:statusColor(sub.status), fontWeight:700 }}>{String(sub.status || "").replace(/_/g, " ")}</td>
+                            <td style={cell}>{sub.timeMs != null ? `${sub.timeMs} ms` : "--"}</td>
+                            <td style={cell}><button type="button" onClick={() => openActivitySubmissionCode(sub.id)} style={S.adminButton("default")}>View code</button></td>
+                          </tr>
+                        )) : <tr><td colSpan="6" style={{ ...cell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No submissions yet.</td></tr>}
+                        {activityData.submissions.length >= 100 && <tr><td colSpan="6" style={{ ...cell, textAlign:"center", color:ADMIN_THEME.textMuted }}>Showing the latest 100 submissions.</td></tr>}
+                      </tbody>
+                    </>
+                  )}
+                  {activityTab === "exams" && (
+                    <>
+                      <thead><tr>{["Test", "Result", "Score", "Warnings", "Started", "Note"].map((h) => <th key={h} style={S.adminTableHead}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {activityData.exams.length ? activityData.exams.map((exam) => (
+                          <tr key={exam.assignmentId}>
+                            <td style={{ ...cell, fontWeight:700 }}>{exam.title}</td>
+                            <td style={{ ...cell, color:statusColor(exam.result), fontWeight:700 }}>{exam.result}</td>
+                            <td style={cell}>{exam.score != null ? `${exam.score} / ${exam.maxScore} (${exam.percentage}%)` : "--"}</td>
+                            <td style={{ ...cell, color:exam.warnings ? ADMIN_THEME.error : ADMIN_THEME.textSecondary }}>{exam.warnings}</td>
+                            <td style={cell}>{when(exam.startedAt)}</td>
+                            <td style={{ ...cell, color:ADMIN_THEME.textSecondary }}>{exam.finishReason || "--"}</td>
+                          </tr>
+                        )) : <tr><td colSpan="6" style={{ ...cell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No exams taken yet.</td></tr>}
+                      </tbody>
+                    </>
+                  )}
+                </table>
+              </div>
+            </>
+          )}
+
+          {activityCode && (
+            <div style={S.adminCard}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:10 }}>
+                <div style={{ fontWeight:800 }}>
+                  {activityCode.loading ? "Loading code..." : activityCode.error ? "Code" : `${activityCode.problem?.title || "Submission"} · ${activityCode.language || ""} · ${String(activityCode.status || "").replace(/_/g, " ")}`}
+                </div>
+                <button type="button" onClick={() => setActivityCode(null)} style={S.adminButton("default")}>Hide code</button>
+              </div>
+              {activityCode.error && <div style={S.adminAlert("error")}>{activityCode.error}</div>}
+              {!activityCode.loading && !activityCode.error && (
+                <pre style={{ margin:0, background:"#0f172a", color:"#e2e8f0", padding:14, borderRadius:12, overflowX:"auto", fontSize:12.5, lineHeight:1.5, maxHeight:420, fontFamily:"'JetBrains Mono',monospace" }}>{activityCode.code || "(no code saved)"}</pre>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   // ── Live Monitor: what every student in a test is doing right now ──────────
   const renderLiveMonitor = () => {
@@ -4732,7 +4908,7 @@ function CodingPlatform() {
             {registeredStudents.length ? registeredStudents.map((student) => (
               <tr key={`${student.email}-${student.id}`}>
                 <td style={S.adminTableCell}>
-                  <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{student.name}</div>
+                  <button type="button" onClick={() => openStudentActivity(student.id)} title="See everything this student has done" style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:ADMIN_THEME.primary, fontWeight:700, fontSize:"inherit", textAlign:"left", textDecoration:"underline" }}>{student.name}</button>
                   <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>{student.email}</div>
                 </td>
                 <td style={S.adminTableCell}>{student.phone || "--"}</td>
@@ -7778,6 +7954,7 @@ function CodingPlatform() {
           {renderStudentReportModal()}
           {renderCodeInspectionModal()}
           {renderPdfUploadModal()}
+          {renderStudentActivityModal()}
           {renderLiveTestPopupModal()}
 
           {adminWarning && (

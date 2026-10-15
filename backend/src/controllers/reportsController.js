@@ -621,3 +621,138 @@ exports.getLiveMonitor = async (req, res) => {
     return res.status(500).json({ error: 'Failed to load the live monitor.' });
   }
 };
+
+// GET /api/admin/reports/students/:userId/activity — everything one student has done: practice
+// problems solved and every submission (without code; open one to see it), and their exam history.
+exports.getStudentActivity = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true, name: true, email: true, usn: true, department: true, phone: true, createdAt: true,
+        lastLoginAt: true, loginCount: true, badgeTier: true, solvedProblemCount: true,
+      },
+    });
+    if (!user) return res.status(404).json({ error: 'Student not found.' });
+
+    const [submissions, examResults, attempts] = await Promise.all([
+      prisma.submission.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, problemId: true, status: true, language: true, createdAt: true, timeMs: true },
+      }),
+      prisma.assessmentSubmission.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, assignmentId: true, totalScore: true, maxScore: true, percentage: true, theoryScore: true, codingScore: true, createdAt: true },
+      }),
+      prisma.testAttempt.findMany({
+        where: { userId: user.id },
+        orderBy: [{ startedAt: 'desc' }],
+        select: { id: true, assignmentId: true, status: true, startedAt: true, finishedAt: true, interruptionCount: true, finishReason: true },
+      }),
+    ]);
+
+    const problemIds = [...new Set(submissions.map((s) => String(s.problemId)).filter(Boolean))];
+    const assignmentIds = [...new Set([...examResults, ...attempts].map((r) => String(r.assignmentId)).filter(Boolean))];
+    const [problems, assignments] = await Promise.all([
+      problemIds.length ? prisma.problem.findMany({ where: { id: { in: problemIds } }, select: { id: true, title: true, difficulty: true, type: true } }) : [],
+      assignmentIds.length ? prisma.testAssignment.findMany({ where: { id: { in: assignmentIds } }, select: { id: true, title: true, status: true } }) : [],
+    ]);
+    const problemById = new Map(problems.map((p) => [String(p.id), p]));
+    const assignmentById = new Map(assignments.map((a) => [String(a.id), a]));
+    const difficultyOf = (p) => (p?.difficulty ? toClientDifficulty(p.difficulty) : 'Unknown');
+
+    // Per problem: attempts, when first tried, when first solved.
+    const byProblem = new Map();
+    [...submissions].reverse().forEach((s) => {
+      const key = String(s.problemId);
+      const entry = byProblem.get(key) || { problemId: key, attempts: 0, firstTriedAt: s.createdAt, solvedAt: null, languages: new Set() };
+      entry.attempts += 1;
+      if (s.language) entry.languages.add(s.language);
+      if (s.status === 'ACCEPTED' && !entry.solvedAt) entry.solvedAt = s.createdAt;
+      byProblem.set(key, entry);
+    });
+    const problemRows = [...byProblem.values()].map((entry) => {
+      const problem = problemById.get(entry.problemId);
+      return {
+        problemId: entry.problemId,
+        title: problem?.title || 'Deleted problem',
+        difficulty: difficultyOf(problem),
+        attempts: entry.attempts,
+        solved: Boolean(entry.solvedAt),
+        firstTriedAt: entry.firstTriedAt,
+        solvedAt: entry.solvedAt,
+        languages: [...entry.languages],
+      };
+    }).sort((a, b) => new Date(b.solvedAt || b.firstTriedAt) - new Date(a.solvedAt || a.firstTriedAt));
+
+    const solvedRows = problemRows.filter((p) => p.solved);
+    const solvedByDifficulty = solvedRows.reduce((acc, p) => ({ ...acc, [p.difficulty]: (acc[p.difficulty] || 0) + 1 }), {});
+    const languages = submissions.reduce((acc, s) => ({ ...acc, [s.language || 'unknown']: (acc[s.language || 'unknown'] || 0) + 1 }), {});
+    const activeDays = new Set(submissions.map((s) => new Date(s.createdAt).toISOString().slice(0, 10))).size;
+    const accepted = submissions.filter((s) => s.status === 'ACCEPTED').length;
+
+    // Exams: one row per test (latest attempt + its graded result).
+    const resultByTest = new Map();
+    examResults.forEach((r) => { if (!resultByTest.has(String(r.assignmentId))) resultByTest.set(String(r.assignmentId), r); });
+    const seenTests = new Set();
+    const exams = attempts.filter((a) => {
+      const key = String(a.assignmentId);
+      if (seenTests.has(key)) return false;
+      seenTests.add(key);
+      return true;
+    }).map((attempt) => {
+      const result = resultByTest.get(String(attempt.assignmentId)) || null;
+      const resultLabel = attempt.status === 'INTERRUPTED'
+        ? 'Malpractice'
+        : result ? (attempt.status === 'SUBMITTED' ? 'Submitted' : 'Auto-submitted')
+          : attempt.status === 'IN_PROGRESS' ? 'In progress' : 'Not submitted';
+      return {
+        assignmentId: attempt.assignmentId,
+        title: assignmentById.get(String(attempt.assignmentId))?.title || 'Deleted test',
+        startedAt: attempt.startedAt,
+        finishedAt: attempt.finishedAt,
+        result: resultLabel,
+        score: result ? result.totalScore : null,
+        maxScore: result ? result.maxScore : null,
+        percentage: result ? result.percentage : null,
+        warnings: Number(attempt.interruptionCount || 0),
+        finishReason: attempt.finishReason || '',
+      };
+    });
+
+    return res.json({
+      student: { ...user, name: formatStudentName(user), usn: formatStudentUsn(user) },
+      stats: {
+        problemsSolved: solvedRows.length,
+        problemsTried: problemRows.length,
+        totalSubmissions: submissions.length,
+        acceptedSubmissions: accepted,
+        acceptanceRate: submissions.length ? Math.round((accepted / submissions.length) * 100) : 0,
+        solvedByDifficulty,
+        languages,
+        activeDays,
+        firstActivityAt: submissions.length ? submissions[submissions.length - 1].createdAt : null,
+        lastActivityAt: submissions.length ? submissions[0].createdAt : null,
+        examsTaken: exams.length,
+      },
+      problems: problemRows,
+      submissions: submissions.slice(0, 100).map((s) => ({
+        id: s.id,
+        problemId: s.problemId,
+        title: problemById.get(String(s.problemId))?.title || 'Deleted problem',
+        difficulty: difficultyOf(problemById.get(String(s.problemId))),
+        status: s.status,
+        language: s.language,
+        createdAt: s.createdAt,
+        timeMs: s.timeMs ?? null,
+      })),
+      exams,
+    });
+  } catch (error) {
+    console.error('Error in getStudentActivity:', error);
+    return res.status(500).json({ error: 'Failed to load student activity.' });
+  }
+};
