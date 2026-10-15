@@ -491,3 +491,133 @@ exports.getCodingSubmissionDetail = async (req, res) => {
     return res.status(500).json({ error: 'Failed to fetch submission detail.' });
   }
 };
+
+// GET /api/admin/reports/monitor/:testId — Live Monitor: what every student in a test is doing now.
+// Built from each attempt's latest check-in (sent by the exam page about every 30s): progress,
+// camera flags and a small camera snapshot, plus the warnings recorded on the attempt.
+const MONITOR_ONLINE_MS = 90 * 1000;
+
+function describeMonitorEvent(event) {
+  const type = event?.eventType || 'WARNING';
+  const reason = event?.metadata?.reason || event?.reason || type.replace(/_/g, ' ').toLowerCase();
+  return { type, reason: String(reason).slice(0, 160), at: event?.timestamp || event?.at || null };
+}
+
+exports.getLiveMonitor = async (req, res) => {
+  try {
+    const { testId } = req.params;
+    const assignment = await prisma.testAssignment.findUnique({
+      where: { id: testId },
+      select: { id: true, title: true, status: true, startsAt: true, endsAt: true, durationMinutes: true, problemIds: true },
+    });
+    if (!assignment) return res.status(404).json({ error: 'Assessment not found.' });
+
+    const runStart = assignment.startsAt ? new Date(assignment.startsAt).getTime() : 0;
+    const attempts = await prisma.testAttempt.findMany({
+      where: { assignmentId: testId },
+      orderBy: [{ startedAt: 'desc' }],
+      select: {
+        id: true, userId: true, status: true, startedAt: true, finishedAt: true, submittedAt: true, finishReason: true,
+        interruptionCount: true, interruptions: true, lastSeenAt: true, liveProgress: true, liveSnapshot: true,
+        liveSnapshotAt: true, assessmentSubmittedAt: true, submitRequestedAt: true,
+      },
+    });
+    const latestByUser = new Map();
+    attempts.forEach((attempt) => {
+      if (new Date(attempt.startedAt || 0).getTime() < runStart) return;
+      const key = String(attempt.userId);
+      if (!latestByUser.has(key)) latestByUser.set(key, attempt);
+    });
+
+    const userIds = [...latestByUser.keys()];
+    const users = userIds.length
+      ? await prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
+      })
+      : [];
+    const userById = new Map(users.map((u) => [String(u.id), u]));
+
+    const now = Date.now();
+    const durationMs = (assignment.durationMinutes || 60) * 60 * 1000;
+    const endsAtMs = assignment.endsAt ? new Date(assignment.endsAt).getTime() : NaN;
+    const totalQuestions = Array.isArray(assignment.problemIds) ? assignment.problemIds.length : 0;
+
+    const students = [...latestByUser.values()].map((attempt) => {
+      const user = userById.get(String(attempt.userId)) || null;
+      const lastSeenMs = attempt.lastSeenAt ? new Date(attempt.lastSeenAt).getTime() : NaN;
+      const online = Number.isFinite(lastSeenMs) && now - lastSeenMs <= MONITOR_ONLINE_MS;
+      const inProgress = attempt.status === 'IN_PROGRESS' && !attempt.assessmentSubmittedAt;
+
+      let state;
+      if (attempt.status === 'INTERRUPTED') state = 'Malpractice';
+      else if (!inProgress) state = attempt.status === 'SUBMITTED' ? 'Submitted' : 'Auto-submitted';
+      else state = online ? 'Writing' : 'Inactive';
+
+      const startedMs = new Date(attempt.startedAt || 0).getTime();
+      const deadline = Math.min(startedMs + durationMs, Number.isFinite(endsAtMs) ? endsAtMs : Infinity);
+      const events = Array.isArray(attempt.interruptions) ? attempt.interruptions : [];
+      const progress = attempt.liveProgress || null;
+      // Camera flags only mean "right now" while the student is checking in.
+      const live = state === 'Writing' && progress;
+
+      return {
+        attemptId: attempt.id,
+        userId: attempt.userId,
+        name: user?.name || user?.email || 'Unknown student',
+        email: user?.email || '',
+        usn: user?.usn || '',
+        department: user?.department || '',
+        phone: user?.phone || '',
+        state,
+        startedAt: attempt.startedAt,
+        lastSeenAt: attempt.lastSeenAt || null,
+        timeLeftSeconds: inProgress ? Math.max(0, Math.round((deadline - now) / 1000)) : 0,
+        answered: progress?.answered ?? null,
+        totalQuestions: progress?.total || totalQuestions,
+        currentQuestion: progress?.current || null,
+        currentTitle: progress?.currentTitle || '',
+        cameraIssue: live ? progress.cameraIssue || '' : '',
+        phoneDetected: Boolean(live && progress.phoneDetected),
+        faceMissing: Boolean(live && progress.faceMissing),
+        warnings: Number(attempt.interruptionCount || events.filter((e) => (e?.score || 0) > 0).length || 0),
+        recentEvents: events.slice(-3).reverse().map(describeMonitorEvent),
+        finishReason: attempt.finishReason || '',
+        // Photos only for students still in the exam (keeps the refresh small).
+        snapshot: inProgress ? attempt.liveSnapshot || null : null,
+        snapshotAt: inProgress ? attempt.liveSnapshotAt || null : null,
+      };
+    });
+
+    const stateOrder = { Writing: 0, Inactive: 1, Malpractice: 2, 'Auto-submitted': 3, Submitted: 4 };
+    const flagged = (s) => Boolean(s.cameraIssue || s.phoneDetected || s.faceMissing);
+    students.sort((a, b) => (Number(flagged(b)) - Number(flagged(a)))
+      || (stateOrder[a.state] - stateOrder[b.state])
+      || a.name.localeCompare(b.name));
+
+    const count = (state) => students.filter((s) => s.state === state).length;
+    return res.json({
+      test: {
+        id: assignment.id,
+        title: assignment.title,
+        status: assignment.status,
+        durationMinutes: assignment.durationMinutes,
+        endsAt: assignment.endsAt,
+        totalQuestions,
+      },
+      summary: {
+        started: students.length,
+        writing: count('Writing'),
+        inactive: count('Inactive'),
+        flaggedNow: students.filter(flagged).length,
+        malpractice: count('Malpractice'),
+        submitted: count('Submitted') + count('Auto-submitted'),
+      },
+      generatedAt: new Date(now).toISOString(),
+      students,
+    });
+  } catch (error) {
+    console.error('Error in getLiveMonitor:', error);
+    return res.status(500).json({ error: 'Failed to load the live monitor.' });
+  }
+};

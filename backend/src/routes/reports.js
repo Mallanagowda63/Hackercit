@@ -9,6 +9,7 @@ router.use(requireRole('ADMIN'));
 
 router.get('/tests', controller.listReportsOverview);
 router.get('/tests/:testId', controller.getTestReport);
+router.get('/monitor/:testId', controller.getLiveMonitor);
 router.get('/tests/:testId/students/:studentId', controller.getStudentDetailReport);
 router.get('/submissions/:submissionId', controller.getCodingSubmissionDetail);
 

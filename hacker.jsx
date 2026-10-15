@@ -1006,6 +1006,7 @@ function CodingPlatform() {
   ];
   const adminTabs = [
     { id: "overview", label: "Overview" },
+    { id: "monitor", label: "🟢 Live Monitor" },
     { id: "questions", label: "Question Uploads" },
     { id: "reports", label: "📊 Reports" },
     { id: "malpractice", label: "🚨 Malpractice Reports" },
@@ -1083,6 +1084,12 @@ function CodingPlatform() {
   const [registeredStudents, setRegisteredStudents] = useState([]);
   const [participantsCount, setParticipantsCount] = useState(defaultActiveUsers.length);
   const [adminTab, setAdminTab]               = useState("overview");
+  // Live Monitor tab: which test is watched, its latest data, and the card filter/search.
+  const [monitorTestId, setMonitorTestId]     = useState("");
+  const [monitorData, setMonitorData]         = useState(null);
+  const [monitorError, setMonitorError]       = useState("");
+  const [monitorFilter, setMonitorFilter]     = useState("all");
+  const [monitorSearch, setMonitorSearch]     = useState("");
   const [adminTimerSeconds, setAdminTimerSeconds] = useState(defaultAdminTest.duration * 60);
   const [adminWarning, setAdminWarning]       = useState("");
   const [attendanceTableOpen, setAttendanceTableOpen] = useState(false);
@@ -1297,6 +1304,9 @@ function CodingPlatform() {
   // Last downloaded problem bank; the background refreshes reuse it for 2 minutes.
   const problemBankCacheRef = useRef({ problems: [], loadedAt: 0 });
   const collectExamAnswersRef = useRef(null);
+  // Live Monitor check-in: the student's progress/flags, and a small snapshot from the exam camera.
+  const liveProgressRef = useRef(null);
+  const cameraSnapshotRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 1024);
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth || 1024);
@@ -1960,6 +1970,42 @@ function CodingPlatform() {
     }
   }, [adminTab]);
 
+  // Live Monitor: refresh the watched test every 15s while the tab is open.
+  useEffect(() => {
+    if (adminTab !== "monitor" || !authToken) return undefined;
+    const liveTests = adminAssignments.filter((assignment) => assignment.status === "LIVE");
+    const testId = monitorTestId || liveTests[0]?.id || "";
+    if (!monitorTestId && testId) setMonitorTestId(testId);
+    if (!testId) {
+      setMonitorData(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let loading = false;
+    const loadMonitor = async () => {
+      if (cancelled || loading) return;
+      loading = true;
+      try {
+        const data = await performApiRequest(`/api/admin/reports/monitor/${testId}`);
+        if (!cancelled) {
+          setMonitorData(data);
+          setMonitorError("");
+        }
+      } catch (error) {
+        if (!cancelled) setMonitorError(error.message || "Could not load the live monitor.");
+      } finally {
+        loading = false;
+      }
+    };
+    loadMonitor();
+    const interval = setInterval(loadMonitor, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [adminTab, monitorTestId, authToken, adminAssignments.filter((assignment) => assignment.status === "LIVE").map((assignment) => assignment.id).join(",")]);
+
   useEffect(() => {
     if (!authToken || !currentUser.id) {
       return undefined;
@@ -2024,8 +2070,9 @@ function CodingPlatform() {
     };
   }, [authToken, currentUser.id, currentUser.role, portalRefreshTick, contestEntered]);
 
-  // Autosave: while the exam is open, store the student's answers on the server every 20s (only
-  // when they changed), so they are kept even if the browser closes or Final Submit fails.
+  // Autosave + Live Monitor check-in: while the exam is open, every 30s send the student's progress,
+  // camera flags and a small camera snapshot for the admin's Live Monitor, plus the answers when
+  // they changed (so they are kept even if the browser closes or Final Submit fails).
   useEffect(() => {
     const testId = activeAssignment?.id;
     if (!contestEntered || !testId || !authToken || currentUser.role === "admin") return undefined;
@@ -2035,22 +2082,29 @@ function CodingPlatform() {
     let lastSaved = "";
     const saveAnswers = async () => {
       if (cancelled || saving || !collectExamAnswersRef.current) return;
-      const body = JSON.stringify(collectExamAnswersRef.current());
-      if (body === lastSaved) return;
+      const answers = collectExamAnswersRef.current();
+      const answersJson = JSON.stringify(answers);
+      const payload = {};
+      if (liveProgressRef.current) payload.progress = liveProgressRef.current();
+      const snapshot = cameraSnapshotRef.current ? cameraSnapshotRef.current() : null;
+      if (snapshot) payload.snapshot = snapshot;
+      if (answersJson !== lastSaved) Object.assign(payload, answers);
       saving = true;
       try {
-        await performApiRequest(`/api/tests/${testId}/attempts/draft`, { method: "POST", body });
-        lastSaved = body;
+        await performApiRequest(`/api/tests/${testId}/attempts/draft`, { method: "POST", body: JSON.stringify(payload) });
+        lastSaved = answersJson;
       } catch {
       } finally {
         saving = false;
       }
     };
 
-    saveAnswers();
-    const interval = setInterval(saveAnswers, 20000);
+    // First check-in shortly after the exam opens (the camera picture needs a moment to start).
+    const firstCheckIn = setTimeout(saveAnswers, 3000);
+    const interval = setInterval(saveAnswers, 30000);
     return () => {
       cancelled = true;
+      clearTimeout(firstCheckIn);
       clearInterval(interval);
     };
   }, [contestEntered, activeAssignment?.id, authToken, currentUser.role]);
@@ -2105,6 +2159,21 @@ function CodingPlatform() {
     const frameSource = () => {
       const preview = contestCameraPreviewRef.current;
       return preview && preview.srcObject === contestCameraStream && preview.readyState >= 2 ? preview : video;
+    };
+    // Small JPEG (~5 KB) of the current camera picture for the admin's Live Monitor.
+    const snapshotCanvas = document.createElement("canvas");
+    snapshotCanvas.width = 192;
+    snapshotCanvas.height = 144;
+    const snapshotContext = snapshotCanvas.getContext("2d");
+    cameraSnapshotRef.current = () => {
+      const source = frameSource();
+      if (!snapshotContext || source.readyState < 2) return null;
+      try {
+        snapshotContext.drawImage(source, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+        return snapshotCanvas.toDataURL("image/jpeg", 0.6);
+      } catch {
+        return null;
+      }
     };
     let detector = null;
     let detecting = false;
@@ -2225,6 +2294,7 @@ function CodingPlatform() {
       track?.removeEventListener("mute", handleTrackChange);
       track?.removeEventListener("unmute", handleTrackChange);
       video.srcObject = null;
+      cameraSnapshotRef.current = null;
     };
   }, [contestEntered, contestCameraStream, activeAssignment?.id, authToken, currentUser.role]);
 
@@ -4454,6 +4524,180 @@ function CodingPlatform() {
     </div>
   );
 
+  // ── Live Monitor: what every student in a test is doing right now ──────────
+  const renderLiveMonitor = () => {
+    const testOptions = [...adminAssignments].sort((a, b) => Number(b.status === "LIVE") - Number(a.status === "LIVE"));
+    const students = Array.isArray(monitorData?.students) ? monitorData.students : [];
+    const summary = monitorData?.summary || {};
+    const isFlagged = (s) => Boolean(s.cameraIssue || s.phoneDetected || s.faceMissing);
+    const query = monitorSearch.trim().toLowerCase();
+    const visible = students.filter((s) => {
+      if (monitorFilter === "writing" && s.state !== "Writing") return false;
+      if (monitorFilter === "flagged" && !isFlagged(s) && s.state !== "Malpractice") return false;
+      if (monitorFilter === "inactive" && s.state !== "Inactive") return false;
+      if (monitorFilter === "done" && !["Submitted", "Auto-submitted"].includes(s.state)) return false;
+      if (!query) return true;
+      return [s.name, s.email, s.usn, s.phone].some((value) => String(value || "").toLowerCase().includes(query));
+    });
+    const stateColors = {
+      Writing: ADMIN_THEME.success,
+      Inactive: ADMIN_THEME.warning,
+      Malpractice: ADMIN_THEME.error,
+      Submitted: ADMIN_THEME.primary,
+      "Auto-submitted": ADMIN_THEME.secondary,
+    };
+    const ago = (value) => {
+      if (!value) return "never";
+      const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
+      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+      return `${Math.floor(seconds / 3600)}h ago`;
+    };
+    const timeLeft = (seconds) => {
+      if (!seconds) return "--";
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      return h ? `${h}h ${m}m` : `${m}m ${String(seconds % 60).padStart(2, "0")}s`;
+    };
+    const filters = [
+      ["all", `All (${summary.started || 0})`],
+      ["writing", `Writing now (${summary.writing || 0})`],
+      ["flagged", `Flagged (${(summary.flaggedNow || 0) + (summary.malpractice || 0)})`],
+      ["inactive", `Inactive (${summary.inactive || 0})`],
+      ["done", `Submitted (${summary.submitted || 0})`],
+    ];
+
+    return (
+      <div style={{ display:"grid", gap:18 }}>
+        <div style={{ ...S.adminCard, display:"flex", justifyContent:"space-between", gap:16, alignItems:"center", flexWrap:"wrap" }}>
+          <div>
+            <div style={S.adminSectionTitle}>Live Monitor</div>
+            <div style={{ color:ADMIN_THEME.text, fontSize:22, fontWeight:800 }}>What students are doing now</div>
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, marginTop:4 }}>
+              Each student checks in about every 30 seconds with their progress, camera status and a camera photo. Refreshes every 15 seconds.
+              {monitorData?.generatedAt ? ` Updated ${ago(monitorData.generatedAt)}.` : ""}
+            </div>
+          </div>
+          <select
+            value={monitorTestId}
+            onChange={(e) => { setMonitorData(null); setMonitorTestId(e.target.value); }}
+            style={{ ...S.adminInput, width:"min(420px, 100%)" }}
+          >
+            {!testOptions.length && <option value="">No tests yet</option>}
+            {testOptions.map((assignment) => (
+              <option key={assignment.id} value={assignment.id}>
+                {assignment.status === "LIVE" ? "🟢 " : ""}{assignment.title} ({assignment.status})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {monitorError && <div style={S.adminAlert("error")}>{monitorError}</div>}
+
+        {!monitorTestId ? (
+          <div style={{ ...S.adminCard, textAlign:"center", color:ADMIN_THEME.textSecondary }}>No live test right now. Pick a test above to see its students.</div>
+        ) : !monitorData ? (
+          <div style={{ ...S.adminCard, textAlign:"center", color:ADMIN_THEME.textSecondary }}>Loading students...</div>
+        ) : (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:12 }}>
+              {[
+                ["Started", summary.started, ADMIN_THEME.text],
+                ["Writing now", summary.writing, ADMIN_THEME.success],
+                ["Camera / phone flag now", summary.flaggedNow, ADMIN_THEME.error],
+                ["Inactive (90s+)", summary.inactive, ADMIN_THEME.warning],
+                ["Malpractice", summary.malpractice, ADMIN_THEME.error],
+                ["Submitted", summary.submitted, ADMIN_THEME.primary],
+              ].map(([label, value, color]) => (
+                <div key={label} style={S.adminCard}>
+                  <div style={{ ...S.adminSectionTitle, marginBottom:6 }}>{label}</div>
+                  <div style={{ fontSize:28, fontWeight:800, color }}>{value || 0}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ ...S.adminCard, display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
+              {filters.map(([id, label]) => (
+                <button key={id} type="button" onClick={() => setMonitorFilter(id)} style={S.adminButton(monitorFilter === id ? "submit" : "default")}>
+                  {label}
+                </button>
+              ))}
+              <input
+                value={monitorSearch}
+                onChange={(e) => setMonitorSearch(e.target.value)}
+                placeholder="Search name, email, USN, mobile"
+                style={{ ...S.adminInput, width:"min(320px, 100%)", marginLeft:"auto" }}
+              />
+            </div>
+
+            {!visible.length ? (
+              <div style={{ ...S.adminCard, textAlign:"center", color:ADMIN_THEME.textSecondary }}>
+                {students.length ? "No students match this filter." : "No student has started this test yet."}
+              </div>
+            ) : (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(260px, 1fr))", gap:14 }}>
+                {visible.map((s) => {
+                  const color = stateColors[s.state] || ADMIN_THEME.textSecondary;
+                  const flags = [
+                    s.cameraIssue && `📷 ${s.cameraIssue}`,
+                    s.phoneDetected && "📱 Phone detected",
+                    s.faceMissing && "🙈 Face not visible",
+                  ].filter(Boolean);
+                  const progressPct = s.totalQuestions ? Math.round(((s.answered || 0) / s.totalQuestions) * 100) : 0;
+                  return (
+                    <div key={s.attemptId} style={{ ...S.adminCard, padding:0, overflow:"hidden", border:`1px solid ${flags.length || s.state === "Malpractice" ? ADMIN_THEME.error : ADMIN_THEME.border}` }}>
+                      <div style={{ position:"relative", background:"#0f172a", height:150, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                        {s.snapshot ? (
+                          <img src={s.snapshot} alt={`Camera of ${s.name}`} style={{ width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)" }} />
+                        ) : (
+                          <span style={{ color:"#94a3b8", fontSize:12 }}>{["Writing", "Inactive"].includes(s.state) ? "No camera photo yet" : "Exam finished"}</span>
+                        )}
+                        <span style={{ position:"absolute", top:8, left:8, background:color, color:"#fff", fontSize:11, fontWeight:800, padding:"3px 9px", borderRadius:999 }}>{s.state}</span>
+                        {s.snapshotAt && <span style={{ position:"absolute", bottom:6, right:8, color:"#e2e8f0", fontSize:10, background:"rgba(15,23,42,0.7)", padding:"2px 6px", borderRadius:6 }}>photo {ago(s.snapshotAt)}</span>}
+                      </div>
+                      <div style={{ padding:"12px 14px", display:"grid", gap:8 }}>
+                        <div>
+                          <div style={{ color:ADMIN_THEME.text, fontWeight:800 }}>{s.name}</div>
+                          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{[s.usn, s.email, s.phone].filter(Boolean).join(" · ")}</div>
+                        </div>
+                        {flags.length > 0 && (
+                          <div style={{ display:"grid", gap:4 }}>
+                            {flags.map((flag) => (
+                              <div key={flag} style={{ background:"#FEF2F2", color:ADMIN_THEME.error, fontSize:12, fontWeight:700, padding:"4px 8px", borderRadius:8 }}>{flag}</div>
+                            ))}
+                          </div>
+                        )}
+                        <div>
+                          <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:ADMIN_THEME.textSecondary }}>
+                            <span>Answered {s.answered ?? "?"} / {s.totalQuestions || "?"}</span>
+                            <span>Time left {timeLeft(s.timeLeftSeconds)}</span>
+                          </div>
+                          <div style={{ height:6, background:ADMIN_THEME.hoverBackground, borderRadius:999, marginTop:4 }}>
+                            <div style={{ width:`${progressPct}%`, height:"100%", background:ADMIN_THEME.success, borderRadius:999 }} />
+                          </div>
+                        </div>
+                        {s.state === "Writing" && s.currentQuestion ? (
+                          <div style={{ fontSize:12, color:ADMIN_THEME.text }}>On question {s.currentQuestion}: <span style={{ color:ADMIN_THEME.textSecondary }}>{s.currentTitle}</span></div>
+                        ) : null}
+                        <div style={{ fontSize:12, color:s.warnings ? ADMIN_THEME.error : ADMIN_THEME.textSecondary, fontWeight:s.warnings ? 700 : 400 }}>
+                          ⚠ {s.warnings} warning{s.warnings === 1 ? "" : "s"}
+                          {s.recentEvents?.length ? <span style={{ fontWeight:400, color:ADMIN_THEME.textSecondary }}> · last: {s.recentEvents[0].reason}</span> : null}
+                        </div>
+                        <div style={{ fontSize:11, color:ADMIN_THEME.textMuted }}>
+                          {s.finishReason && !["Writing", "Inactive"].includes(s.state) ? `${s.finishReason} · ` : ""}Last seen {ago(s.lastSeenAt)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
   const renderStudentList = () => (
     <div style={{ display:"grid", gap:18 }}>
       <div style={S.adminCardGrid}>
@@ -5380,6 +5624,28 @@ function CodingPlatform() {
     return { theoryAnswers: candidateTheoryAnswers, codingAnswers };
   };
   collectExamAnswersRef.current = collectExamAnswers;
+
+  // Live Monitor check-in: how far the student is and what the camera checks see right now.
+  const collectLiveProgress = () => {
+    const { theoryAnswers, codingAnswers } = collectExamAnswers();
+    const keysOf = (problem) => [problem.dbId, problem.id, problem.legacyId].filter(Boolean);
+    const answered = contestProblemSet.filter((problem) => keysOf(problem).some((key) => (
+      String(theoryAnswers[key] ?? "").trim() !== "" || String(codingAnswers[key]?.code ?? "").trim() !== ""
+    ))).length;
+    const currentIndex = selectedProblem
+      ? contestProblemSet.findIndex((problem) => sameValue(problem.id, selectedProblem.id))
+      : -1;
+    return {
+      answered,
+      total: contestProblemSet.length,
+      current: currentIndex >= 0 ? currentIndex + 1 : 0,
+      currentTitle: currentIndex >= 0 ? String(contestProblemSet[currentIndex].title || "").slice(0, 120) : "",
+      cameraIssue,
+      phoneDetected,
+      faceMissing,
+    };
+  };
+  liveProgressRef.current = collectLiveProgress;
 
   const handleFinalSubmitAssessment = async () => {
     const testId = activeContestAssignment?.id || adminCurrentTest?.id;
@@ -8477,6 +8743,7 @@ function CodingPlatform() {
           {adminTab === "malpractice" && renderAdminMalpracticeReports()}
           {adminTab === "leaderboard" && renderAdminLeaderboard()}
           {adminTab === "students" && renderStudentList()}
+          {adminTab === "monitor" && renderLiveMonitor()}
           {adminTab === "profile" && renderAdminProfile()}
         </div>
       </div>
@@ -8864,6 +9131,7 @@ function CodingPlatform() {
                     <li>Sit in a well-lit room facing the camera. Do not cover the camera.</li>
                     <li>If the camera turns off, is covered, or the room is too dark, the test is blurred until you turn it back on. Your timer keeps running.</li>
                     <li>Keep your mobile phone away. A phone seen on camera blurs the test and is recorded as malpractice.</li>
+                    <li>The exam team can see your progress and a photo from your camera during the test.</li>
                   </ul>
                 </div>
                 <div>Final question: use <strong>Final Submit</strong> and confirm before ending the test.</div>

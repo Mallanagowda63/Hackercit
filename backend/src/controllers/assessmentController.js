@@ -363,16 +363,41 @@ async function finalizeAssessment(assignment, userId, { theoryAnswers = {}, codi
 // Saves the student's current answers on their attempt while they work (autosave), so nothing is
 // lost if the browser closes or the final submit never reaches the server. `final` records that
 // the student pressed Final Submit.
+// Live Monitor check-in from the exam page: progress and camera flags (small, known fields only).
+function sanitizeLiveProgress(progress) {
+  if (!progress || typeof progress !== 'object') return null;
+  const count = (value) => Math.max(0, Math.min(1000, Math.floor(Number(value) || 0)));
+  return {
+    answered: count(progress.answered),
+    total: count(progress.total),
+    current: count(progress.current),
+    currentTitle: String(progress.currentTitle || '').slice(0, 120),
+    cameraIssue: String(progress.cameraIssue || '').slice(0, 160),
+    phoneDetected: Boolean(progress.phoneDetected),
+    faceMissing: Boolean(progress.faceMissing),
+  };
+}
+
+// Latest small camera snapshot (JPEG data URL, ~5 KB); anything else is ignored.
+const MAX_SNAPSHOT_LENGTH = 60000;
+function sanitizeSnapshot(snapshot) {
+  const value = String(snapshot || '');
+  return value.startsWith('data:image/jpeg;base64,') && value.length <= MAX_SNAPSHOT_LENGTH ? value : null;
+}
+
 exports.saveDraft = async (req, res) => {
   try {
     const { id } = req.params;
-    const { theoryAnswers = {}, codingAnswers = {}, final = false } = req.body || {};
+    const body = req.body || {};
+    const { final = false } = body;
+    const hasAnswers = 'theoryAnswers' in body || 'codingAnswers' in body;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
     if (!assignment) return res.status(404).json({ error: 'assignment not found' });
 
     const attempt = await prisma.testAttempt.findFirst({
       where: { assignmentId: assignment.id, userId: req.user.id },
       orderBy: [{ startedAt: 'desc' }],
+      select: { id: true, userId: true, assignmentId: true, startedAt: true, assessmentSubmittedAt: true, submitRequestedAt: true },
     });
     if (!attempt || !inCurrentRun(attempt, assignment)) {
       return res.status(404).json({ error: 'attempt not found' });
@@ -382,7 +407,19 @@ exports.saveDraft = async (req, res) => {
     }
 
     const now = new Date();
-    const update = { draftAnswers: { theoryAnswers, codingAnswers }, draftSavedAt: now };
+    // Every call is also a Live Monitor check-in. Answers are only sent when they changed.
+    const update = { lastSeenAt: now };
+    if (hasAnswers) {
+      update.draftAnswers = { theoryAnswers: body.theoryAnswers || {}, codingAnswers: body.codingAnswers || {} };
+      update.draftSavedAt = now;
+    }
+    const liveProgress = sanitizeLiveProgress(body.progress);
+    if (liveProgress) update.liveProgress = liveProgress;
+    const snapshot = sanitizeSnapshot(body.snapshot);
+    if (snapshot) {
+      update.liveSnapshot = snapshot;
+      update.liveSnapshotAt = now;
+    }
     if (final && !attempt.submitRequestedAt) update.submitRequestedAt = now;
 
     // $set only these fields so a concurrent attempt update (warnings, finish) is not overwritten.
@@ -415,7 +452,7 @@ async function autoSubmitPendingAttempts() {
   const pending = await collection.find({
     draftSavedAt: { $exists: true },
     assessmentSubmittedAt: { $exists: false },
-  }).toArray();
+  }, { projection: { liveSnapshot: 0 } }).toArray();
   if (!pending.length) return 0;
 
   const now = Date.now();
