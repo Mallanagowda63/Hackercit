@@ -1013,15 +1013,11 @@ const PLAYGROUND_LANGUAGES = Object.freeze([
   { id: "python", label: "Python 3" },
   { id: "javascript", label: "JavaScript (Node.js)" },
   { id: "java", label: "Java" },
-  { id: "c", label: "C (GCC)" },
-  { id: "cpp", label: "C++ (GCC)" },
 ]);
 const PLAYGROUND_STARTER_CODE = Object.freeze({
   python: "# DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\nimport sys\n\n\ndef main():\n    name = sys.stdin.read().strip() or \"World\"\n    print(\"Hello, \" + name + \"!\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
   javascript: "// DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\nconst input = require(\"fs\").readFileSync(0, \"utf-8\").trim();\n\nfunction main() {\n  const name = input || \"World\";\n  console.log(\"Hello, \" + name + \"!\");\n}\n\nmain();\n",
   java: "// DevOrbit IDE: the class must be named Main. Press Run (Ctrl+Enter).\nimport java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        String name = scanner.hasNextLine() ? scanner.nextLine().trim() : \"\";\n        if (name.isEmpty()) {\n            name = \"World\";\n        }\n        System.out.println(\"Hello, \" + name + \"!\");\n    }\n}\n",
-  c: "// DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\n#include <stdio.h>\n#include <string.h>\n\nint main(void) {\n    char name[100];\n    if (scanf(\"%99s\", name) != 1) {\n        strcpy(name, \"World\");\n    }\n    printf(\"Hello, %s!\\n\", name);\n    return 0;\n}\n",
-  cpp: "// DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\n#include <iostream>\n#include <string>\nusing namespace std;\n\nint main() {\n    string name;\n    if (!(cin >> name)) {\n        name = \"World\";\n    }\n    cout << \"Hello, \" << name << \"!\" << endl;\n    return 0;\n}\n",
 });
 
 function loadPlaygroundDraft() {

@@ -5,8 +5,6 @@ const PLAYGROUND_LANGUAGE_IDS = Object.freeze({
   python: Number(process.env.JUDGE0_LANGUAGE_ID_PYTHON || 71),
   javascript: Number(process.env.JUDGE0_LANGUAGE_ID_JAVASCRIPT || 63),
   java: Number(process.env.JUDGE0_LANGUAGE_ID_JAVA || 62),
-  c: Number(process.env.JUDGE0_LANGUAGE_ID_C || 50),
-  cpp: Number(process.env.JUDGE0_LANGUAGE_ID_CPP || 54),
 });
 const MAX_PLAYGROUND_CODE_LENGTH = 64 * 1024;
 const MAX_PLAYGROUND_INPUT_LENGTH = 64 * 1024;
