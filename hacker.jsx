@@ -892,22 +892,218 @@ function highlightCodeLine(line = "", language = "javascript") {
   });
 }
 
-function CodeHighlightLayer({ code, language, scrollTop = 0 }) {
+// ── IDE EDITOR ───────────────────────────────────────────────────────────────
+// Textarea over a highlighted copy of the code, with a line-number gutter, the current line
+// highlighted, and indent guide lines (one vertical line per indentation level, like VS Code).
+// Lines do not wrap, so every line number stays level with its line.
+const EDITOR_LINE_HEIGHT = 21;
+const EDITOR_PADDING_TOP = 16;
+const EDITOR_TEXT_LEFT = 56;
+const EDITOR_FONT = "'JetBrains Mono','Fira Code',Consolas,monospace";
+
+function leadingColumns(line) {
+  let columns = 0;
+  for (const char of line) {
+    if (char === " ") columns += 1;
+    else if (char === "\t") columns += 4 - (columns % 4);
+    else break;
+  }
+  return columns;
+}
+
+function computeIndentGuides(lines, unit) {
+  const levels = lines.map((line) => (line.trim() ? Math.floor(leadingColumns(line) / unit) : null));
+  // A blank line inside a block keeps the guides of the lines around it.
+  const nextLevels = new Array(lines.length).fill(0);
+  let next = 0;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    nextLevels[index] = next;
+    if (levels[index] !== null) next = levels[index];
+  }
+  let previous = 0;
+  return levels.map((level, index) => {
+    if (level !== null) {
+      previous = level;
+      return level;
+    }
+    return Math.min(previous, nextLevels[index]);
+  });
+}
+
+function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLines = null, minHeight = 0, ariaLabel = "Code editor" }) {
+  const [scroll, setScroll] = useState({ top: 0, left: 0 });
+  const [activeLine, setActiveLine] = useState(0);
+  const fallbackRef = useRef(null);
+  const inputRef = textareaRef || fallbackRef;
+  const code = String(value || "");
+  const lines = code.split("\n");
+  const indentUnit = language === "javascript" ? 2 : 4;
+  const guides = computeIndentGuides(lines, indentUnit);
+  const currentLine = Math.min(activeLine, lines.length - 1);
+
+  const syncActiveLine = (element) => {
+    if (!element) return;
+    const caret = typeof element.selectionStart === "number" ? element.selectionStart : 0;
+    setActiveLine(element.value.slice(0, caret).split("\n").length - 1);
+  };
+
   return (
-    <div aria-hidden="true" style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"hidden" }}>
-      <div style={{ margin:0, padding:"16px 16px 16px 56px", transform:`translateY(-${scrollTop}px)`, whiteSpace:"pre-wrap", wordBreak:"break-word", color:"#d7dcff", fontFamily:"'JetBrains Mono',monospace", fontSize:13.5, lineHeight:"21px", boxSizing:"border-box" }}>
-        {String(code || "").split("\n").map((line, lineIndex) => (
-          <div key={lineIndex} style={{ minHeight:21 }}>
-            {highlightCodeLine(line, language).map((piece, pieceIndex) => (
-              <span key={pieceIndex} style={{ color:piece.color }}>{piece.text}</span>
-            ))}
-          </div>
-        ))}
+    <div style={{ flex: 1, position: "relative", overflow: "hidden", minHeight }}>
+      {/* Current line */}
+      <div aria-hidden="true" style={{ position: "absolute", left: 0, right: 0, top: EDITOR_PADDING_TOP + currentLine * EDITOR_LINE_HEIGHT - scroll.top, height: EDITOR_LINE_HEIGHT, background: "rgba(124,106,247,0.09)", borderTop: "1px solid rgba(124,106,247,0.18)", borderBottom: "1px solid rgba(124,106,247,0.18)", boxSizing: "border-box", pointerEvents: "none" }} />
+
+      {/* Highlighted code + indent guides */}
+      <div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+        <div style={{ position: "absolute", top: 0, left: 0, minWidth: "100%", padding: `${EDITOR_PADDING_TOP}px 16px ${EDITOR_PADDING_TOP}px ${EDITOR_TEXT_LEFT}px`, transform: `translate(${-scroll.left}px, ${-scroll.top}px)`, whiteSpace: "pre", color: "#d7dcff", fontFamily: EDITOR_FONT, fontSize: 13.5, lineHeight: `${EDITOR_LINE_HEIGHT}px`, tabSize: 4, MozTabSize: 4, boxSizing: "border-box" }}>
+          {lines.map((line, lineIndex) => (
+            <div key={lineIndex} style={{ position: "relative", height: EDITOR_LINE_HEIGHT }}>
+              {Array.from({ length: guides[lineIndex] }, (_, level) => (
+                <span key={`g${level}`} style={{ position: "absolute", top: 0, bottom: 0, left: `${level * indentUnit}ch`, borderLeft: `1px solid ${lineIndex === currentLine && level === guides[lineIndex] - 1 ? "rgba(167,139,250,0.55)" : "rgba(148,163,184,0.17)"}` }} />
+              ))}
+              {highlightCodeLine(line, language).map((piece, pieceIndex) => (
+                <span key={pieceIndex} style={{ color: piece.color, position: "relative" }}>{piece.text}</span>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Line numbers */}
+      <div aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 44, background: "#0a0a12", borderRight: "1px solid #1a1a2a", overflow: "hidden", zIndex: 1, pointerEvents: "none", userSelect: "none" }}>
+        <div style={{ paddingTop: EDITOR_PADDING_TOP, transform: `translateY(${-scroll.top}px)` }}>
+          {lines.map((_, lineIndex) => {
+            const lineNumber = lineIndex + 1;
+            const hasError = Boolean(errorLines && errorLines.has(lineNumber));
+            const isCurrent = lineIndex === currentLine;
+            return (
+              <div key={lineIndex} style={{ height: EDITOR_LINE_HEIGHT, lineHeight: `${EDITOR_LINE_HEIGHT}px`, paddingRight: 8, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 3, fontFamily: EDITOR_FONT, fontSize: 12, color: hasError ? "#ef4444" : isCurrent ? "#c4b5fd" : "#56607a", fontWeight: hasError || isCurrent ? 700 : 400 }}>
+                {hasError && <span style={{ fontSize: 9 }}>•</span>}
+                <span>{lineNumber}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <textarea
+        ref={inputRef}
+        value={code}
+        aria-label={ariaLabel}
+        wrap="off"
+        spellCheck={false}
+        autoCapitalize="off"
+        autoComplete="off"
+        autoCorrect="off"
+        onChange={(e) => { onChange(e.target.value); syncActiveLine(e.target); }}
+        onScroll={(e) => setScroll({ top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft })}
+        onKeyDown={onKeyDown}
+        onKeyUp={(e) => syncActiveLine(e.currentTarget)}
+        onClick={(e) => syncActiveLine(e.currentTarget)}
+        onSelect={(e) => syncActiveLine(e.currentTarget)}
+        onFocus={(e) => syncActiveLine(e.currentTarget)}
+        style={{ position: "absolute", inset: 0, zIndex: 2, paddingLeft: EDITOR_TEXT_LEFT, paddingTop: EDITOR_PADDING_TOP, paddingRight: 16, paddingBottom: EDITOR_PADDING_TOP, background: "transparent", color: "transparent", caretColor: "#67e8f9", border: "none", outline: "none", resize: "none", fontFamily: EDITOR_FONT, fontSize: 13.5, lineHeight: `${EDITOR_LINE_HEIGHT}px`, tabSize: 4, MozTabSize: 4, width: "100%", height: "100%", boxSizing: "border-box", whiteSpace: "pre", overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "#2a2a3e #0a0a0f" }}
+      />
+    </div>
+  );
+}
+
+// ── PRACTICE IDE (PLAYGROUND) ────────────────────────────────────────────────
+const PLAYGROUND_STORAGE_KEY = "devorbit.playground.v1";
+const PLAYGROUND_LANGUAGES = Object.freeze([
+  { id: "python", label: "Python 3" },
+  { id: "javascript", label: "JavaScript (Node.js)" },
+  { id: "java", label: "Java" },
+  { id: "c", label: "C (GCC)" },
+  { id: "cpp", label: "C++ (GCC)" },
+]);
+const PLAYGROUND_STARTER_CODE = Object.freeze({
+  python: "# DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\nimport sys\n\n\ndef main():\n    name = sys.stdin.read().strip() or \"World\"\n    print(\"Hello, \" + name + \"!\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+  javascript: "// DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\nconst input = require(\"fs\").readFileSync(0, \"utf-8\").trim();\n\nfunction main() {\n  const name = input || \"World\";\n  console.log(\"Hello, \" + name + \"!\");\n}\n\nmain();\n",
+  java: "// DevOrbit IDE: the class must be named Main. Press Run (Ctrl+Enter).\nimport java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        String name = scanner.hasNextLine() ? scanner.nextLine().trim() : \"\";\n        if (name.isEmpty()) {\n            name = \"World\";\n        }\n        System.out.println(\"Hello, \" + name + \"!\");\n    }\n}\n",
+  c: "// DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\n#include <stdio.h>\n#include <string.h>\n\nint main(void) {\n    char name[100];\n    if (scanf(\"%99s\", name) != 1) {\n        strcpy(name, \"World\");\n    }\n    printf(\"Hello, %s!\\n\", name);\n    return 0;\n}\n",
+  cpp: "// DevOrbit IDE: write any program, type its input on the right, and press Run (Ctrl+Enter).\n#include <iostream>\n#include <string>\nusing namespace std;\n\nint main() {\n    string name;\n    if (!(cin >> name)) {\n        name = \"World\";\n    }\n    cout << \"Hello, \" << name << \"!\" << endl;\n    return 0;\n}\n",
+});
+
+function loadPlaygroundDraft() {
+  const fallback = { lang: "python", codes: {}, stdin: "" };
+  try {
+    const parsed = JSON.parse(window.localStorage?.getItem(PLAYGROUND_STORAGE_KEY) || "null");
+    if (!parsed || typeof parsed !== "object") return fallback;
+    return {
+      lang: PLAYGROUND_LANGUAGES.some((item) => item.id === parsed.lang) ? parsed.lang : "python",
+      codes: parsed.codes && typeof parsed.codes === "object" ? parsed.codes : {},
+      stdin: typeof parsed.stdin === "string" ? parsed.stdin : "",
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// ── DAILY STREAK CALENDAR ────────────────────────────────────────────────────
+const STREAK_COLORS = ["#1a1d29", "#5b2b0b", "#9a4710", "#e0701a", "#ffb547"];
+const CALENDAR_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function streakColor(count) {
+  if (!count) return STREAK_COLORS[0];
+  if (count === 1) return STREAK_COLORS[1];
+  if (count <= 3) return STREAK_COLORS[2];
+  if (count <= 6) return STREAK_COLORS[3];
+  return STREAK_COLORS[4];
+}
+
+function StreakCalendar({ calendar, today, weeks = 26, cell = 12, gap = 3 }) {
+  if (!today) return null;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const todayMs = Date.parse(`${today}T00:00:00Z`);
+  if (!Number.isFinite(todayMs)) return null;
+  const weekEndMs = todayMs + (6 - new Date(todayMs).getUTCDay()) * DAY_MS;
+  const startMs = weekEndMs - (weeks * 7 - 1) * DAY_MS;
+  const columns = Array.from({ length: weeks }, (_, week) => Array.from({ length: 7 }, (__, day) => {
+    const time = startMs + (week * 7 + day) * DAY_MS;
+    const key = new Date(time).toISOString().slice(0, 10);
+    return { key, time, count: Number(calendar?.[key] || 0), future: time > todayMs };
+  }));
+  const monthLabels = columns.map((days, week) => {
+    const month = new Date(days[0].time).getUTCMonth();
+    const previousMonth = week > 0 ? new Date(columns[week - 1][0].time).getUTCMonth() : null;
+    return week === 0 || month !== previousMonth ? CALENDAR_MONTHS[month] : "";
+  });
+
+  return (
+    <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+      <div style={{ display: "inline-flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${weeks}, ${cell}px)`, gap, fontSize: 10, color: "#7a7f9e", height: 12 }}>
+          {monthLabels.map((label, index) => <div key={index} style={{ whiteSpace: "nowrap", overflow: "visible" }}>{label}</div>)}
+        </div>
+        <div style={{ display: "grid", gridTemplateRows: `repeat(7, ${cell}px)`, gridAutoFlow: "column", gridAutoColumns: `${cell}px`, gap }}>
+          {columns.flat().map((day) => (
+            <div
+              key={day.key}
+              title={day.future ? "" : `${day.count} submission${day.count === 1 ? "" : "s"} on ${day.key}`}
+              style={{ width: cell, height: cell, borderRadius: 3, background: day.future ? "transparent" : streakColor(day.count), outline: day.key === today ? "1px solid #ffd089" : "none", outlineOffset: 1 }}
+            />
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end", fontSize: 10, color: "#7a7f9e" }}>
+          <span style={{ marginRight: 4 }}>Less</span>
+          {STREAK_COLORS.map((color) => <span key={color} style={{ width: 10, height: 10, borderRadius: 2, background: color, display: "inline-block" }} />)}
+          <span style={{ marginLeft: 4 }}>More</span>
+        </div>
       </div>
     </div>
   );
 }
 
+function formatTimeLeft(targetIso) {
+  const ms = new Date(targetIso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.floor((ms % 86400000) / 3600000);
+  const minutes = Math.floor((ms % 3600000) / 60000);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${Math.max(1, minutes)}m`;
+}
 
 function CodingPlatform() {
   const defaultAdminProblems = [];
@@ -1011,6 +1207,7 @@ function CodingPlatform() {
     { id: "reports", label: "📊 Reports" },
     { id: "malpractice", label: "🚨 Malpractice Reports" },
     { id: "leaderboard", label: "Leaderboard" },
+    { id: "challenge", label: "🏆 Monthly Challenge" },
     { id: "students", label: "Student List" },
     { id: "profile", label: "Profile" },
   ];
@@ -1268,6 +1465,22 @@ function CodingPlatform() {
   const [pendingNavigationAction, setPendingNavigationAction] = useState(null);
   const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [userSubmissions, setUserSubmissions] = useState([]);
+  // Daily practice streak, monthly challenge, and the practice IDE.
+  const [streakInfo, setStreakInfo] = useState(null);
+  const [challengeData, setChallengeData] = useState(null);
+  const [challengeLoading, setChallengeLoading] = useState(false);
+  const [challengeError, setChallengeError] = useState("");
+  const [playgroundDraft, setPlaygroundDraft] = useState(loadPlaygroundDraft);
+  const [playgroundRunning, setPlaygroundRunning] = useState(false);
+  const [playgroundResult, setPlaygroundResult] = useState(null);
+  const playgroundTextareaRef = useRef(null);
+  const [adminChallenges, setAdminChallenges] = useState([]);
+  const [adminChallengesLoading, setAdminChallengesLoading] = useState(false);
+  const [adminChallengeForm, setAdminChallengeForm] = useState(null);
+  const [adminChallengeSaving, setAdminChallengeSaving] = useState(false);
+  const [adminChallengeMessage, setAdminChallengeMessage] = useState(null);
+  const [adminChallengeProblemSearch, setAdminChallengeProblemSearch] = useState("");
+  const [adminChallengeDetail, setAdminChallengeDetail] = useState(null);
   const [consoleOpen, setConsoleOpen]         = useState(false);
   const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [errorBanner, setErrorBanner]         = useState(null);
@@ -1526,12 +1739,17 @@ function CodingPlatform() {
 
   const loadStudentPortalData = async (availableProblems = problemBank) => {
     try {
-      const [assignmentData, leaderboardData, submissionData, profileData] = await Promise.all([
+      const [assignmentData, leaderboardData, submissionData, profileData, streakData, currentChallengeData] = await Promise.all([
         performApiRequest("/api/tests/active"),
         performApiRequest("/api/submissions/leaderboard"),
         performApiRequest(`/api/submissions/user/${currentUser.id}`),
         performApiRequest("/api/auth/me"),
+        // Extras: a failure here must never break the portal.
+        performApiRequest("/api/submissions/streak").catch(() => null),
+        performApiRequest("/api/challenges/current").catch(() => null),
       ]);
+      if (streakData) setStreakInfo(streakData);
+      if (currentChallengeData) setChallengeData(currentChallengeData);
 
       // A student only sees the test from the link they opened, never the other live tests.
       const liveAssignments = (Array.isArray(assignmentData.assignments)
@@ -2742,6 +2960,183 @@ function CodingPlatform() {
     setView("profile");
   };
 
+  // ── Monthly challenge (student) ──
+  const loadCurrentChallenge = async () => {
+    setChallengeLoading(true);
+    try {
+      const data = await performApiRequest("/api/challenges/current");
+      setChallengeData(data);
+      setChallengeError("");
+    } catch (error) {
+      setChallengeError(error.message || "Unable to load the monthly challenge.");
+    } finally {
+      setChallengeLoading(false);
+    }
+  };
+
+  const openChallenge = () => {
+    setView("challenge");
+    loadCurrentChallenge();
+  };
+
+  const openPlayground = () => {
+    setView("playground");
+  };
+
+  // ── Practice IDE ──
+  const playgroundLang = playgroundDraft.lang;
+  const playgroundCode = typeof playgroundDraft.codes[playgroundLang] === "string"
+    ? playgroundDraft.codes[playgroundLang]
+    : PLAYGROUND_STARTER_CODE[playgroundLang];
+
+  const updatePlaygroundDraft = (changes) => {
+    setPlaygroundDraft((prev) => {
+      const next = { ...prev, ...changes };
+      try {
+        window.localStorage?.setItem(PLAYGROUND_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Storage can be full or blocked; the draft still lives for this visit.
+      }
+      return next;
+    });
+  };
+
+  const setPlaygroundCode = (nextCode) => {
+    setPlaygroundDraft((prev) => {
+      const next = { ...prev, codes: { ...prev.codes, [prev.lang]: nextCode } };
+      try {
+        window.localStorage?.setItem(PLAYGROUND_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Storage can be full or blocked; the draft still lives for this visit.
+      }
+      return next;
+    });
+  };
+
+  const runPlayground = async () => {
+    if (playgroundRunning) return;
+    if (!playgroundCode.trim()) {
+      setPlaygroundResult({ error: "Write some code first." });
+      return;
+    }
+
+    setPlaygroundRunning(true);
+    setPlaygroundResult(null);
+    try {
+      const data = await performApiRequest("/api/run/playground", {
+        method: "POST",
+        body: JSON.stringify({ language: playgroundLang, code: playgroundCode, stdin: playgroundDraft.stdin }),
+      });
+      setPlaygroundResult(data);
+    } catch (error) {
+      setPlaygroundResult({ error: error.message || "Run failed. Try again." });
+    } finally {
+      setPlaygroundRunning(false);
+    }
+  };
+
+  // ── Monthly challenge (admin) ──
+  const DEFAULT_CHALLENGE_PRIZES = ["DevOrbit Hoodie + Premium Gift Hamper", "DevOrbit Hoodie + Gift Kit", "DevOrbit Hoodie + Goodies"];
+  // Months follow India time, like the backend.
+  const currentChallengeMonth = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 7);
+  const createEmptyChallengeForm = () => ({
+    id: null,
+    title: "",
+    month: currentChallengeMonth(),
+    description: "",
+    prizes: [...DEFAULT_CHALLENGE_PRIZES],
+    problemIds: [],
+  });
+
+  const loadAdminChallenges = async () => {
+    setAdminChallengesLoading(true);
+    try {
+      const data = await performApiRequest("/api/challenges");
+      setAdminChallenges(Array.isArray(data.challenges) ? data.challenges : []);
+    } catch (error) {
+      setAdminChallengeMessage({ type: "error", text: error.message || "Unable to load monthly challenges." });
+    } finally {
+      setAdminChallengesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (view !== "admin" || adminTab !== "challenge" || !authToken) return;
+    loadAdminChallenges();
+    setAdminChallengeForm((prev) => prev || createEmptyChallengeForm());
+  }, [view, adminTab, authToken]);
+
+  const saveAdminChallenge = async () => {
+    const form = adminChallengeForm;
+    if (!form || adminChallengeSaving) return;
+    if (!form.month) {
+      setAdminChallengeMessage({ type: "error", text: "Choose the challenge month." });
+      return;
+    }
+    if (!form.problemIds.length) {
+      setAdminChallengeMessage({ type: "error", text: "Pick at least one problem." });
+      return;
+    }
+
+    setAdminChallengeSaving(true);
+    setAdminChallengeMessage(null);
+    try {
+      await performApiRequest(form.id ? `/api/challenges/${form.id}` : "/api/challenges", {
+        method: form.id ? "PUT" : "POST",
+        body: JSON.stringify({
+          title: form.title,
+          month: form.month,
+          description: form.description,
+          prizes: form.prizes,
+          problemIds: form.problemIds,
+        }),
+      });
+      setAdminChallengeMessage({ type: "success", text: form.id ? "Challenge updated." : "Challenge created. Students can see it now." });
+      setAdminChallengeForm(createEmptyChallengeForm());
+      setAdminChallengeDetail(null);
+      await loadAdminChallenges();
+    } catch (error) {
+      setAdminChallengeMessage({ type: "error", text: error.message || "Unable to save the challenge." });
+    } finally {
+      setAdminChallengeSaving(false);
+    }
+  };
+
+  const editAdminChallenge = (challenge) => {
+    setAdminChallengeForm({
+      id: challenge.id,
+      title: challenge.title || "",
+      month: challenge.month,
+      description: challenge.description || "",
+      prizes: [0, 1, 2].map((index) => challenge.prizes?.[index] || DEFAULT_CHALLENGE_PRIZES[index]),
+      problemIds: Array.isArray(challenge.problemIds) ? challenge.problemIds.map(String) : [],
+    });
+    setAdminChallengeMessage(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const deleteAdminChallenge = async (challenge) => {
+    if (!window.confirm(`Delete "${challenge.title}"? Its standings will no longer be shown.`)) return;
+    try {
+      await performApiRequest(`/api/challenges/${challenge.id}`, { method: "DELETE" });
+      if (adminChallengeDetail?.id === challenge.id) setAdminChallengeDetail(null);
+      if (adminChallengeForm?.id === challenge.id) setAdminChallengeForm(createEmptyChallengeForm());
+      setAdminChallengeMessage({ type: "success", text: "Challenge deleted." });
+      await loadAdminChallenges();
+    } catch (error) {
+      setAdminChallengeMessage({ type: "error", text: error.message || "Unable to delete the challenge." });
+    }
+  };
+
+  const viewAdminChallengeStandings = async (challenge) => {
+    try {
+      const data = await performApiRequest(`/api/challenges/${challenge.id}`);
+      setAdminChallengeDetail(data.challenge || null);
+    } catch (error) {
+      setAdminChallengeMessage({ type: "error", text: error.message || "Unable to load the standings." });
+    }
+  };
+
   const handleLangChange = (l) => {
     setLang(l);
     if (selectedProblem) {
@@ -2923,6 +3318,14 @@ function CodingPlatform() {
     setQuestionUploading(false);
     setQuestionCategoryFilter("All");
     setUserSubmissions([]);
+    setStreakInfo(null);
+    setChallengeData(null);
+    setChallengeError("");
+    setPlaygroundResult(null);
+    setAdminChallenges([]);
+    setAdminChallengeForm(null);
+    setAdminChallengeDetail(null);
+    setAdminChallengeMessage(null);
     setContestEntered(false);
     setContestSecurityLocked(false);
     setContestInstructionsOpen(false);
@@ -4083,7 +4486,7 @@ function CodingPlatform() {
       ...entry,
       displayRank: idx + 1,
     }));
-  const leaderboardPageSize = 5;
+  const leaderboardPageSize = 10;
   const leaderboardPageCount = Math.max(1, Math.ceil(leaderboardRows.length / leaderboardPageSize));
   const safeLeaderboardPage = Math.min(leaderboardPage, leaderboardPageCount);
   const visibleLeaderboardRows = leaderboardRows.slice(
@@ -4454,6 +4857,300 @@ function CodingPlatform() {
     return hours > 0
       ? `${hours}h ${String(minutes).padStart(2, "0")}m`
       : `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  };
+
+  const formatDifficultyLabel = (value) => {
+    const text = String(value || "Medium").toLowerCase();
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  };
+  const formatChallengeDate = (value) => {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime())
+      ? date.toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+      : "--";
+  };
+  const CHALLENGE_STATUS_TONE = {
+    LIVE: { label: "Live now", color: "#73f0b3", border: "#1f4e3a", background: "#0e1b15" },
+    UPCOMING: { label: "Upcoming", color: "#93c5fd", border: "#2d4f7b", background: "#0f1727" },
+    ENDED: { label: "Ended", color: "#ffb4b4", border: "#5a262d", background: "#1b0f13" },
+  };
+  const PRIZE_MEDALS = ["🥇", "🥈", "🥉"];
+
+  // Extra student navigation: the practice IDE and the monthly challenge.
+  const renderExtraNavButtons = (active = "") => (
+    <>
+      <button onClick={openPlayground} style={S.navBtn(active === "playground")}>
+        <span style={S.navBtnLabel(active === "playground")}>IDE</span>
+        <span style={S.navBtnHint(active === "playground")}>Code playground</span>
+      </button>
+      <button onClick={openChallenge} style={S.navBtn(active === "challenge")}>
+        <span style={S.navBtnLabel(active === "challenge")}>🏆 Monthly Challenge</span>
+        <span style={S.navBtnHint(active === "challenge")}>Win a hoodie + gifts</span>
+      </button>
+    </>
+  );
+
+  const renderStreakPill = () => {
+    if (!streakInfo) return null;
+    const current = streakInfo.currentStreak || 0;
+    return (
+      <span
+        title={streakInfo.practicedToday ? `${current}-day streak. You practised today.` : current ? `${current}-day streak. Practise today to keep it.` : "Practise today to start a streak."}
+        style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"5px 10px", borderRadius:999, background:streakInfo.practicedToday ? "rgba(255,140,40,0.14)" : "#15151f", border:`1px solid ${streakInfo.practicedToday ? "#7a3d10" : "#2a2a3e"}`, color:current ? "#ffb547" : "#8a8ea8", fontSize:13, fontWeight:800 }}
+      >
+        <span style={{ filter:current ? "none" : "grayscale(1)" }}>🔥</span>{current}
+      </span>
+    );
+  };
+
+  const renderStreakCard = (weeks = 26) => {
+    const info = streakInfo;
+    const current = info?.currentStreak || 0;
+    const message = !info
+      ? "Loading your streak..."
+      : info.practicedToday
+        ? "You practised today. Come back tomorrow to keep the flame going!"
+        : current > 0
+          ? "Run or submit a problem today to keep your streak alive."
+          : "Run or submit any problem today to start a new streak.";
+    return (
+      <div style={{ background:"linear-gradient(135deg, rgba(255,140,40,0.12), rgba(17,17,24,0.96) 45%)", border:"1px solid #3a2414", borderRadius:18, padding:"18px 20px", display:"flex", gap:22, flexWrap:"wrap", alignItems:"center", marginBottom:24 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:14, minWidth:190 }}>
+          <div style={{ fontSize:46, lineHeight:1, filter:current ? "drop-shadow(0 0 14px rgba(255,140,40,0.55))" : "grayscale(1) opacity(0.5)" }}>🔥</div>
+          <div>
+            <div style={{ fontSize:34, fontWeight:800, color:current ? "#ffb547" : "#8a8ea8", lineHeight:1 }}>
+              {current}
+              <span style={{ fontSize:14, fontWeight:600, color:"#a9aed0", marginLeft:6 }}>day{current === 1 ? "" : "s"}</span>
+            </div>
+            <div style={{ fontSize:11, color:"#a9aed0", marginTop:6, letterSpacing:"0.1em", textTransform:"uppercase", fontWeight:700 }}>Current streak</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
+          {[
+            ["Longest", `${info?.longestStreak || 0} days`, "#f5f6ff"],
+            ["Active days", info?.activeDays || 0, "#f5f6ff"],
+            ["Today", info?.practicedToday ? "✓ Done" : "Pending", info?.practicedToday ? "#73f0b3" : "#ffc01e"],
+          ].map(([label, value, color]) => (
+            <div key={label} style={{ background:"#12121b", border:"1px solid #262636", borderRadius:12, padding:"10px 14px", minWidth:92 }}>
+              <div style={{ color:"#7a7f9e", fontSize:10.5, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:4 }}>{label}</div>
+              <div style={{ color, fontSize:16, fontWeight:700 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ flex:"1 1 300px", minWidth:0 }}>
+          <div style={{ color:"#d6d9f0", fontSize:13, marginBottom:10 }}>{message}</div>
+          {info && <StreakCalendar calendar={info.calendar} today={info.today} weeks={weeks} />}
+        </div>
+      </div>
+    );
+  };
+
+  const renderChallengeBanner = () => {
+    const challenge = challengeData?.challenge;
+    if (!challenge || challenge.status === "ENDED") return null;
+    const tone = CHALLENGE_STATUS_TONE[challenge.status] || CHALLENGE_STATUS_TONE.LIVE;
+    const timeLeft = formatTimeLeft(challenge.status === "LIVE" ? challenge.endsAt : challenge.startsAt);
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={openChallenge}
+        onKeyDown={(e) => { if (e.key === "Enter") openChallenge(); }}
+        style={{ cursor:"pointer", marginBottom:24, borderRadius:18, padding:"18px 20px", background:"linear-gradient(120deg, rgba(243,201,105,0.16), rgba(124,106,247,0.16) 55%, rgba(17,17,24,0.96))", border:"1px solid #4a3d1f", display:"flex", alignItems:"center", gap:18, flexWrap:"wrap" }}
+      >
+        <div style={{ fontSize:40, lineHeight:1 }}>🏆</div>
+        <div style={{ flex:"1 1 260px", minWidth:0 }}>
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", marginBottom:6 }}>
+            <span style={{ color:tone.color, background:tone.background, border:`1px solid ${tone.border}`, borderRadius:999, padding:"3px 10px", fontSize:11, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase" }}>{tone.label}</span>
+            {timeLeft && <span style={{ color:"#d6d9f0", fontSize:12 }}>{challenge.status === "LIVE" ? `${timeLeft} left` : `Starts in ${timeLeft}`}</span>}
+          </div>
+          <div style={{ color:"#fff4d6", fontSize:19, fontWeight:800 }}>{challenge.title}</div>
+          <div style={{ color:"#c9cbe2", fontSize:13, marginTop:4 }}>Top 3 win a DevOrbit hoodie 🧥 + gifts 🎁 · {challenge.problems.length} problems · {challenge.participantCount} participating</div>
+        </div>
+        <span style={{ ...S.btn("submit"), padding:"10px 18px" }}>View challenge →</span>
+      </div>
+    );
+  };
+
+  const renderAdminChallenges = () => {
+    const form = adminChallengeForm || createEmptyChallengeForm();
+    const updateForm = (changes) => setAdminChallengeForm({ ...form, ...changes });
+    const selectedIds = new Set(form.problemIds.map(String));
+    const searchText = adminChallengeProblemSearch.trim().toLowerCase();
+    const pickableProblems = problemCatalog
+      .filter((problem) => problem.dbId)
+      .filter((problem) => !searchText || problem.title.toLowerCase().includes(searchText) || String(problem.id).includes(searchText));
+    const toggleProblem = (dbId) => {
+      const id = String(dbId);
+      updateForm({ problemIds: selectedIds.has(id) ? form.problemIds.filter((item) => String(item) !== id) : [...form.problemIds, id] });
+    };
+    const detail = adminChallengeDetail;
+
+    return (
+      <div style={{ display:"grid", gap:18 }}>
+        <div style={S.adminCard}>
+          <div style={S.adminSectionTitle}>Monthly Coding Challenge</div>
+          <div style={{ fontSize:24, fontWeight:800, color:ADMIN_THEME.text, marginBottom:6 }}>{form.id ? "Edit challenge" : "Create this month's challenge"}</div>
+          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14, marginBottom:16 }}>
+            Students solve the chosen problems during the month (India time). Only accepted submissions made in that month count. Easy = 20, Medium = 35, Hard = 50 points; ties go to whoever reached the score first. The top 3 win the prizes below.
+          </div>
+
+          {adminChallengeMessage && (
+            <div style={{ marginBottom:14, padding:"10px 14px", borderRadius:10, fontSize:13, fontWeight:600, color:adminChallengeMessage.type === "error" ? ADMIN_THEME.error : ADMIN_THEME.success, background:adminChallengeMessage.type === "error" ? "rgba(220,38,38,0.08)" : "rgba(22,163,74,0.08)", border:`1px solid ${adminChallengeMessage.type === "error" ? "rgba(220,38,38,0.25)" : "rgba(22,163,74,0.25)"}` }}>
+              {adminChallengeMessage.text}
+            </div>
+          )}
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:14, marginBottom:14 }}>
+            <label>
+              <span style={S.adminFieldLabel}>Month</span>
+              <input type="month" value={form.month} onChange={(e) => updateForm({ month: e.target.value })} style={S.adminInput} />
+            </label>
+            <label>
+              <span style={S.adminFieldLabel}>Title (optional)</span>
+              <input value={form.title} maxLength={120} onChange={(e) => updateForm({ title: e.target.value })} placeholder="e.g. November Code Sprint" style={S.adminInput} />
+            </label>
+          </div>
+          <label style={{ display:"block", marginBottom:14 }}>
+            <span style={S.adminFieldLabel}>Description (optional)</span>
+            <textarea value={form.description} maxLength={2000} onChange={(e) => updateForm({ description: e.target.value })} placeholder="Theme, rules or anything students should know." style={{ ...S.adminTextarea, minHeight:80 }} />
+          </label>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:14, marginBottom:14 }}>
+            {[0, 1, 2].map((index) => (
+              <label key={index}>
+                <span style={S.adminFieldLabel}>{PRIZE_MEDALS[index]} Prize for rank {index + 1}</span>
+                <input
+                  value={form.prizes[index] || ""}
+                  maxLength={160}
+                  onChange={(e) => updateForm({ prizes: form.prizes.map((prize, prizeIndex) => (prizeIndex === index ? e.target.value : prize)) })}
+                  style={S.adminInput}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:8 }}>
+            <span style={S.adminFieldLabel}>Problems ({form.problemIds.length} selected)</span>
+            <input value={adminChallengeProblemSearch} onChange={(e) => setAdminChallengeProblemSearch(e.target.value)} placeholder="Search problems" style={{ ...S.adminInput, width:240, padding:"9px 12px" }} />
+          </div>
+          <div style={{ maxHeight:280, overflowY:"auto", border:`1px solid ${ADMIN_THEME.border}`, borderRadius:12, marginBottom:16 }}>
+            {pickableProblems.length ? pickableProblems.map((problem) => {
+              const checked = selectedIds.has(String(problem.dbId));
+              return (
+                <label key={problem.dbId} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", borderTop:`1px solid ${ADMIN_THEME.divider}`, cursor:"pointer", background:checked ? ADMIN_THEME.primaryLight : "transparent" }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleProblem(problem.dbId)} />
+                  <span style={{ color:ADMIN_THEME.textMuted, fontSize:12, minWidth:32 }}>#{problem.id}</span>
+                  <span style={{ flex:1, color:ADMIN_THEME.text, fontSize:14, fontWeight:600 }}>{problem.title}</span>
+                  <span style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{formatDifficultyLabel(problem.difficulty)}</span>
+                </label>
+              );
+            }) : (
+              <div style={{ padding:16, color:ADMIN_THEME.textMuted, fontSize:13 }}>{problemCatalog.length ? "No problems match that search." : "No coding problems yet. Upload some in Question Uploads."}</div>
+            )}
+          </div>
+
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            <button onClick={saveAdminChallenge} disabled={adminChallengeSaving} style={{ ...S.adminButton("run"), opacity:adminChallengeSaving ? 0.6 : 1 }}>
+              {adminChallengeSaving ? "Saving..." : form.id ? "Save changes" : "Create challenge"}
+            </button>
+            {form.id && (
+              <button onClick={() => { setAdminChallengeForm(createEmptyChallengeForm()); setAdminChallengeMessage(null); }} style={S.adminButton("default")}>
+                Cancel edit
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div style={S.adminTableWrap}>
+          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+            <thead>
+              <tr>
+                {["Month", "Challenge", "Status", "Problems", "Participants", "Top 3", "Actions"].map((heading) => (
+                  <th key={heading} style={S.adminTableHead}>{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {adminChallenges.length ? adminChallenges.map((challenge) => (
+                <tr key={challenge.id}>
+                  <td style={S.adminTableCell}>{challenge.monthLabel}</td>
+                  <td style={{ ...S.adminTableCell, fontWeight:700 }}>{challenge.title}</td>
+                  <td style={S.adminTableCell}>{(CHALLENGE_STATUS_TONE[challenge.status] || CHALLENGE_STATUS_TONE.LIVE).label}</td>
+                  <td style={S.adminTableCell}>{challenge.problems?.length || 0}</td>
+                  <td style={S.adminTableCell}>{challenge.participantCount || 0}</td>
+                  <td style={S.adminTableCell}>
+                    {challenge.topThree?.length
+                      ? challenge.topThree.map((row) => <div key={row.userId}>{PRIZE_MEDALS[row.rank - 1] || ""} {row.name} ({row.score})</div>)
+                      : <span style={{ color:ADMIN_THEME.textMuted }}>--</span>}
+                  </td>
+                  <td style={S.adminTableCell}>
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      <button onClick={() => viewAdminChallengeStandings(challenge)} style={{ ...S.adminButton("default"), padding:"6px 10px" }}>Standings</button>
+                      <button onClick={() => editAdminChallenge(challenge)} style={{ ...S.adminButton("default"), padding:"6px 10px" }}>Edit</button>
+                      <button onClick={() => deleteAdminChallenge(challenge)} style={{ ...S.adminButton("default"), padding:"6px 10px", color:ADMIN_THEME.error }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan="7" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>
+                    {adminChallengesLoading ? "Loading challenges..." : "No monthly challenges yet. Create the first one above."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {detail && (
+          <div style={S.adminCard}>
+            <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"flex-start", marginBottom:12 }}>
+              <div>
+                <div style={S.adminSectionTitle}>Standings · {detail.monthLabel}</div>
+                <div style={{ fontSize:20, fontWeight:800, color:ADMIN_THEME.text }}>{detail.title}</div>
+                <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, marginTop:4 }}>
+                  {formatChallengeDate(detail.startsAt)} to {formatChallengeDate(detail.endsAt)} · {detail.participantCount} participants · max {detail.maxScore} points
+                  {detail.status !== "ENDED" && " · Winners are final when the month ends."}
+                </div>
+              </div>
+              <button onClick={() => setAdminChallengeDetail(null)} style={S.adminButton("default")}>Close</button>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr>
+                    {["Rank", "Student", "USN", "Department", "Score", "Solved", "Wrong tries", "Reached score at", "Prize"].map((heading) => (
+                      <th key={heading} style={S.adminTableHead}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.standings.length ? detail.standings.map((row) => (
+                    <tr key={row.userId} style={{ background:row.rank && row.rank <= 3 ? "rgba(217,119,6,0.06)" : "transparent" }}>
+                      <td style={{ ...S.adminTableCell, fontWeight:800 }}>{row.rank ? `${PRIZE_MEDALS[row.rank - 1] || ""} ${row.rank}` : "--"}</td>
+                      <td style={S.adminTableCell}>
+                        <button type="button" onClick={() => openStudentActivity(row.userId)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:ADMIN_THEME.primary, fontWeight:700, fontSize:"inherit", textDecoration:"underline" }}>{row.name}</button>
+                      </td>
+                      <td style={S.adminTableCell}>{row.usn || "--"}</td>
+                      <td style={S.adminTableCell}>{row.department || "--"}</td>
+                      <td style={{ ...S.adminTableCell, color:ADMIN_THEME.success, fontWeight:700 }}>{row.score}</td>
+                      <td style={S.adminTableCell}>{row.solved} / {detail.problems.length}</td>
+                      <td style={S.adminTableCell}>{row.wrongAttempts}</td>
+                      <td style={S.adminTableCell}>{row.finishedAt ? formatChallengeDate(row.finishedAt) : "--"}</td>
+                      <td style={S.adminTableCell}>{row.rank && row.rank <= 3 ? detail.prizes[row.rank - 1] : "--"}</td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan="9" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No submissions for this challenge yet.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderAdminLeaderboard = () => (
@@ -8919,6 +9616,7 @@ function CodingPlatform() {
           {adminTab === "reports" && renderAdminReports()}
           {adminTab === "malpractice" && renderAdminMalpracticeReports()}
           {adminTab === "leaderboard" && renderAdminLeaderboard()}
+          {adminTab === "challenge" && renderAdminChallenges()}
           {adminTab === "students" && renderStudentList()}
           {adminTab === "monitor" && renderLiveMonitor()}
           {adminTab === "profile" && renderAdminProfile()}
@@ -8949,7 +9647,9 @@ function CodingPlatform() {
           <span style={S.navBtnLabel(false)}>Leaderboard</span>
           <span style={S.navBtnHint(false)}>See the top performers</span>
         </button>
+        {renderExtraNavButtons()}
         <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+          {renderStreakPill()}
           <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
           {currentAchievement && <AchievementBadge tier={currentUser.badgeTier} compact />}
           <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
@@ -8963,6 +9663,9 @@ function CodingPlatform() {
             {portalError}
           </div>
         )}
+
+        {renderChallengeBanner()}
+        {renderStreakCard(isPhone ? 14 : 26)}
 
         {/* Stats */}
         <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 150 : 220}px, 1fr))`, gap:16, marginBottom:32 }}>
@@ -9084,6 +9787,7 @@ function CodingPlatform() {
             <span style={S.navBtnLabel(false)}>Leaderboard</span>
             <span style={S.navBtnHint(false)}>Ranking board</span>
           </button>
+          {renderExtraNavButtons()}
           <button style={S.navBtn(true)}>
             <span style={S.navBtnLabel(true)}>Profile</span>
             <span style={S.navBtnHint(true)}>Dashboard overview</span>
@@ -9127,6 +9831,11 @@ function CodingPlatform() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div style={{ background:"#0b1220", border:"1px solid #1e293b", borderRadius:24, padding:"22px 22px 4px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)" }}>
+            <div style={{ color:"#94a3b8", fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>Daily Practice Streak</div>
+            {renderStreakCard(isPhone ? 20 : 53)}
           </div>
 
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:16 }}>
@@ -9361,6 +10070,7 @@ function CodingPlatform() {
             <span style={S.navBtnLabel(false)}>Leaderboard</span>
             <span style={S.navBtnHint(false)}>See the top performers</span>
           </button>
+          {renderExtraNavButtons()}
           <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
             <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
             {currentAchievement && <AchievementBadge tier={currentUser.badgeTier} compact />}
@@ -9676,6 +10386,7 @@ function CodingPlatform() {
             <span style={S.navBtnLabel(false)}>Leaderboard</span>
             <span style={S.navBtnHint(false)}>Compare scores</span>
           </button>
+          {renderExtraNavButtons()}
           <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
             <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
           </div>
@@ -9739,133 +10450,532 @@ function CodingPlatform() {
     );
   }
 
-  if (view === "leaderboard") return (
-    <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
-      {renderFullscreenGate()}
-      {renderLiveTestPopupModal()}
-      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
-        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-        <nav style={S.nav}>
-        <DevOrbitLogo onClick={()=>setView("home")} />
-          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Problems</span>
-            <span style={S.navBtnHint(false)}>Daily coding practice</span>
-          </button>
-          <button onClick={openContest} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Contest</span>
-            <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
-          </button>
-          <button onClick={()=>openLeaderboard("All")} style={S.navBtn(true)}>
-            <span style={S.navBtnLabel(true)}>Leaderboard</span>
-            <span style={S.navBtnHint(true)}>See the top performers</span>
-          </button>
-          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-            <div style={{ padding:"8px 12px", borderRadius:999, border:"1px solid #273246", background:leaderboardUpdating ? "#111b22" : "#12121a", color:leaderboardUpdating ? "#7ce7ff" : "#8f93b4", fontSize:12, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", transition:"all 0.25s ease" }}>
-              <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", background:leaderboardUpdating ? "#4fd1c5" : "#48506b", marginRight:8, boxShadow:leaderboardUpdating ? "0 0 12px #4fd1c566" : "none" }} />
-              Updating...
+  // ── PRACTICE IDE ─────────────────────────────────────────────────────────
+  if (view === "playground") {
+    const result = playgroundResult;
+    const ranOk = Boolean(result && !result.error && result.statusId === 3);
+    const errorText = result && !result.error
+      ? [result.compileOutput, result.stderr, result.message].map((value) => String(value || "").trim()).filter(Boolean).join("\n\n")
+      : "";
+    const playgroundDiag = validateCodeSyntax(playgroundCode, playgroundLang);
+    const playgroundErrorLines = new Set(playgroundDiag.errors.map((item) => item.line));
+    const panelLabel = { color:"#7a7f9e", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" };
+
+    return (
+      <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+        <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
+        {renderFullscreenGate()}
+        {renderLiveTestPopupModal()}
+        <div style={{ ...S.app, height: isCompact ? "auto" : "100vh", overflow: isCompact ? "visible" : "hidden", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
+          <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+          <nav style={S.nav}>
+            <DevOrbitLogo onClick={()=>setView("home")} />
+            <button onClick={()=>setView("list")} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Problems</span>
+              <span style={S.navBtnHint(false)}>Daily coding practice</span>
+            </button>
+            <button onClick={openContest} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Contest</span>
+              <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
+            </button>
+            <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Leaderboard</span>
+              <span style={S.navBtnHint(false)}>See the top performers</span>
+            </button>
+            {renderExtraNavButtons("playground")}
+            <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+              {renderStreakPill()}
+              <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
             </div>
-            <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
+          </nav>
+
+          <div style={{ flex:1, minHeight:0, display:"grid", gridTemplateColumns: isCompact ? "minmax(0, 1fr)" : "minmax(0, 1.7fr) minmax(320px, 1fr)" }}>
+            {/* Editor */}
+            <div style={{ display:"flex", flexDirection:"column", minHeight: isCompact ? 480 : 0, borderRight: isCompact ? "none" : "1px solid #1e1e2e", borderBottom: isCompact ? "1px solid #1e1e2e" : "none" }}>
+              <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:`8px ${isPhone ? 12 : 16}px`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span style={{ color:"#c4b5fd", fontWeight:800, fontFamily:"'Space Grotesk',sans-serif", fontSize:13, letterSpacing:"0.06em" }}>{"</>"} DevOrbit IDE</span>
+                <select
+                  value={playgroundLang}
+                  onChange={(e) => { updatePlaygroundDraft({ lang: e.target.value }); setPlaygroundResult(null); }}
+                  style={{ background:"#1a1a2e", border:"1px solid #2a2a3e", color:"#c8c8e8", padding:"5px 10px", borderRadius:6, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}
+                >
+                  {PLAYGROUND_LANGUAGES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+                {playgroundDiag.isValid ? (
+                  <span style={{ fontSize:11, fontWeight:700, padding:"3px 8px", borderRadius:999, background:"rgba(34, 197, 94, 0.14)", color:"#4ade80", border:"1px solid rgba(34, 197, 94, 0.3)" }}>✓ Brackets balanced</span>
+                ) : (
+                  <span style={{ fontSize:11, fontWeight:700, padding:"3px 8px", borderRadius:999, background:"rgba(239, 68, 68, 0.14)", color:"#f87171", border:"1px solid rgba(239, 68, 68, 0.3)" }}>⚠ {playgroundDiag.errors[0]?.message}</span>
+                )}
+                <div style={{ marginLeft: isPhone ? 0 : "auto", display:"flex", gap:8, alignItems:"center" }}>
+                  <button
+                    onClick={() => setPlaygroundCode(formatCode(playgroundCode, playgroundLang))}
+                    title="Format Code (Ctrl+Shift+F)"
+                    style={{ background:"none", border:"1px solid #2a2a3e", color:"#93c5fd", padding:"5px 10px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit", fontWeight:700 }}
+                  >
+                    🧹 Format
+                  </button>
+                  <button
+                    onClick={() => { if (window.confirm("Reset the editor to the starter code? Your code for this language will be replaced.")) { setPlaygroundCode(PLAYGROUND_STARTER_CODE[playgroundLang]); setPlaygroundResult(null); } }}
+                    style={{ background:"none", border:"1px solid #2a2a3e", color:"#888", padding:"5px 10px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}
+                  >
+                    Reset
+                  </button>
+                  <button onClick={runPlayground} disabled={playgroundRunning} title="Run (Ctrl+Enter)" style={{ ...S.btn("submit"), padding:"7px 18px", opacity: playgroundRunning ? 0.7 : 1 }}>
+                    {playgroundRunning ? "⏳ Running..." : "▶ Run"}
+                  </button>
+                </div>
+              </div>
+              <div style={{ flex:1, minHeight:0, display:"flex", flexDirection:"column", background:"linear-gradient(180deg,#0d1020,#090b14)" }}>
+                <CodeEditor
+                  key={playgroundLang}
+                  value={playgroundCode}
+                  onChange={setPlaygroundCode}
+                  language={playgroundLang}
+                  textareaRef={playgroundTextareaRef}
+                  errorLines={playgroundErrorLines}
+                  minHeight={isCompact ? 420 : 0}
+                  ariaLabel="IDE code editor"
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      runPlayground();
+                      return;
+                    }
+                    handleEditorIndentation(e, playgroundCode, setPlaygroundCode, playgroundTextareaRef, playgroundLang);
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Input + output */}
+            <div style={{ display:"flex", flexDirection:"column", minHeight:0, background:"#0a0a0f" }}>
+              <div style={{ padding:"12px 16px 14px", borderBottom:"1px solid #1e1e2e", display:"flex", flexDirection:"column", gap:8 }}>
+                <div style={panelLabel}>Input (stdin)</div>
+                <textarea
+                  value={playgroundDraft.stdin}
+                  onChange={(e) => updatePlaygroundDraft({ stdin: e.target.value })}
+                  spellCheck={false}
+                  placeholder="Type the input your program reads..."
+                  style={{ height:isCompact ? 120 : 150, resize:"vertical", background:"#0d1017", border:"1px solid #24283a", borderRadius:10, padding:"10px 12px", color:"#e6e8ff", fontFamily:EDITOR_FONT, fontSize:13, lineHeight:1.5, outline:"none", boxSizing:"border-box", width:"100%" }}
+                />
+              </div>
+              <div style={{ flex:1, minHeight: isCompact ? 240 : 0, display:"flex", flexDirection:"column", padding:"12px 16px 16px", gap:10 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                  <div style={panelLabel}>Output</div>
+                  {result && !result.error && (
+                    <>
+                      <span style={{ fontSize:11, fontWeight:800, padding:"3px 9px", borderRadius:999, color: ranOk ? "#4ade80" : "#ff8f8f", background: ranOk ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)", border:`1px solid ${ranOk ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}` }}>
+                        {ranOk ? "✓ Finished" : result.status}
+                      </span>
+                      <span style={{ color:"#7a7f9e", fontSize:12 }}>⏱ {result.runtime}</span>
+                      <span style={{ color:"#7a7f9e", fontSize:12 }}>💾 {result.memory}</span>
+                    </>
+                  )}
+                </div>
+                <div style={{ flex:1, minHeight:120, overflow:"auto", background:"#0d1017", border:"1px solid #1f2333", borderRadius:10, padding:"12px 14px", fontFamily:EDITOR_FONT, fontSize:13, lineHeight:1.6 }}>
+                  {playgroundRunning && <div style={{ color:"#93c5fd" }}>Running your code...</div>}
+                  {!playgroundRunning && !result && <div style={{ color:"#4b4f66" }}>Press ▶ Run (or Ctrl+Enter) to see the output here.</div>}
+                  {!playgroundRunning && result?.error && <div style={{ color:"#ff8f8f", whiteSpace:"pre-wrap" }}>{result.error}</div>}
+                  {!playgroundRunning && result && !result.error && (
+                    <>
+                      {result.stdout
+                        ? <pre style={{ margin:0, color:"#e6e8ff", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"inherit" }}>{result.stdout}</pre>
+                        : !errorText && <div style={{ color:"#4b4f66" }}>(no output)</div>}
+                      {errorText && <pre style={{ margin: result.stdout ? "12px 0 0" : 0, color:"#ff8f8f", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"inherit" }}>{errorText}</pre>}
+                    </>
+                  )}
+                </div>
+                <div style={{ color:"#4b4f66", fontSize:11.5 }}>Your code and input are saved in this browser. Java code must use <code>public class Main</code>.</div>
+              </div>
+            </div>
           </div>
-        </nav>
+        </div>
+      </div>
+    );
+  }
 
-        <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box" }}>
-          <div
-            style={{
-              background:"radial-gradient(circle at top left, rgba(124,106,247,0.22), rgba(10,10,15,0.98) 52%)",
-              border:"1px solid #25253b",
-              borderRadius:24,
-              padding:"28px 26px 30px",
-              boxShadow:"0 24px 70px rgba(0,0,0,0.32)",
-              opacity:leaderboardReady ? 1 : 0,
-              transform:leaderboardReady ? "translateY(0)" : "translateY(18px)",
-              transition:"opacity 0.45s ease, transform 0.45s ease",
-            }}
-          >
-            <div style={{ display:"flex", justifyContent:"space-between", gap:18, alignItems:"flex-start", flexWrap:"wrap", marginBottom:22 }}>
-              <div>
-                <div style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>Live Rankings</div>
-                <h1 style={{ margin:"0 0 10px", color:"#f5f6ff", fontFamily:"'Fraunces',serif", fontSize:42, lineHeight:1, letterSpacing:"-0.04em" }}>Leaderboard Table</h1>
-                <div style={{ color:"#a9aed0", maxWidth:640, fontSize:15, lineHeight:1.7 }}>
-                  Track contest momentum, compare ratings, and see who is climbing in real time across the current round and the broader arena.
+  // ── MONTHLY CODING CHALLENGE ──────────────────────────────────────────────
+  if (view === "challenge") {
+    const challenge = challengeData?.challenge || null;
+    const previous = challengeData?.previous || null;
+    const tone = challenge ? (CHALLENGE_STATUS_TONE[challenge.status] || CHALLENGE_STATUS_TONE.LIVE) : null;
+    const timeLeft = challenge ? formatTimeLeft(challenge.status === "LIVE" ? challenge.endsAt : challenge.startsAt) : "";
+    const mySolvedIds = new Set((challenge?.me?.solvedProblemIds || []).map(String));
+    const cardStyle = { background:"#0f1119", border:"1px solid #22263a", borderRadius:20, padding:"20px 22px" };
+    const sectionLabel = { color:"#7a7f9e", fontSize:11.5, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:12 };
+    const prizeTones = [
+      { edge:"#f3c969", glow:"rgba(243,201,105,0.22)" },
+      { edge:"#cfd6df", glow:"rgba(207,214,223,0.16)" },
+      { edge:"#c58a5c", glow:"rgba(197,138,92,0.18)" },
+    ];
+
+    return (
+      <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+        <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
+        {renderFullscreenGate()}
+        {renderLiveTestPopupModal()}
+        <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
+          <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+          <nav style={S.nav}>
+            <DevOrbitLogo onClick={()=>setView("home")} />
+            <button onClick={()=>setView("list")} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Problems</span>
+              <span style={S.navBtnHint(false)}>Daily coding practice</span>
+            </button>
+            <button onClick={openContest} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Contest</span>
+              <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
+            </button>
+            <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Leaderboard</span>
+              <span style={S.navBtnHint(false)}>See the top performers</span>
+            </button>
+            {renderExtraNavButtons("challenge")}
+            <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+              {renderStreakPill()}
+              <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
+            </div>
+          </nav>
+
+          <div style={{ maxWidth:1180, margin:isPhone ? "20px auto 40px" : "32px auto 48px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
+            {challengeError && !challenge && (
+              <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13 }}>{challengeError}</div>
+            )}
+
+            {!challenge ? (
+              <div style={{ ...cardStyle, textAlign:"center", padding:"48px 24px" }}>
+                <div style={{ fontSize:54, marginBottom:12 }}>🏆</div>
+                <h1 style={{ margin:"0 0 10px", color:"#f5f6ff", fontFamily:"'Fraunces',serif", fontSize:isPhone ? 28 : 36 }}>Monthly Coding Challenge</h1>
+                <div style={{ color:"#a9aed0", fontSize:15, lineHeight:1.7, maxWidth:560, margin:"0 auto" }}>
+                  {challengeLoading ? "Loading the challenge..." : "No challenge has been announced yet. Every month the top 3 coders win a DevOrbit hoodie 🧥 and gifts 🎁. Keep your streak going so you are ready!"}
                 </div>
               </div>
-              <div style={{ display:"grid", gridTemplateColumns:isPhone ? compactGrid : "repeat(2, minmax(160px, 1fr))", gap:12, minWidth:"min(100%, 360px)" }}>
-                <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px" }}>
-                  <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Current Scope</div>
-                  <div style={{ color:"#eef0ff", fontSize:20, fontWeight:700 }}>{leaderboardScope}</div>
+            ) : (
+              <>
+                {/* Hero */}
+                <div style={{ borderRadius:26, padding:isPhone ? "24px 20px" : "32px 32px", background:"radial-gradient(circle at top right, rgba(243,201,105,0.22), transparent 45%), radial-gradient(circle at bottom left, rgba(124,106,247,0.25), transparent 50%), #0d0f17", border:"1px solid #3b3220", boxShadow:"0 24px 70px rgba(0,0,0,0.35)" }}>
+                  <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginBottom:14 }}>
+                    <span style={{ color:tone.color, background:tone.background, border:`1px solid ${tone.border}`, borderRadius:999, padding:"4px 12px", fontSize:11.5, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase" }}>{tone.label}</span>
+                    <span style={{ color:"#d6d9f0", fontSize:13 }}>{challenge.monthLabel}</span>
+                    {timeLeft && <span style={{ color:"#ffd089", fontSize:13, fontWeight:700 }}>⏳ {challenge.status === "LIVE" ? `${timeLeft} left` : `Starts in ${timeLeft}`}</span>}
+                  </div>
+                  <h1 style={{ margin:"0 0 10px", color:"#fff4d6", fontFamily:"'Fraunces',serif", fontSize:isPhone ? 30 : 44, lineHeight:1.05, letterSpacing:"-0.03em" }}>{challenge.title}</h1>
+                  <div style={{ color:"#c9cbe2", fontSize:15, lineHeight:1.7, maxWidth:720, whiteSpace:"pre-wrap" }}>
+                    {challenge.description || "Solve this month's problems to climb the challenge board. The top 3 coders win a DevOrbit hoodie and gifts!"}
+                  </div>
+                  <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginTop:20 }}>
+                    {[
+                      ["Problems", challenge.problems.length],
+                      ["Max points", challenge.maxScore],
+                      ["Participants", challenge.participantCount],
+                      ["Your rank", challenge.me?.rank ? `#${challenge.me.rank}` : "--"],
+                      ["Your points", challenge.me?.score || 0],
+                    ].map(([label, value]) => (
+                      <div key={label} style={{ background:"rgba(10,10,15,0.6)", border:"1px solid #2a2d40", borderRadius:14, padding:"10px 16px", minWidth:100 }}>
+                        <div style={{ color:"#7a7f9e", fontSize:10.5, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:4 }}>{label}</div>
+                        <div style={{ color:"#f5f6ff", fontSize:20, fontWeight:800 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div style={{ background:"#10131c", border:"1px solid #22283a", borderRadius:18, padding:"16px 18px" }}>
-                  <div style={{ color:"#7780a1", fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>Visible Users</div>
-                  <div style={{ color:"#73f0b3", fontSize:20, fontWeight:700 }}>{leaderboardRows.length}</div>
+
+                {/* Prizes */}
+                <div>
+                  <div style={sectionLabel}>🎁 Prizes for the top 3</div>
+                  <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 200 : 240}px, 1fr))`, gap:14 }}>
+                    {challenge.prizes.slice(0, 3).map((prize, index) => (
+                      <div key={index} style={{ ...cardStyle, borderColor:prizeTones[index].edge, boxShadow:`0 16px 40px ${prizeTones[index].glow}`, display:"flex", alignItems:"center", gap:14 }}>
+                        <div style={{ fontSize:38 }}>{PRIZE_MEDALS[index]}</div>
+                        <div>
+                          <div style={{ color:prizeTones[index].edge, fontSize:12, fontWeight:800, letterSpacing:"0.1em", textTransform:"uppercase" }}>Rank {index + 1}</div>
+                          <div style={{ color:"#f5f6ff", fontSize:15.5, fontWeight:700, marginTop:4 }}>🧥 {prize}</div>
+                          {challenge.winners?.[index] && <div style={{ color:"#73f0b3", fontSize:13, marginTop:6 }}>Winner: {challenge.winners[index].name}</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", marginBottom:18 }}>
-              <input
-                placeholder="Search username..."
-                value={leaderboardSearch}
-                onChange={(e)=>setLeaderboardSearch(e.target.value)}
-                style={{ flex:1, minWidth:240, background:"#0e1017", border:"1px solid #24283a", borderRadius:12, padding:"12px 14px", color:"#eef0ff", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, outline:"none" }}
-              />
-              <select
-                value={leaderboardScope}
-                onChange={(e)=>setLeaderboardScope(e.target.value)}
-                style={{ minWidth:170, background:"#0e1017", border:"1px solid #24283a", borderRadius:12, padding:"12px 14px", color:"#eef0ff", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, outline:"none", cursor:"pointer" }}
-              >
-                {["All", "This Contest", "Global"].map((scope) => (
-                  <option key={scope} value={scope}>{scope}</option>
-                ))}
-              </select>
-            </div>
-
-            {(() => {
-              const myEntry = leaderboard.find((e) => e.userId === currentUser.id || e.email === currentUser.email);
-              if (myEntry && myEntry.hasContestSubmission) {
-                return (
-                  <div style={{ marginBottom: 16, background: "rgba(16, 185, 129, 0.1)", border: "1px solid #10b981", borderRadius: 16, padding: "14px 18px", color: "#6ee7b7", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 16 }}>✓</span>
-                      <span><strong>Your Exam Status:</strong> Submitted & Evaluated. Official Rank: <strong>#{myEntry.contest?.rank || 1}</strong></span>
-                    </div>
-                    <div>
-                      <strong>Score: {myEntry.contest?.score} / {myEntry.contest?.maxScore || 10} ({myEntry.contest?.percentage ?? 100}%)</strong>
+                <div style={{ display:"grid", gridTemplateColumns: isCompact ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(0, 1fr)", gap:20, alignItems:"start" }}>
+                  {/* Problems */}
+                  <div style={cardStyle}>
+                    <div style={sectionLabel}>Challenge problems</div>
+                    <div style={{ display:"grid", gap:10 }}>
+                      {challenge.problems.map((problem, index) => {
+                        const catalogProblem = problemCatalog.find((item) => sameValue(item.dbId, problem.id));
+                        const solvedHere = mySolvedIds.has(String(problem.id));
+                        const canOpen = Boolean(catalogProblem) && challenge.status !== "UPCOMING";
+                        const difficulty = formatDifficultyLabel(problem.difficulty);
+                        return (
+                          <div
+                            key={problem.id}
+                            role={canOpen ? "button" : undefined}
+                            tabIndex={canOpen ? 0 : undefined}
+                            onClick={() => { if (canOpen) openProblem(catalogProblem, "catalog"); }}
+                            onKeyDown={(e) => { if (canOpen && e.key === "Enter") openProblem(catalogProblem, "catalog"); }}
+                            style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", borderRadius:14, background:solvedHere ? "rgba(34,197,94,0.08)" : "#12141e", border:`1px solid ${solvedHere ? "rgba(34,197,94,0.35)" : "#23273a"}`, cursor:canOpen ? "pointer" : "default", opacity:canOpen || solvedHere ? 1 : 0.6 }}
+                          >
+                            <span style={{ width:28, height:28, borderRadius:8, background:"#1b1e2c", color:"#a9aed0", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:13, flexShrink:0 }}>{index + 1}</span>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ color:"#eef0ff", fontWeight:700, fontSize:15, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{problem.title}</div>
+                              <div style={{ color:"#7a7f9e", fontSize:12, marginTop:3 }}>
+                                {solvedHere ? "✓ Solved for this challenge" : challenge.status === "UPCOMING" ? `Opens ${formatChallengeDate(challenge.startsAt)}` : catalogProblem ? "Click to solve" : "Not available right now"}
+                              </div>
+                            </div>
+                            <span style={S.badge(difficulty)}>{difficulty}</span>
+                            <span style={{ color:"#ffd089", fontWeight:800, fontSize:13, minWidth:52, textAlign:"right" }}>+{problem.points}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                );
-              }
-              return (
-                <div style={{ marginBottom: 16, background: "rgba(59, 130, 246, 0.1)", border: "1px solid #3b82f6", borderRadius: 16, padding: "14px 18px", color: "#93c5fd", fontSize: 14, display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 16 }}>💡</span>
-                  <span>You have not submitted this exam yet. Complete and submit your exam to appear as a ranked participant on the official contest leaderboard.</span>
-                </div>
-              );
-            })()}
 
-            <div style={{ background:"#0d1017", border:"1px solid #202437", borderRadius:22, padding:"14px", boxShadow:"inset 0 1px 0 rgba(255,255,255,0.03)" }}>
-              <div style={{ maxHeight:520, overflowY:"auto", paddingRight:4 }}>
-                <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 10px" }}>
+                  {/* Standings */}
+                  <div style={cardStyle}>
+                    <div style={{ ...sectionLabel, display:"flex", justifyContent:"space-between", gap:8 }}>
+                      <span>{challenge.status === "ENDED" ? "Final standings" : "Live standings"}</span>
+                      <button onClick={loadCurrentChallenge} disabled={challengeLoading} style={{ background:"none", border:"none", color:"#93c5fd", cursor:"pointer", fontSize:11.5, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", padding:0 }}>
+                        {challengeLoading ? "Refreshing..." : "↻ Refresh"}
+                      </button>
+                    </div>
+                    {challenge.standings.length ? (
+                      <div style={{ display:"grid", gap:8 }}>
+                        {challenge.standings.map((row, index) => {
+                          const isMe = sameValue(row.userId, currentUser.id);
+                          const medal = row.rank && row.rank <= 3 ? PRIZE_MEDALS[row.rank - 1] : null;
+                          return (
+                            <div key={row.userId} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 12px", borderRadius:12, background:isMe ? "rgba(124,106,247,0.14)" : index % 2 ? "#0f1119" : "#12141e", border:`1px solid ${isMe ? "#7c6af7" : medal ? prizeTones[row.rank - 1].edge + "66" : "#1d2030"}` }}>
+                              <span style={{ width:36, textAlign:"center", fontWeight:800, color:"#eef0ff", fontSize:medal ? 20 : 14 }}>{medal || (row.rank ? row.rank : "--")}</span>
+                              <div style={{ flex:1, minWidth:0 }}>
+                                <div style={{ color:"#f5f6ff", fontWeight:700, fontSize:14, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                  {row.name}{isMe && <span style={{ color:"#c4b5fd", fontSize:11, marginLeft:8, fontWeight:800 }}>YOU</span>}
+                                </div>
+                                <div style={{ color:"#7a7f9e", fontSize:12 }}>{row.solved}/{challenge.problems.length} solved{row.department ? ` · ${row.department}` : ""}</div>
+                              </div>
+                              <span style={{ color:"#73f0b3", fontWeight:800, fontSize:16 }}>{row.score}</span>
+                            </div>
+                          );
+                        })}
+                        {challenge.me && !challenge.standings.some((row) => sameValue(row.userId, currentUser.id)) && (
+                          <div style={{ marginTop:6, padding:"10px 12px", borderRadius:12, background:"rgba(124,106,247,0.14)", border:"1px solid #7c6af7", color:"#e0dcff", fontSize:13 }}>
+                            You: {challenge.me.rank ? `#${challenge.me.rank}` : "not ranked yet"} · {challenge.me.score} points · {challenge.me.solved} solved
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ color:"#8f93b4", fontSize:14, lineHeight:1.7 }}>
+                        {challenge.status === "UPCOMING" ? "The board opens when the challenge starts." : "No one is on the board yet. Solve a problem and take the #1 spot!"}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Rules */}
+                <div style={cardStyle}>
+                  <div style={sectionLabel}>How it works</div>
+                  <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 200 : 230}px, 1fr))`, gap:14, color:"#c9cbe2", fontSize:14, lineHeight:1.6 }}>
+                    <div>📅 Runs from <strong>{formatChallengeDate(challenge.startsAt)}</strong> to <strong>{formatChallengeDate(challenge.endsAt)}</strong>.</div>
+                    <div>✅ Only accepted submissions made during the challenge month count. Problems solved before it started need a fresh submission.</div>
+                    <div>🎯 Easy = 20, Medium = 35, Hard = 50 points. Ties go to whoever reached the score first, then to fewer wrong attempts.</div>
+                    <div>🧥 The top 3 at the end of the month win the prizes. Winners are announced here.</div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {previous?.winners?.length > 0 && (
+              <div style={cardStyle}>
+                <div style={sectionLabel}>🏅 Last winners · {previous.monthLabel}</div>
+                <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 200 : 220}px, 1fr))`, gap:12 }}>
+                  {previous.winners.map((row) => (
+                    <div key={row.userId} style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", borderRadius:14, background:"#12141e", border:"1px solid #23273a" }}>
+                      <span style={{ fontSize:28 }}>{PRIZE_MEDALS[row.rank - 1] || "🏅"}</span>
+                      <div style={{ minWidth:0 }}>
+                        <div style={{ color:"#f5f6ff", fontWeight:700 }}>{row.name}</div>
+                        <div style={{ color:"#7a7f9e", fontSize:12 }}>{row.score} points · {previous.prizes?.[row.rank - 1] || "Prize"}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── LEADERBOARD ───────────────────────────────────────────────────────────
+  if (view === "leaderboard") {
+    const myBoardEntry = leaderboardRows.find((entry) => sameValue(entry.userId, currentUser.id)) || null;
+    const showPodium = !leaderboardSearch.trim() && safeLeaderboardPage === 1 && leaderboardRows.length > 0;
+    const podiumOrder = isPhone ? [0, 1, 2] : [1, 0, 2];
+    const podiumEntries = showPodium
+      ? podiumOrder.map((index) => leaderboardRows[index]).filter(Boolean)
+      : [];
+    const podiumMeta = {
+      1: { medal:"🥇", edge:"#f3c969", glow:"rgba(243,201,105,0.28)", pedestal:isPhone ? 0 : 46, avatar:76 },
+      2: { medal:"🥈", edge:"#cfd6df", glow:"rgba(207,214,223,0.18)", pedestal:isPhone ? 0 : 22, avatar:62 },
+      3: { medal:"🥉", edge:"#c58a5c", glow:"rgba(197,138,92,0.2)", pedestal:0, avatar:62 },
+    };
+    const scopeOptions = [
+      { value:"All", label:"Practice Arena" },
+      { value:"This Contest", label:"This Contest" },
+      { value:"Global", label:"Global" },
+    ];
+    const headerStats = [
+      { label:"Ranked students", value:leaderboardRows.length, color:"#73f0b3" },
+      { label:"Top score", value:leaderboardRows[0]?.stats?.score ?? "--", color:"#ffd089" },
+      { label:"Your rank", value:myBoardEntry ? `#${myBoardEntry.displayRank}` : "--", color:"#c4b5fd" },
+      { label:"Your streak", value:`🔥 ${streakInfo?.currentStreak || 0}`, color:"#ffb547" },
+    ];
+
+    return (
+      <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+        <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
+        {renderFullscreenGate()}
+        {renderLiveTestPopupModal()}
+        <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
+          <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+          <nav style={S.nav}>
+            <DevOrbitLogo onClick={()=>setView("home")} />
+            <button onClick={()=>setView("list")} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Problems</span>
+              <span style={S.navBtnHint(false)}>Daily coding practice</span>
+            </button>
+            <button onClick={openContest} style={S.navBtn(false)}>
+              <span style={S.navBtnLabel(false)}>Contest</span>
+              <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
+            </button>
+            <button onClick={()=>openLeaderboard("All")} style={S.navBtn(true)}>
+              <span style={S.navBtnLabel(true)}>Leaderboard</span>
+              <span style={S.navBtnHint(true)}>See the top performers</span>
+            </button>
+            {renderExtraNavButtons()}
+            <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
+              <div style={{ padding:"7px 12px", borderRadius:999, border:"1px solid #273246", background:"#111b22", color:"#7ce7ff", fontSize:11.5, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", display:"flex", alignItems:"center" }}>
+                <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", background:leaderboardUpdating ? "#4fd1c5" : "#2f8f86", marginRight:8, boxShadow:"0 0 12px #4fd1c566", transition:"background 0.6s ease" }} />
+                Live
+              </div>
+              {renderStreakPill()}
+              <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
+            </div>
+          </nav>
+
+          <div style={{ maxWidth:1180, margin:isPhone ? "20px auto 40px" : "32px auto 48px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box" }}>
+            <div
+              style={{
+                background:"radial-gradient(circle at 15% 0%, rgba(124,106,247,0.26), transparent 45%), radial-gradient(circle at 90% 10%, rgba(243,201,105,0.16), transparent 40%), #0a0b12",
+                border:"1px solid #25253b",
+                borderRadius:28,
+                padding:isPhone ? "22px 16px 24px" : "30px 28px 32px",
+                boxShadow:"0 24px 70px rgba(0,0,0,0.32)",
+                opacity:leaderboardReady ? 1 : 0,
+                transform:leaderboardReady ? "translateY(0)" : "translateY(18px)",
+                transition:"opacity 0.45s ease, transform 0.45s ease",
+              }}
+            >
+              {/* Header */}
+              <div style={{ display:"flex", justifyContent:"space-between", gap:18, alignItems:"flex-start", flexWrap:"wrap", marginBottom:22 }}>
+                <div style={{ maxWidth:560 }}>
+                  <div style={{ color:"#9a90ff", fontSize:12, fontWeight:700, letterSpacing:"0.16em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", marginBottom:10 }}>🏆 Hall of Fame</div>
+                  <h1 style={{ margin:"0 0 10px", color:"#f5f6ff", fontFamily:"'Fraunces',serif", fontSize:isPhone ? 32 : 44, lineHeight:1, letterSpacing:"-0.04em" }}>Leaderboard</h1>
+                  <div style={{ color:"#a9aed0", fontSize:15, lineHeight:1.7 }}>
+                    Solve problems, keep your daily streak alive, and climb to the top. Harder problems earn more points.
+                  </div>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:isPhone ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(110px, 1fr))", gap:10, flex:isPhone ? "1 1 100%" : "0 1 auto" }}>
+                  {headerStats.map((stat) => (
+                    <div key={stat.label} style={{ background:"rgba(16,19,28,0.85)", border:"1px solid #22283a", borderRadius:16, padding:"12px 14px" }}>
+                      <div style={{ color:"#7780a1", fontSize:10.5, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>{stat.label}</div>
+                      <div style={{ color:stat.color, fontSize:20, fontWeight:800 }}>{stat.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Scope + search */}
+              <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", marginBottom:22 }}>
+                <div style={{ display:"flex", gap:4, padding:4, background:"#0e1017", border:"1px solid #24283a", borderRadius:14, flexWrap:"wrap" }}>
+                  {scopeOptions.map((option) => {
+                    const active = leaderboardScope === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        onClick={() => setLeaderboardScope(option.value)}
+                        style={{ border:"none", cursor:"pointer", borderRadius:10, padding:"9px 14px", fontSize:13, fontWeight:700, fontFamily:"'Outfit','Space Grotesk',sans-serif", background:active ? "linear-gradient(135deg,#7c6af7,#4f8bf7)" : "transparent", color:active ? "#fff" : "#8f93b4", boxShadow:active ? "0 8px 20px rgba(124,106,247,0.35)" : "none", transition:"all 0.2s ease" }}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <input
+                  placeholder="🔍  Search student..."
+                  value={leaderboardSearch}
+                  onChange={(e)=>setLeaderboardSearch(e.target.value)}
+                  style={{ flex:1, minWidth:200, background:"#0e1017", border:"1px solid #24283a", borderRadius:12, padding:"12px 14px", color:"#eef0ff", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, outline:"none" }}
+                />
+              </div>
+
+              {/* Contest status (contest scope only) */}
+              {leaderboardScope === "This Contest" && (myBoardEntry?.hasContestSubmission ? (
+                <div style={{ marginBottom:18, background:"rgba(16, 185, 129, 0.1)", border:"1px solid #10b981", borderRadius:16, padding:"14px 18px", color:"#6ee7b7", fontSize:14, display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+                  <span>✓ <strong>Your exam:</strong> submitted and evaluated. Official rank <strong>#{myBoardEntry.contest?.rank || myBoardEntry.displayRank}</strong></span>
+                  <strong>Score: {myBoardEntry.contest?.score} / {myBoardEntry.contest?.maxScore || 10} ({myBoardEntry.contest?.percentage ?? 0}%)</strong>
+                </div>
+              ) : (
+                <div style={{ marginBottom:18, background:"rgba(59, 130, 246, 0.1)", border:"1px solid #3b82f6", borderRadius:16, padding:"14px 18px", color:"#93c5fd", fontSize:14 }}>
+                  💡 Only students who have submitted the current exam appear here. Submit your exam to get an official rank.
+                </div>
+              ))}
+
+              {/* Podium */}
+              {podiumEntries.length > 0 && (
+                <div style={{ display:"grid", gridTemplateColumns:isPhone ? "minmax(0, 1fr)" : `repeat(${podiumEntries.length}, minmax(0, 1fr))`, gap:14, alignItems:"end", marginBottom:22, maxWidth:podiumEntries.length < 3 && !isPhone ? 260 * podiumEntries.length : "none", marginLeft:"auto", marginRight:"auto" }}>
+                  {podiumEntries.map((entry) => {
+                    const meta = podiumMeta[entry.displayRank] || podiumMeta[3];
+                    const isMe = sameValue(entry.userId, currentUser.id);
+                    return (
+                      <div key={`podium-${entry.userId || entry.username}`} style={{ position:"relative", textAlign:"center", borderRadius:22, padding:`22px 16px ${18 + meta.pedestal}px`, background:`linear-gradient(180deg, ${meta.glow}, rgba(13,16,23,0.95) 60%)`, border:`1px solid ${isMe ? "#7c6af7" : meta.edge}`, boxShadow:`0 18px 44px ${meta.glow}` }}>
+                        {entry.displayRank === 1 && <div style={{ position:"absolute", top:-18, left:"50%", transform:"translateX(-50%)", fontSize:28 }}>👑</div>}
+                        <div style={{ width:meta.avatar, height:meta.avatar, margin:"0 auto 12px", borderRadius:"50%", background:`linear-gradient(135deg, ${entry.avatarGradient?.[0] || "#7c6af7"}, ${entry.avatarGradient?.[1] || "#4fd1c5"})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#081018", fontWeight:800, fontSize:meta.avatar / 3, border:`3px solid ${meta.edge}`, boxShadow:`0 0 24px ${meta.glow}` }}>
+                          {getAvatarLabel(entry.username)}
+                        </div>
+                        <div style={{ fontSize:26, lineHeight:1 }}>{meta.medal}</div>
+                        <div style={{ color:"#f5f6ff", fontSize:16, fontWeight:800, marginTop:8, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                          {entry.username}{isMe && <span style={{ color:"#c4b5fd", fontSize:11, marginLeft:6 }}>YOU</span>}
+                        </div>
+                        <div style={{ color:meta.edge, fontSize:26, fontWeight:800, marginTop:6 }}>{entry.stats?.score ?? 0}<span style={{ color:"#8f93b4", fontSize:12, fontWeight:600, marginLeft:4 }}>pts</span></div>
+                        <div style={{ color:"#a9aed0", fontSize:12.5, marginTop:6 }}>
+                          {entry.stats?.problemsSolved ?? 0} solved · 🔥 {entry.streak?.current || 0}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Your position, when it is not on this page */}
+              {myBoardEntry && !visibleLeaderboardRows.some((entry) => sameValue(entry.userId, currentUser.id)) && (
+                <div style={{ marginBottom:16, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", padding:"12px 16px", borderRadius:16, background:"rgba(124,106,247,0.12)", border:"1px solid #7c6af7", color:"#e0dcff", fontSize:14 }}>
+                  <strong style={{ fontSize:18 }}>#{myBoardEntry.displayRank}</strong>
+                  <span>That's you, with <strong>{myBoardEntry.stats?.score ?? 0}</strong> points and <strong>{myBoardEntry.stats?.problemsSolved ?? 0}</strong> solved.</span>
+                  <span style={{ marginLeft:"auto", color:"#a9aed0" }}>
+                    {myBoardEntry.displayRank > 1 && leaderboardRows[myBoardEntry.displayRank - 2]
+                      ? `${Math.max(1, (leaderboardRows[myBoardEntry.displayRank - 2].stats?.score || 0) - (myBoardEntry.stats?.score || 0))} pts to pass #${myBoardEntry.displayRank - 1}`
+                      : "Keep it up!"}
+                  </span>
+                </div>
+              )}
+
+              {/* Table */}
+              <div style={{ background:"#0d1017", border:"1px solid #202437", borderRadius:22, padding:isPhone ? "8px" : "14px", overflowX:"auto" }}>
+                <table style={{ width:"100%", minWidth:640, borderCollapse:"separate", borderSpacing:"0 8px" }}>
                   <thead>
                     <tr>
-                      {["Rank", "User", "Score", "Problems Solved", "Time Penalty"].map((heading) => (
-                        <th
-                          key={heading}
-                          style={{
-                            position:"sticky",
-                            top:0,
-                            zIndex:2,
-                            textAlign:"left",
-                            padding:"0 16px 12px",
-                            fontSize:11,
-                            color:"#7a7f9e",
-                            fontWeight:700,
-                            textTransform:"uppercase",
-                            letterSpacing:"0.12em",
-                            fontFamily:"'Space Grotesk',sans-serif",
-                            background:"#0d1017",
-                          }}
-                        >
+                      {["Rank", "Student", "Score", "Solved", "Streak", "Time Penalty"].map((heading) => (
+                        <th key={heading} style={{ textAlign:"left", padding:"0 16px 6px", fontSize:11, color:"#7a7f9e", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:"'Space Grotesk',sans-serif" }}>
                           {heading}
                         </th>
                       ))}
@@ -9873,22 +10983,24 @@ function CodingPlatform() {
                   </thead>
                   <tbody>
                     {visibleLeaderboardRows.length ? visibleLeaderboardRows.map((entry, index) => {
-                      const accent = getLeaderboardAccent(entry.displayRank || entry.stats.rank);
-                      const submissionLevel = entry.stats.submissionLevel || "No Submission";
+                      const rank = entry.displayRank || entry.stats?.rank;
+                      const accent = getLeaderboardAccent(rank);
+                      const submissionLevel = entry.stats?.submissionLevel || "No Submission";
                       const levelMeta = getSubmissionLevelMeta(submissionLevel);
-                      const trend = getTrendMeta(entry.stats.trend);
                       const isHovered = hoveredLeaderboardRank === entry.username;
-                      const absoluteIndex = ((safeLeaderboardPage - 1) * leaderboardPageSize) + index;
-                      const rowBackground = accent.badge
-                        ? accent.background
-                        : absoluteIndex % 2 === 0
-                          ? "#11131b"
-                          : "#0c0e15";
-                      const baseCellStyle = {
+                      const isMe = sameValue(entry.userId, currentUser.id);
+                      const streakCount = entry.streak?.current || 0;
+                      const edge = isMe ? "#7c6af7" : accent.edge;
+                      const rowBackground = isMe
+                        ? "linear-gradient(90deg, rgba(124,106,247,0.22), rgba(17,17,24,0.94) 30%)"
+                        : accent.badge
+                          ? accent.background
+                          : index % 2 === 0 ? "#11131b" : "#0e1018";
+                      const cell = {
                         background: rowBackground,
-                        borderTop:`1px solid ${accent.edge}`,
-                        borderBottom:`1px solid ${accent.edge}`,
-                        padding:"16px",
+                        borderTop:`1px solid ${edge}`,
+                        borderBottom:`1px solid ${edge}`,
+                        padding:"14px 16px",
                         transition:"background 0.2s ease, border-color 0.2s ease",
                       };
 
@@ -9897,92 +11009,88 @@ function CodingPlatform() {
                           key={`${leaderboardMode}-${entry.userId || entry.username}`}
                           onMouseEnter={() => setHoveredLeaderboardRank(entry.username)}
                           onMouseLeave={() => setHoveredLeaderboardRank(null)}
-                          style={{
-                            transform: isHovered ? "scale(1.012)" : "scale(1)",
-                            transition:"transform 0.2s ease, filter 0.2s ease",
-                            filter: isHovered ? "brightness(1.04)" : "none",
-                          }}
+                          style={{ transform: isHovered ? "translateX(4px)" : "none", transition:"transform 0.2s ease, filter 0.2s ease", filter: isHovered ? "brightness(1.08)" : "none" }}
                         >
-                          <td style={{ ...baseCellStyle, borderLeft:`1px solid ${accent.edge}`, borderRadius:"16px 0 0 16px", boxShadow:accent.glow }}>
-                            <div style={{ display:"flex", alignItems:"center", gap:10, color:"#eef0ff", fontWeight:700 }}>
-                              <span style={{ fontSize:18 }}>{accent.badge || "#"}</span>
-                              <div>
-                                <div style={{ color:"#eef0ff", fontSize:18, lineHeight:1 }}>{entry.displayRank || entry.stats.rank}</div>
-                                <div style={{ color:trend.color, fontSize:12, marginTop:4 }}>{trend.icon} {trend.label}</div>
-                              </div>
+                          <td style={{ ...cell, borderLeft:`3px solid ${edge}`, borderRadius:"14px 0 0 14px", width:70 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, color:"#eef0ff", fontWeight:800 }}>
+                              {accent.badge
+                                ? <span style={{ fontSize:24 }}>{accent.badge}</span>
+                                : <span style={{ width:30, height:30, borderRadius:9, background:"#1a1d2b", display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>{rank}</span>}
                             </div>
                           </td>
-                          <td style={baseCellStyle}>
+                          <td style={cell}>
                             <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                              <div style={{ width:42, height:42, borderRadius:"50%", background:`linear-gradient(135deg, ${entry.avatarGradient[0]}, ${entry.avatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#081018", fontWeight:800, fontSize:14, boxShadow:"inset 0 1px 0 rgba(255,255,255,0.25)" }}>
+                              <div style={{ width:40, height:40, flexShrink:0, borderRadius:"50%", background:`linear-gradient(135deg, ${entry.avatarGradient?.[0] || "#7c6af7"}, ${entry.avatarGradient?.[1] || "#4fd1c5"})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#081018", fontWeight:800, fontSize:14, boxShadow:"inset 0 1px 0 rgba(255,255,255,0.25)" }}>
                                 {getAvatarLabel(entry.username)}
                               </div>
-                              <div>
-                                <div style={{ color:"#f5f6ff", fontSize:15, fontWeight:700 }}>{entry.username}</div>
-                                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginTop:4 }}>
-                                  <span style={{ color:"#8f93b4", fontSize:12 }}>Rating {entry.rating}</span>
+                              <div style={{ minWidth:0 }}>
+                                <div style={{ color:"#f5f6ff", fontSize:15, fontWeight:700, display:"flex", alignItems:"center", gap:8 }}>
+                                  {entry.username}
+                                  {isMe && <span style={{ color:"#fff", background:"#7c6af7", fontSize:10, fontWeight:800, letterSpacing:"0.08em", borderRadius:999, padding:"2px 7px" }}>YOU</span>}
+                                </div>
+                                <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", marginTop:5 }}>
                                   {entry.badgeTier && <AchievementBadge tier={entry.badgeTier} compact />}
-                                  <span style={{ color:levelMeta.color, fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", border:`1px solid ${levelMeta.border}`, background:levelMeta.background, borderRadius:999, padding:"3px 8px" }}>
+                                  <span style={{ color:levelMeta.color, fontSize:10.5, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", border:`1px solid ${levelMeta.border}`, background:levelMeta.background, borderRadius:999, padding:"2px 8px" }}>
                                     {submissionLevel}
                                   </span>
-                                  <span style={{ color:"#7c6af7", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", border:"1px solid #2f3150", borderRadius:999, padding:"3px 8px" }}>
-                                    {leaderboardScope === "This Contest" ? "Round" : leaderboardScope === "Global" ? "Global" : "All Arena"}
-                                  </span>
+                                  {entry.department && <span style={{ color:"#7a7f9e", fontSize:12 }}>{entry.department}</span>}
                                 </div>
                               </div>
                             </div>
                           </td>
-                          <td style={{ ...baseCellStyle, color:"#73f0b3", fontWeight:700, fontSize:16 }}>{entry.stats.score}</td>
-                          <td style={{ ...baseCellStyle, color:"#eef0ff", fontWeight:600 }}>{entry.stats.problemsSolved}</td>
-                          <td style={{ ...baseCellStyle, borderRight:`1px solid ${accent.edge}`, borderRadius:"0 16px 16px 0", color:"#dfe2ff", fontWeight:600, boxShadow:accent.glow }}>
-                            {entry.stats.timePenalty}
+                          <td style={{ ...cell, color:"#73f0b3", fontWeight:800, fontSize:17 }}>{entry.stats?.score ?? 0}</td>
+                          <td style={{ ...cell, color:"#eef0ff", fontWeight:600 }}>{entry.stats?.problemsSolved ?? 0}</td>
+                          <td style={cell}>
+                            <span style={{ display:"inline-flex", alignItems:"center", gap:4, color:streakCount ? "#ffb547" : "#5d6180", fontWeight:800 }}>
+                              <span style={{ filter:streakCount ? "none" : "grayscale(1)" }}>🔥</span>{streakCount}
+                            </span>
+                          </td>
+                          <td style={{ ...cell, borderRight:`1px solid ${edge}`, borderRadius:"0 14px 14px 0", color:"#dfe2ff", fontWeight:600 }}>
+                            {entry.stats?.timePenalty || "--"}
                           </td>
                         </tr>
                       );
                     }) : (
                       <tr>
-                        <td colSpan="5" style={{ padding:"38px 18px", textAlign:"center", color:"#8f93b4", background:"#0d1017" }}>
+                        <td colSpan="6" style={{ padding:"38px 18px", textAlign:"center", color:"#8f93b4" }}>
                           {leaderboardSearch.trim()
-                            ? "No submitted leaderboard entries matched that username."
-                            : "No students have submitted this contest yet. Complete and submit your exam to appear on the official leaderboard."}
+                            ? "No students matched that name."
+                            : leaderboardScope === "This Contest"
+                              ? "No students have submitted this contest yet."
+                              : "No ranked students yet. Solve a problem to be the first!"}
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
+
+                {leaderboardPageCount > 1 && (
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginTop:10, padding:"0 6px 4px", flexWrap:"wrap" }}>
+                    <div style={{ color:"#7a7f9e", fontSize:12 }}>
+                      Page {safeLeaderboardPage} of {leaderboardPageCount}
+                    </div>
+                    <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                      <button onClick={() => setLeaderboardPage((prev) => Math.max(1, prev - 1))} disabled={safeLeaderboardPage === 1} style={{ ...S.btn("default"), opacity:safeLeaderboardPage === 1 ? 0.45 : 1 }}>
+                        Previous
+                      </button>
+                      <button onClick={() => setLeaderboardPage((prev) => Math.min(leaderboardPageCount, prev + 1))} disabled={safeLeaderboardPage === leaderboardPageCount} style={{ ...S.btn("default"), opacity:safeLeaderboardPage === leaderboardPageCount ? 0.45 : 1 }}>
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {leaderboardPageCount > 1 && (
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginTop:18, flexWrap:"wrap" }}>
-                  <div style={{ color:"#7a7f9e", fontSize:12 }}>
-                    Page {safeLeaderboardPage} of {leaderboardPageCount}
-                  </div>
-                  <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                    <button
-                      onClick={() => setLeaderboardPage((prev) => Math.max(1, prev - 1))}
-                      disabled={safeLeaderboardPage === 1}
-                      style={{ ...S.btn("default"), opacity:safeLeaderboardPage === 1 ? 0.45 : 1 }}
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={() => setLeaderboardPage((prev) => Math.min(leaderboardPageCount, prev + 1))}
-                      disabled={safeLeaderboardPage === leaderboardPageCount}
-                      style={{ ...S.btn("default"), opacity:safeLeaderboardPage === leaderboardPageCount ? 0.45 : 1 }}
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
+              {challengeData?.challenge && challengeData.challenge.status !== "ENDED" && (
+                <div style={{ marginTop:18 }}>{renderChallengeBanner()}</div>
               )}
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  }
 
-  
   if (assessmentResult) return renderAssessmentResultView();
 
   const p = selectedProblem;
@@ -10467,33 +11575,15 @@ function CodingPlatform() {
 
               return (
                 <div style={{ flex: 1, minHeight: isCompact ? (isPhone ? 360 : 420) : 0, position: "relative", overflow: "hidden", background: "linear-gradient(180deg,#0d1020,#090b14)", display: "flex", flexDirection: "column" }}>
-                  <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-                    {/* Gutter */}
-                    <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 44, background: "#0a0a12", borderRight: "1px solid #1a1a2a", paddingTop: 16, textAlign: "right", paddingRight: 8, userSelect: "none", overflowY: "hidden", zIndex: 1 }}>
-                      <div style={{ transform: `translateY(-${editorScrollTop}px)` }}>
-                        {code.split("\n").map((_, i) => {
-                          const lineNum = i + 1;
-                          const hasErr = errorLines.has(lineNum);
-                          return (
-                            <div key={i} style={{ color: hasErr ? "#ef4444" : "#56607a", fontWeight: hasErr ? 800 : 400, fontSize: 13, lineHeight: "21px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 3 }}>
-                              {hasErr && <span style={{ fontSize: 9, color: "#ef4444" }}>•</span>}
-                              <span>{lineNum}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <CodeHighlightLayer code={code} language={lang} scrollTop={editorScrollTop} />
-                    <textarea
-                      ref={textareaRef}
-                      value={code}
-                      onChange={(e) => setCode(e.target.value)}
-                      onScroll={(e) => setEditorScrollTop(e.currentTarget.scrollTop)}
-                      onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef, lang)}
-                      spellCheck={false}
-                      style={{ position: "absolute", inset: 0, paddingLeft: 56, paddingTop: 16, paddingRight: 16, paddingBottom: 16, background: "transparent", color: "transparent", caretColor: "#67e8f9", border: "none", outline: "none", resize: "none", fontFamily: "'JetBrains Mono',monospace", fontSize: 13.5, lineHeight: "21px", width: "100%", height: "100%", boxSizing: "border-box", scrollbarWidth: "thin", scrollbarColor: "#2a2a3e #0a0a0f", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-                    />
-                  </div>
+                  <CodeEditor
+                    key={p.dbId || p.id}
+                    value={code}
+                    onChange={setCode}
+                    language={lang}
+                    textareaRef={textareaRef}
+                    errorLines={errorLines}
+                    onKeyDown={(e) => handleEditorIndentation(e, code, setCode, textareaRef, lang)}
+                  />
 
                   {/* Inline Syntax Diagnostic Warning Bar */}
                   {!syntaxDiag.isValid && (

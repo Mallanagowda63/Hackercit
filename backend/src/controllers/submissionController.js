@@ -1,6 +1,7 @@
 const prisma = require('../prismaClient');
 const { executeSubmission } = require('../lib/executionService');
 const { getBadgePresentation, resolveBadgeForSolvedCount, syncUserBadge } = require('../lib/badgeService');
+const { computeStreak, calendarFromCounts } = require('../lib/streakService');
 const LEVEL_LABELS = {
   0: 'No Submission',
   1: 'Easy',
@@ -479,6 +480,21 @@ exports.submit = async (req, res) => {
   }
 };
 
+// GET /api/submissions/streak: the signed-in student's daily practice streak and activity calendar.
+exports.streak = async (req, res) => {
+  try {
+    const submissions = await prisma.submission.findMany({
+      where: { userId: req.user.id },
+      select: { id: true, createdAt: true },
+    });
+    const { counts, ...streak } = computeStreak(submissions.map((submission) => submission.createdAt));
+    return res.json({ ...streak, calendar: calendarFromCounts(counts, streak.today) });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Unable to load your streak right now.' });
+  }
+};
+
 exports.listByUser = async (req, res) => {
   const { userId } = req.params;
   if (req.user.id !== userId && req.user.role !== 'ADMIN') {
@@ -635,13 +651,16 @@ async function buildLeaderboard() {
       .map((student) => {
         const assessmentSub = assessmentSubmissionByUserId.get(student.id) || null;
         const testAttempt = testAttemptByUserId.get(student.id) || null;
-        const card = buildScoreCard(student, groupedSubmissions.get(student.id) || [], problemsById, activeAssignment, assessmentSub, testAttempt);
+        const studentSubmissions = groupedSubmissions.get(student.id) || [];
+        const card = buildScoreCard(student, studentSubmissions, problemsById, activeAssignment, assessmentSub, testAttempt);
         const hasContestSubmission = completedUserIdsForContest.has(student.id);
         const attemptStatus = testAttempt?.status || (assessmentSub ? 'SUBMITTED' : 'NOT_STARTED');
+        const { currentStreak, longestStreak } = computeStreak(studentSubmissions.map((submission) => submission.createdAt));
         return {
           ...card,
           hasContestSubmission,
           attemptStatus,
+          streak: { current: currentStreak, longest: longestStreak },
         };
       });
 

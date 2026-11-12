@@ -6,6 +6,7 @@ const { requireAuth } = require('../middleware/authMiddleware');
 router.post('/run', requireAuth, controller.runSample);
 router.post('/submit', requireAuth, controller.submit);
 router.get('/leaderboard', requireAuth, controller.leaderboard);
+router.get('/streak', requireAuth, controller.streak);
 router.get('/user/:userId', requireAuth, controller.listByUser);
 
 module.exports = router;

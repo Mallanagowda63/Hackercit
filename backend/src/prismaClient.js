@@ -297,6 +297,13 @@ function applyDefaults(modelName, data) {
       createdAt: now,
       updatedAt: now,
     },
+    monthlyChallenge: {
+      description: '',
+      problemIds: [],
+      prizes: [],
+      createdAt: now,
+      updatedAt: now,
+    },
     assessmentSubmission: {
       theoryScore: 0,
       codingScore: 0,
@@ -384,6 +391,8 @@ async function initializeDatabase(db) {
     createIndexSafely(db.collection('TestAttempt'), { assignmentId: 1, userId: 1 }),
     createIndexSafely(db.collection('Notification'), { userId: 1 }),
     createIndexSafely(db.collection('Submission'), { status: 1 }),
+    createIndexSafely(db.collection('Submission'), { problemId: 1 }),
+    createIndexSafely(db.collection('MonthlyChallenge'), { month: 1 }),
   ]);
 }
 
@@ -584,6 +593,7 @@ prisma = {
   notification: new MongoModel('notification', 'Notification'),
   assessmentSubmission: new MongoModel('assessmentSubmission', 'AssessmentSubmission'),
   testFeedback: new MongoModel('testFeedback', 'TestFeedback'),
+  monthlyChallenge: new MongoModel('monthlyChallenge', 'MonthlyChallenge'),
   async $transaction(operations) {
     return Promise.all(operations);
   },

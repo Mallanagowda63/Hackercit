@@ -27,6 +27,7 @@ const submissionRoutes = require('./routes/submission');
 const testRoutes = require('./routes/test');
 const reportsRoutes = require('./routes/reports');
 const proctoringRoutes = require('./routes/proctoring');
+const challengeRoutes = require('./routes/challenge');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -36,6 +37,7 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/admin/reports', reportsRoutes);
 app.use('/api/proctoring', proctoringRoutes);
+app.use('/api/challenges', challengeRoutes);
 
 async function health(req, res) {
   const database = await prisma.$ping()
