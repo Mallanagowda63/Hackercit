@@ -1,6 +1,7 @@
 const prisma = require('../prismaClient');
 const { effectiveRole } = require('../lib/adminConfig');
 const { sendEmail, sendBulk, isMailConfigured, mailFrom } = require('../lib/mailer');
+const { renderAnnouncementEmail } = require('../lib/emailTemplate');
 
 // Admin email announcements (weekly / monthly challenges, notices) to students the admin selects.
 // At most MAX_RECIPIENTS per send (Resend's free plan allows 100 emails a day). Each send is
@@ -11,14 +12,6 @@ const MAX_MESSAGE = 5000;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 let currentJob = null; // { id, subject, total, sent, failed, errors, status, startedAt, finishedAt }
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 function siteUrl(req) {
   const configured = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
@@ -32,22 +25,8 @@ function firstName(user) {
 }
 
 function buildEmail({ subject, message, link, linkLabel, name }) {
-  const greeting = `Hi ${name},`;
-  const text = `${greeting}\n\n${message}\n\n${link ? `${linkLabel}: ${link}\n\n` : ''}- Team DevOrbit`;
-  const paragraphs = escapeHtml(message)
-    .split(/\n{2,}/)
-    .map((part) => `<p style="margin:0 0 14px">${part.replace(/\n/g, '<br>')}</p>`)
-    .join('');
-  const button = link
-    ? `<p style="margin:22px 0"><a href="${escapeHtml(link)}" style="background:#4f46e5;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block">${escapeHtml(linkLabel)}</a></p>`
-    : '';
-  const html = `<!doctype html><html><body style="margin:0;background:#f4f5f7;font-family:Segoe UI,Arial,sans-serif;color:#1f2937">
-<div style="max-width:560px;margin:0 auto;padding:24px 16px">
-<div style="background:#ffffff;border-radius:12px;padding:28px 24px;font-size:15px;line-height:1.6">
-<p style="margin:0 0 14px">${escapeHtml(greeting)}</p>${paragraphs}${button}
-<p style="margin:18px 0 0;color:#6b7280">- Team DevOrbit</p>
-</div></div></body></html>`;
-  return { subject, text, html };
+  const logoUrl = link ? `${link}/scholarlogic-logo.png` : '';
+  return renderAnnouncementEmail({ subject, message, name, link, linkLabel, logoUrl });
 }
 
 function readInput(body = {}) {

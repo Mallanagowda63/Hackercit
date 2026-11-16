@@ -1488,6 +1488,7 @@ function CodingPlatform() {
   const [adminEmailHideSent, setAdminEmailHideSent] = useState(true);
   const [adminEmailConfirm, setAdminEmailConfirm] = useState(false);
   const [adminEmailResult, setAdminEmailResult] = useState(null);
+  const [adminEmailSending, setAdminEmailSending] = useState(null);
   const [adminFeedback, setAdminFeedback] = useState(null);
   const [adminFeedbackLoading, setAdminFeedbackLoading] = useState(false);
   const [adminFeedbackError, setAdminFeedbackError] = useState("");
@@ -3226,6 +3227,27 @@ function CodingPlatform() {
     return () => clearTimeout(timer);
   }, [view, adminTab, adminEmailStatus]);
 
+  // When a send to students finishes, swap the sending animation for the result popup.
+  useEffect(() => {
+    if (!adminEmailSending || adminEmailSending.isTest || adminEmailBusy) return undefined;
+    const job = adminEmailStatus?.job;
+    if (!job || job.status === "SENDING") return undefined;
+    // Keep the animation on screen for at least ~1.8s so it doesn't just flash.
+    const wait = Math.max(0, 1800 - (Date.now() - adminEmailSending.startedAt));
+    const timer = setTimeout(() => {
+      setAdminEmailSending(null);
+      if (job.status === "DONE") {
+        setAdminEmailMessage({ type: "success", text: `"${job.subject}" sent to ${job.sent} students.` });
+        setAdminEmailResult({ type: "success", title: "Emails sent!", text: `"${job.subject}" was delivered to Resend for all ${job.sent} selected students.` });
+      } else {
+        const reason = job.errors?.[0] ? ` ${job.errors[0]}` : "";
+        setAdminEmailMessage({ type: "error", text: `${job.sent} of ${job.total} sent, ${job.failed} failed.${reason}` });
+        setAdminEmailResult({ type: "error", title: job.sent ? "Some emails failed" : "Emails not sent", text: `${job.sent} of ${job.total} sent, ${job.failed} failed.${reason}` });
+      }
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [adminEmailSending, adminEmailBusy, adminEmailStatus]);
+
   const prefillChallengeEmail = (challenge) => {
     const problemCount = challenge.problems?.length || 0;
     const prizes = (challenge.prizes || []).map((prize, index) => `${PRIZE_MEDALS[index] || ""} Rank ${index + 1}: ${prize}`).join("\n");
@@ -3275,19 +3297,25 @@ function CodingPlatform() {
 
     setAdminEmailBusy(true);
     setAdminEmailMessage(null);
+    setAdminEmailSending({ isTest, total: isTest ? 1 : selectedCount, startedAt: Date.now() });
     try {
       await performApiRequest("/api/admin/announcements/email", {
         method: "POST",
         body: JSON.stringify({ subject, message, ...(isTest ? { testTo: adminEmailForm.testTo.trim() } : { userIds: adminEmailSelected }) }),
       });
-      setAdminEmailMessage({
-        type: "success",
-        text: isTest ? `Test email sent to ${adminEmailForm.testTo.trim()}. Check the inbox (and spam folder).` : `Sending to ${selectedCount} students...`,
-      });
-      setAdminEmailResult({ type: "success", title: isTest ? "Test email sent" : "Emails are on their way", text: isTest ? `A test email was sent to ${adminEmailForm.testTo.trim()}. Check the inbox and the spam folder.` : `"${subject}" is being sent to ${selectedCount} student${selectedCount === 1 ? "" : "s"}. Progress shows in the Email Students card.` });
-      if (!isTest) setAdminEmailSelected([]);
+      if (isTest) {
+        setAdminEmailMessage({ type: "success", text: `Test email sent to ${adminEmailForm.testTo.trim()}. Check the inbox (and spam folder).` });
+        // Let the animation play for a moment before showing the result.
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        setAdminEmailSending(null);
+        setAdminEmailResult({ type: "success", title: "Test email sent", text: `A test email was sent to ${adminEmailForm.testTo.trim()}. Check the inbox and the spam folder.` });
+      } else {
+        // The sending popup stays open and follows the job's progress until it finishes.
+        setAdminEmailSelected([]);
+      }
       await loadAdminEmailStatus();
     } catch (error) {
+      setAdminEmailSending(null);
       setAdminEmailMessage({ type: "error", text: error.message || "Unable to send the email." });
       setAdminEmailResult({ type: "error", title: "Email not sent", text: error.message || "Unable to send the email." });
     } finally {
@@ -5402,10 +5430,49 @@ function CodingPlatform() {
           );
         })()}
 
+        {adminEmailSending && (() => {
+          const liveJob = !adminEmailSending.isTest && job && job.status === "SENDING" ? job : null;
+          const total = liveJob ? liveJob.total : adminEmailSending.total;
+          const done = liveJob ? liveJob.sent + liveJob.failed : 0;
+          const percent = total ? Math.round((done / total) * 100) : 0;
+          return (
+            <div role="dialog" aria-modal="true" aria-live="polite" style={{ position:"fixed", inset:0, zIndex:2000, background:"rgba(17,24,39,0.6)", backdropFilter:"blur(4px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+              <style>{`
+                @keyframes dvMailFly { 0% { transform: translate(-70px, 26px) rotate(-8deg) scale(0.8); opacity: 0; } 15% { opacity: 1; } 55% { transform: translate(0, -6px) rotate(4deg) scale(1); opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(80px, -40px) rotate(12deg) scale(0.75); opacity: 0; } }
+                @keyframes dvMailTrail { 0% { transform: scaleX(0); opacity: 0; } 40% { opacity: 0.7; } 100% { transform: scaleX(1); opacity: 0; } }
+                @keyframes dvMailPulse { 0%, 100% { transform: scale(1); opacity: 0.55; } 50% { transform: scale(1.18); opacity: 0.15; } }
+                @keyframes dvMailStripes { from { background-position: 0 0; } to { background-position: 28px 0; } }
+                @keyframes dvMailDots { 0%, 20% { content: "."; } 40% { content: ".."; } 60%, 100% { content: "..."; } }
+                .dv-mail-dots::after { content: "..."; animation: dvMailDots 1.2s steps(1) infinite; }
+                @media (prefers-reduced-motion: reduce) { .dv-mail-anim { animation: none !important; } }
+              `}</style>
+              <div style={{ width:"100%", maxWidth:400, background:ADMIN_THEME.card, borderRadius:18, boxShadow:"0 24px 60px rgba(0,0,0,0.3)", padding:"28px 24px 24px", textAlign:"center", overflow:"hidden" }}>
+                <div style={{ position:"relative", height:120, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                  <div className="dv-mail-anim" style={{ position:"absolute", width:96, height:96, borderRadius:"50%", background:"linear-gradient(135deg,#6366f1,#a855f7)", animation:"dvMailPulse 1.6s ease-in-out infinite" }} />
+                  <div style={{ position:"absolute", width:76, height:76, borderRadius:"50%", background:"linear-gradient(135deg,#4f46e5,#7c3aed)" }} />
+                  <div className="dv-mail-anim" style={{ position:"absolute", left:"50%", top:"56%", width:70, height:2, marginLeft:-90, background:"linear-gradient(90deg, transparent, #c4b5fd)", transformOrigin:"left center", animation:"dvMailTrail 1.6s ease-in-out infinite" }} />
+                  <div className="dv-mail-anim" style={{ position:"relative", fontSize:40, lineHeight:1, animation:"dvMailFly 1.6s ease-in-out infinite", filter:"drop-shadow(0 4px 6px rgba(0,0,0,0.25))" }}>✉️</div>
+                </div>
+                <div style={{ fontSize:19, fontWeight:800, color:ADMIN_THEME.text }}>
+                  <span className="dv-mail-dots">{adminEmailSending.isTest ? "Sending test email" : "Sending emails"}</span>
+                </div>
+                <div style={{ fontSize:13, color:ADMIN_THEME.textSecondary, marginTop:6, marginBottom:18 }}>
+                  {adminEmailSending.isTest ? `To ${adminEmailForm.testTo.trim()}` : liveJob ? `${liveJob.sent} of ${total} sent` : `Preparing ${total} email${total === 1 ? "" : "s"}`}
+                </div>
+                <div style={{ height:10, borderRadius:999, background:ADMIN_THEME.hoverBackground, overflow:"hidden" }}>
+                  <div className="dv-mail-anim" style={{ height:"100%", width:liveJob ? `${Math.max(8, percent)}%` : "100%", borderRadius:999, transition:"width 0.6s ease", backgroundColor:"#6366f1", backgroundImage:"linear-gradient(45deg, rgba(255,255,255,0.28) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.28) 50%, rgba(255,255,255,0.28) 75%, transparent 75%, transparent)", backgroundSize:"28px 28px", animation:"dvMailStripes 0.8s linear infinite", opacity:liveJob ? 1 : 0.55 }} />
+                </div>
+                <div style={{ fontSize:12, color:ADMIN_THEME.textMuted, marginTop:12 }}>Please keep this page open.</div>
+              </div>
+            </div>
+          );
+        })()}
+
         {adminEmailResult && (
           <div role="dialog" aria-modal="true" onClick={() => setAdminEmailResult(null)} style={{ position:"fixed", inset:0, zIndex:2000, background:"rgba(17,24,39,0.55)", backdropFilter:"blur(4px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
             <div onClick={(e) => e.stopPropagation()} style={{ width:"100%", maxWidth:420, background:ADMIN_THEME.card, borderRadius:16, boxShadow:"0 20px 50px rgba(0,0,0,0.25)", padding:24, textAlign:"center" }}>
-              <div style={{ width:56, height:56, margin:"0 auto 12px", borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:28, background:adminEmailResult.type === "error" ? "rgba(220,38,38,0.1)" : "rgba(22,163,74,0.1)" }}>
+              <style>{"@keyframes dvResultPop { 0% { transform: scale(0.3); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } } @media (prefers-reduced-motion: reduce) { .dv-result-pop { animation: none !important; } }"}</style>
+              <div className="dv-result-pop" style={{ width:56, height:56, margin:"0 auto 12px", borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:28, background:adminEmailResult.type === "error" ? "rgba(220,38,38,0.1)" : "rgba(22,163,74,0.1)", animation:"dvResultPop 0.5s ease-out" }}>
                 {adminEmailResult.type === "error" ? "⚠️" : "✅"}
               </div>
               <div style={{ fontSize:18, fontWeight:800, color:adminEmailResult.type === "error" ? ADMIN_THEME.error : ADMIN_THEME.text, marginBottom:6 }}>{adminEmailResult.title}</div>
