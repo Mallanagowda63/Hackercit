@@ -1486,6 +1486,8 @@ function CodingPlatform() {
   const [adminEmailPickerSearch, setAdminEmailPickerSearch] = useState("");
   const [adminEmailDepartment, setAdminEmailDepartment] = useState("");
   const [adminEmailHideSent, setAdminEmailHideSent] = useState(true);
+  const [adminEmailConfirm, setAdminEmailConfirm] = useState(false);
+  const [adminEmailResult, setAdminEmailResult] = useState(null);
   const [adminFeedback, setAdminFeedback] = useState(null);
   const [adminFeedbackLoading, setAdminFeedbackLoading] = useState(false);
   const [adminFeedbackError, setAdminFeedbackError] = useState("");
@@ -3240,7 +3242,7 @@ function CodingPlatform() {
     document.getElementById("admin-email-students")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const sendAdminEmail = async (mode) => {
+  const sendAdminEmail = async (mode, confirmed = false) => {
     const subject = adminEmailForm.subject.trim();
     const message = adminEmailForm.message.trim();
     if (!subject || !message) {
@@ -3263,7 +3265,12 @@ function CodingPlatform() {
         setAdminEmailMessage({ type: "error", text: `You can email at most ${maxRecipients} students at a time.` });
         return;
       }
-      if (!window.confirm(`Send "${subject}" to the ${selectedCount} selected students now? This cannot be undone.`)) return;
+      // First click opens the confirmation popup; its "Send" button calls this again with confirmed = true.
+      if (!confirmed) {
+        setAdminEmailConfirm(true);
+        return;
+      }
+      setAdminEmailConfirm(false);
     }
 
     setAdminEmailBusy(true);
@@ -3277,10 +3284,12 @@ function CodingPlatform() {
         type: "success",
         text: isTest ? `Test email sent to ${adminEmailForm.testTo.trim()}. Check the inbox (and spam folder).` : `Sending to ${selectedCount} students...`,
       });
+      setAdminEmailResult({ type: "success", title: isTest ? "Test email sent" : "Emails are on their way", text: isTest ? `A test email was sent to ${adminEmailForm.testTo.trim()}. Check the inbox and the spam folder.` : `"${subject}" is being sent to ${selectedCount} student${selectedCount === 1 ? "" : "s"}. Progress shows in the Email Students card.` });
       if (!isTest) setAdminEmailSelected([]);
       await loadAdminEmailStatus();
     } catch (error) {
       setAdminEmailMessage({ type: "error", text: error.message || "Unable to send the email." });
+      setAdminEmailResult({ type: "error", title: "Email not sent", text: error.message || "Unable to send the email." });
     } finally {
       setAdminEmailBusy(false);
     }
@@ -5358,6 +5367,53 @@ function CodingPlatform() {
             {sending ? `Sending ${job.sent}/${job.total}...` : `Send to ${selectedCount} selected student${selectedCount === 1 ? "" : "s"}`}
           </button>
         </div>
+
+        {adminEmailConfirm && (() => {
+          const byId = new Map(students.map((student) => [student.id, student]));
+          const names = adminEmailSelected.map((id) => byId.get(id)?.name).filter(Boolean);
+          const shownNames = names.slice(0, 6).join(", ") + (names.length > 6 ? ` and ${names.length - 6} more` : "");
+          return (
+            <div role="dialog" aria-modal="true" onClick={() => setAdminEmailConfirm(false)} style={{ position:"fixed", inset:0, zIndex:2000, background:"rgba(17,24,39,0.55)", backdropFilter:"blur(4px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+              <div onClick={(e) => e.stopPropagation()} style={{ width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto", background:ADMIN_THEME.card, borderRadius:16, boxShadow:"0 20px 50px rgba(0,0,0,0.25)", padding:isPhone ? 18 : 24 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
+                  <div style={{ width:44, height:44, borderRadius:12, background:ADMIN_THEME.primaryLight, display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}>✉️</div>
+                  <div>
+                    <div style={{ fontSize:18, fontWeight:800, color:ADMIN_THEME.text }}>Send this email?</div>
+                    <div style={{ fontSize:13, color:ADMIN_THEME.textSecondary }}>To {selectedCount} student{selectedCount === 1 ? "" : "s"}. This cannot be undone.</div>
+                  </div>
+                </div>
+                <div style={{ border:`1px solid ${ADMIN_THEME.border}`, borderRadius:12, padding:"12px 14px", marginBottom:12, fontSize:13, color:ADMIN_THEME.textSecondary, display:"grid", gap:6 }}>
+                  <div><strong style={{ color:ADMIN_THEME.text }}>Subject:</strong> {adminEmailForm.subject.trim()}</div>
+                  <div><strong style={{ color:ADMIN_THEME.text }}>From:</strong> {status?.from || "--"}</div>
+                  <div><strong style={{ color:ADMIN_THEME.text }}>To:</strong> {shownNames || `${selectedCount} students`}</div>
+                </div>
+                <div style={{ fontSize:12, fontWeight:700, color:ADMIN_THEME.textMuted, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6 }}>Message preview</div>
+                <div style={{ background:ADMIN_THEME.background, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:12, padding:"12px 14px", fontSize:13, color:ADMIN_THEME.text, whiteSpace:"pre-wrap", overflowWrap:"anywhere", maxHeight:180, overflowY:"auto", marginBottom:18 }}>
+                  {`Hi <name>,\n\n${adminEmailForm.message.trim()}`}
+                </div>
+                <div style={{ display:"flex", gap:10, justifyContent:"flex-end", flexWrap:"wrap" }}>
+                  <button onClick={() => setAdminEmailConfirm(false)} style={S.adminButton("default")}>Cancel</button>
+                  <button onClick={() => sendAdminEmail("selected", true)} disabled={adminEmailBusy} style={{ ...S.adminButton("run"), opacity:adminEmailBusy ? 0.6 : 1 }}>
+                    Send to {selectedCount} student{selectedCount === 1 ? "" : "s"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {adminEmailResult && (
+          <div role="dialog" aria-modal="true" onClick={() => setAdminEmailResult(null)} style={{ position:"fixed", inset:0, zIndex:2000, background:"rgba(17,24,39,0.55)", backdropFilter:"blur(4px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ width:"100%", maxWidth:420, background:ADMIN_THEME.card, borderRadius:16, boxShadow:"0 20px 50px rgba(0,0,0,0.25)", padding:24, textAlign:"center" }}>
+              <div style={{ width:56, height:56, margin:"0 auto 12px", borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:28, background:adminEmailResult.type === "error" ? "rgba(220,38,38,0.1)" : "rgba(22,163,74,0.1)" }}>
+                {adminEmailResult.type === "error" ? "⚠️" : "✅"}
+              </div>
+              <div style={{ fontSize:18, fontWeight:800, color:adminEmailResult.type === "error" ? ADMIN_THEME.error : ADMIN_THEME.text, marginBottom:6 }}>{adminEmailResult.title}</div>
+              <div style={{ fontSize:14, color:ADMIN_THEME.textSecondary, marginBottom:18, overflowWrap:"anywhere" }}>{adminEmailResult.text}</div>
+              <button onClick={() => setAdminEmailResult(null)} style={{ ...S.adminButton("run"), minWidth:120 }}>OK</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
