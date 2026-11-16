@@ -5383,14 +5383,7 @@ function CodingPlatform() {
           )}
         </div>
 
-        <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end" }}>
-          <label style={{ flex:"1 1 240px" }}>
-            <span style={S.adminFieldLabel}>Send a test to</span>
-            <input value={adminEmailForm.testTo} onChange={(e) => updateEmail({ testTo: e.target.value })} placeholder="you@example.com" style={S.adminInput} />
-          </label>
-          <button onClick={() => sendAdminEmail("test")} disabled={disabled} style={{ ...S.adminButton("default"), opacity:disabled ? 0.6 : 1 }}>
-            Send test
-          </button>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", justifyContent:"flex-end" }}>
           <button onClick={() => sendAdminEmail("selected")} disabled={disabled || !selectedCount || remaining < 0} style={{ ...S.adminButton("run"), opacity:disabled || !selectedCount || remaining < 0 ? 0.6 : 1 }}>
             {sending ? `Sending ${job.sent}/${job.total}...` : `Send to ${selectedCount} selected student${selectedCount === 1 ? "" : "s"}`}
           </button>
