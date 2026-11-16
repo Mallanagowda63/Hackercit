@@ -594,6 +594,7 @@ prisma = {
   assessmentSubmission: new MongoModel('assessmentSubmission', 'AssessmentSubmission'),
   testFeedback: new MongoModel('testFeedback', 'TestFeedback'),
   monthlyChallenge: new MongoModel('monthlyChallenge', 'MonthlyChallenge'),
+  emailLog: new MongoModel('emailLog', 'EmailLog'),
   async $transaction(operations) {
     return Promise.all(operations);
   },

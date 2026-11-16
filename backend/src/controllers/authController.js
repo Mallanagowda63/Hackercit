@@ -3,7 +3,7 @@ const { getAdminEmail, getAdminPassword, effectiveRole } = require('../lib/admin
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const nodemailer = require('nodemailer');
+const { sendEmail, isMailConfigured } = require('../lib/mailer');
 const { getBadgePresentation, syncBadgesForUsers, syncUserBadge } = require('../lib/badgeService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
@@ -57,32 +57,14 @@ function serializeUser(user) {
 }
 
 async function sendVerificationEmail(user, token) {
-  // Simple transporter; in prod use SES/SendGrid or SMTP credentials
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    tls: { rejectUnauthorized: false },
-  });
-
   const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify?token=${token}`;
 
-  const msg = {
-    from: process.env.SMTP_USER || 'no-reply@hackercit.local',
-    to: user.email,
-    subject: 'Verify your email',
-    text: `Click to verify: ${verifyUrl}`,
-  };
-
   try {
-    if (!process.env.SMTP_USER) {
+    if (!isMailConfigured()) {
       console.log('Verification URL (dev):', verifyUrl);
       return;
     }
-    await transporter.sendMail(msg);
+    await sendEmail({ to: user.email, subject: 'Verify your email', text: `Click to verify: ${verifyUrl}` });
   } catch (err) {
     console.error('email send fail', err);
   }

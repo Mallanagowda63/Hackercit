@@ -1204,6 +1204,7 @@ function CodingPlatform() {
     { id: "malpractice", label: "🚨 Malpractice Reports" },
     { id: "leaderboard", label: "Leaderboard" },
     { id: "challenge", label: "🏆 Monthly Challenge" },
+    { id: "feedback", label: "💬 Feedback" },
     { id: "students", label: "Student List" },
     { id: "profile", label: "Profile" },
   ];
@@ -1477,6 +1478,20 @@ function CodingPlatform() {
   const [adminChallengeMessage, setAdminChallengeMessage] = useState(null);
   const [adminChallengeProblemSearch, setAdminChallengeProblemSearch] = useState("");
   const [adminChallengeDetail, setAdminChallengeDetail] = useState(null);
+  const [adminEmailStatus, setAdminEmailStatus] = useState(null);
+  const [adminEmailForm, setAdminEmailForm] = useState({ subject: "", message: "", testTo: "" });
+  const [adminEmailBusy, setAdminEmailBusy] = useState(false);
+  const [adminEmailMessage, setAdminEmailMessage] = useState(null);
+  const [adminEmailSelected, setAdminEmailSelected] = useState([]);
+  const [adminEmailPickerSearch, setAdminEmailPickerSearch] = useState("");
+  const [adminEmailDepartment, setAdminEmailDepartment] = useState("");
+  const [adminEmailHideSent, setAdminEmailHideSent] = useState(true);
+  const [adminFeedback, setAdminFeedback] = useState(null);
+  const [adminFeedbackLoading, setAdminFeedbackLoading] = useState(false);
+  const [adminFeedbackError, setAdminFeedbackError] = useState("");
+  const [adminFeedbackNewCount, setAdminFeedbackNewCount] = useState(0);
+  const [adminFeedbackFilter, setAdminFeedbackFilter] = useState("all");
+  const [adminFeedbackSearch, setAdminFeedbackSearch] = useState("");
   const [consoleOpen, setConsoleOpen]         = useState(false);
   const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [errorBanner, setErrorBanner]         = useState(null);
@@ -3130,6 +3145,144 @@ function CodingPlatform() {
       setAdminChallengeDetail(data.challenge || null);
     } catch (error) {
       setAdminChallengeMessage({ type: "error", text: error.message || "Unable to load the standings." });
+    }
+  };
+
+  // ── Student feedback (admin) ──
+  const FEEDBACK_RATING_META = {
+    1: { emoji: "😞", label: "Poor" },
+    2: { emoji: "😕", label: "Okay" },
+    3: { emoji: "😐", label: "Good" },
+    4: { emoji: "🙂", label: "Very good" },
+    5: { emoji: "🤩", label: "Excellent" },
+  };
+
+  const loadAdminFeedbackCount = async () => {
+    try {
+      const data = await performApiRequest("/api/admin/feedback/new-count");
+      setAdminFeedbackNewCount(Number(data.newCount) || 0);
+    } catch (_) {
+      // The badge is optional; ignore failures.
+    }
+  };
+
+  // Keep the "new feedback" badge on the tab fresh while the admin portal is open.
+  useEffect(() => {
+    if (view !== "admin" || !authToken || userRole !== "admin") return undefined;
+    loadAdminFeedbackCount();
+    const timer = setInterval(loadAdminFeedbackCount, 60000);
+    return () => clearInterval(timer);
+  }, [view, authToken, userRole]);
+
+  // Opening the Feedback tab loads everything, keeps the new ones highlighted for this visit,
+  // and marks them seen so the badge clears.
+  const loadAdminFeedback = async () => {
+    setAdminFeedbackLoading(true);
+    setAdminFeedbackError("");
+    try {
+      const data = await performApiRequest("/api/admin/feedback");
+      setAdminFeedback(data);
+      const newIds = (data.feedback || []).filter((row) => row.isNew).map((row) => row.id);
+      if (newIds.length) {
+        await performApiRequest("/api/admin/feedback/mark-seen", { method: "POST", body: JSON.stringify({ ids: newIds }) });
+      }
+      setAdminFeedbackNewCount(0);
+    } catch (error) {
+      setAdminFeedbackError(error.message || "Unable to load feedback.");
+    } finally {
+      setAdminFeedbackLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (view !== "admin" || adminTab !== "feedback" || !authToken) return;
+    loadAdminFeedback();
+  }, [view, adminTab, authToken]);
+
+  // ── Email all students (admin) ──
+  const loadAdminEmailStatus = async () => {
+    try {
+      const data = await performApiRequest("/api/admin/announcements/status");
+      setAdminEmailStatus(data);
+      setAdminEmailForm((prev) => (prev.testTo ? prev : { ...prev, testTo: data.adminEmail || "" }));
+      return data;
+    } catch (error) {
+      setAdminEmailMessage({ type: "error", text: error.message || "Unable to load the email status." });
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (view !== "admin" || adminTab !== "challenge" || !authToken) return;
+    loadAdminEmailStatus();
+  }, [view, adminTab, authToken]);
+
+  // While a send is running, refresh progress every 2 seconds.
+  useEffect(() => {
+    if (view !== "admin" || adminTab !== "challenge" || adminEmailStatus?.job?.status !== "SENDING") return undefined;
+    const timer = setTimeout(loadAdminEmailStatus, 2000);
+    return () => clearTimeout(timer);
+  }, [view, adminTab, adminEmailStatus]);
+
+  const prefillChallengeEmail = (challenge) => {
+    const problemCount = challenge.problems?.length || 0;
+    const prizes = (challenge.prizes || []).map((prize, index) => `${PRIZE_MEDALS[index] || ""} Rank ${index + 1}: ${prize}`).join("\n");
+    const lines = [
+      `The ${challenge.title} is ${challenge.status === "LIVE" ? "live now" : "coming up"} on DevOrbit!`,
+      `Dates: ${formatChallengeDate(challenge.startsAt)} to ${formatChallengeDate(challenge.endsAt)}`,
+      problemCount ? `Problems: ${problemCount}` : "",
+      challenge.description ? `\n${challenge.description}` : "",
+      prizes ? `\nPrizes for the top 3:\n${prizes}` : "",
+      "\nLog in, open the challenge and start solving. Good luck!",
+    ].filter(Boolean);
+    setAdminEmailForm((prev) => ({ ...prev, subject: `${challenge.title} - you're invited!`, message: lines.join("\n") }));
+    setAdminEmailMessage(null);
+    document.getElementById("admin-email-students")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const sendAdminEmail = async (mode) => {
+    const subject = adminEmailForm.subject.trim();
+    const message = adminEmailForm.message.trim();
+    if (!subject || !message) {
+      setAdminEmailMessage({ type: "error", text: "Enter a subject and a message." });
+      return;
+    }
+    const isTest = mode === "test";
+    if (isTest && !adminEmailForm.testTo.trim()) {
+      setAdminEmailMessage({ type: "error", text: "Enter the email address for the test." });
+      return;
+    }
+    const maxRecipients = adminEmailStatus?.maxRecipients || 100;
+    const selectedCount = adminEmailSelected.length;
+    if (!isTest) {
+      if (!selectedCount) {
+        setAdminEmailMessage({ type: "error", text: "Select the students to email." });
+        return;
+      }
+      if (selectedCount > maxRecipients) {
+        setAdminEmailMessage({ type: "error", text: `You can email at most ${maxRecipients} students at a time.` });
+        return;
+      }
+      if (!window.confirm(`Send "${subject}" to the ${selectedCount} selected students now? This cannot be undone.`)) return;
+    }
+
+    setAdminEmailBusy(true);
+    setAdminEmailMessage(null);
+    try {
+      await performApiRequest("/api/admin/announcements/email", {
+        method: "POST",
+        body: JSON.stringify({ subject, message, ...(isTest ? { testTo: adminEmailForm.testTo.trim() } : { userIds: adminEmailSelected }) }),
+      });
+      setAdminEmailMessage({
+        type: "success",
+        text: isTest ? `Test email sent to ${adminEmailForm.testTo.trim()}. Check the inbox (and spam folder).` : `Sending to ${selectedCount} students...`,
+      });
+      if (!isTest) setAdminEmailSelected([]);
+      await loadAdminEmailStatus();
+    } catch (error) {
+      setAdminEmailMessage({ type: "error", text: error.message || "Unable to send the email." });
+    } finally {
+      setAdminEmailBusy(false);
     }
   };
 
@@ -4968,6 +5121,247 @@ function CodingPlatform() {
     );
   };
 
+  const renderAdminFeedback = () => {
+    const data = adminFeedback;
+    const rows = data?.feedback || [];
+    const search = adminFeedbackSearch.trim().toLowerCase();
+    const visible = rows.filter((row) => {
+      if (adminFeedbackFilter === "new" && !row.isNew) return false;
+      if (adminFeedbackFilter === "comments" && !row.comment) return false;
+      if (/^[1-5]$/.test(adminFeedbackFilter) && row.rating !== Number(adminFeedbackFilter)) return false;
+      if (!search) return true;
+      return [row.name, row.email, row.usn, row.department, row.testTitle, row.comment].some((value) => String(value || "").toLowerCase().includes(search));
+    });
+    const newCount = rows.filter((row) => row.isNew).length;
+    const ratingCounts = [5, 4, 3, 2, 1].map((value) => ({ value, count: rows.filter((row) => row.rating === value).length }));
+    const average = data?.averageRating;
+    const formatWhen = (value) => (value ? new Date(value).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+    const chip = (id, label) => (
+      <button key={id} onClick={() => setAdminFeedbackFilter(id)} style={{ ...S.adminButton(adminFeedbackFilter === id ? "run" : "default"), padding:"6px 12px", fontSize:13 }}>{label}</button>
+    );
+
+    return (
+      <div style={{ display:"grid", gap:18 }}>
+        <div style={S.adminCard}>
+          <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"flex-start" }}>
+            <div>
+              <div style={S.adminSectionTitle}>Student Feedback</div>
+              <div style={{ fontSize:24, fontWeight:800, color:ADMIN_THEME.text }}>
+                {data ? `${data.count} responses` : "Feedback"}
+                {newCount > 0 && <span style={{ marginLeft:10, fontSize:13, background:ADMIN_THEME.error, color:"#fff", borderRadius:999, padding:"3px 10px", verticalAlign:"middle" }}>{newCount} new</span>}
+              </div>
+              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14, marginTop:4 }}>
+                Ratings and comments students leave after finishing a test. New ones are highlighted; the tab shows a badge when more arrive.
+              </div>
+            </div>
+            <button onClick={loadAdminFeedback} disabled={adminFeedbackLoading} style={{ ...S.adminButton("default"), opacity:adminFeedbackLoading ? 0.6 : 1 }}>
+              {adminFeedbackLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {data && data.count > 0 && (
+            <div style={{ display:"flex", gap:18, flexWrap:"wrap", alignItems:"center", marginTop:16 }}>
+              <div style={{ fontSize:30, fontWeight:800, color:ADMIN_THEME.text }}>
+                {average != null ? `${FEEDBACK_RATING_META[Math.round(average)]?.emoji || ""} ${average}` : "--"}
+                <span style={{ fontSize:13, color:ADMIN_THEME.textMuted, fontWeight:600 }}> / 5 average</span>
+              </div>
+              <div style={{ display:"flex", gap:12, flexWrap:"wrap", fontSize:13, color:ADMIN_THEME.textSecondary }}>
+                {ratingCounts.map(({ value, count }) => (
+                  <span key={value}>{FEEDBACK_RATING_META[value].emoji} {FEEDBACK_RATING_META[value].label}: <strong style={{ color:ADMIN_THEME.text }}>{count}</strong></span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {adminFeedbackError && <div style={S.adminAlert("error")}>{adminFeedbackError}</div>}
+
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+          {chip("all", "All")}
+          {chip("new", `New (${newCount})`)}
+          {chip("comments", "With comments")}
+          {[5, 4, 3, 2, 1].map((value) => chip(String(value), `${FEEDBACK_RATING_META[value].emoji} ${value}`))}
+          <input value={adminFeedbackSearch} onChange={(e) => setAdminFeedbackSearch(e.target.value)} placeholder="Search student, USN, test, comment" style={{ ...S.adminInput, width:isPhone ? "100%" : 280, padding:"8px 12px", marginLeft:isPhone ? 0 : "auto" }} />
+        </div>
+
+        <div style={{ display:"grid", gap:10 }}>
+          {visible.length ? visible.map((row) => {
+            const meta = FEEDBACK_RATING_META[row.rating] || { emoji: "❔", label: "No rating" };
+            return (
+              <div key={row.id} style={{ ...S.adminCard, padding:"14px 16px", display:"flex", gap:14, alignItems:"flex-start", borderLeft:row.isNew ? `4px solid ${ADMIN_THEME.primary}` : undefined, background:row.isNew ? ADMIN_THEME.primaryLight : undefined }}>
+                <div style={{ textAlign:"center", minWidth:56 }}>
+                  <div style={{ fontSize:30, lineHeight:1 }}>{meta.emoji}</div>
+                  <div style={{ fontSize:11, fontWeight:700, color:ADMIN_THEME.textSecondary, marginTop:4 }}>{meta.label}</div>
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+                    {row.isNew && <span style={{ background:ADMIN_THEME.primary, color:"#fff", borderRadius:999, padding:"1px 8px", fontSize:10, fontWeight:800, letterSpacing:"0.06em" }}>NEW</span>}
+                    <button type="button" onClick={() => row.userId && openStudentActivity(row.userId)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:ADMIN_THEME.primary, fontWeight:700, fontSize:14 }}>{row.name}</button>
+                    <span style={{ color:ADMIN_THEME.textMuted, fontSize:12 }}>{[row.usn, row.department].filter(Boolean).join(" · ")}</span>
+                    <span style={{ color:ADMIN_THEME.textMuted, fontSize:12, marginLeft:"auto" }}>{formatWhen(row.updatedAt)}</span>
+                  </div>
+                  <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, marginTop:2 }}>Test: <strong style={{ color:ADMIN_THEME.text }}>{row.testTitle}</strong></div>
+                  <div style={{ color:row.comment ? ADMIN_THEME.text : ADMIN_THEME.textMuted, fontSize:14, marginTop:8, whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>
+                    {row.comment || "No comment, rating only."}
+                  </div>
+                </div>
+              </div>
+            );
+          }) : (
+            <div style={{ ...S.adminCard, textAlign:"center", color:ADMIN_THEME.textMuted }}>
+              {adminFeedbackLoading ? "Loading feedback..." : rows.length ? "No feedback matches this filter." : "No feedback yet. Students can rate a test right after they finish it."}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderAdminEmailCard = () => {
+    const status = adminEmailStatus;
+    const job = status?.job;
+    const sending = job?.status === "SENDING";
+    const configured = status ? status.configured : true;
+    const maxRecipients = status?.maxRecipients || 100;
+    const students = status?.students || [];
+    const updateEmail = (changes) => setAdminEmailForm((prev) => ({ ...prev, ...changes }));
+    const jobLabel = { SENDING: "Sending", DONE: "Sent", PARTIAL: "Partly sent", FAILED: "Failed" };
+    const disabled = adminEmailBusy || sending || !configured;
+
+    // Students who already received an email with exactly this subject.
+    const subjectKey = adminEmailForm.subject.trim().toLowerCase();
+    const alreadySent = new Map();
+    if (subjectKey) {
+      (status?.history || []).forEach((log) => {
+        if (String(log.subject || "").trim().toLowerCase() !== subjectKey) return;
+        log.userIds.forEach((id) => { if (!alreadySent.has(id)) alreadySent.set(id, log.sentAt); });
+      });
+    }
+
+    const selectedSet = new Set(adminEmailSelected);
+    const departments = [...new Set(students.map((student) => student.department).filter(Boolean))].sort();
+    const search = adminEmailPickerSearch.trim().toLowerCase();
+    const visible = students.filter((student) => {
+      if (adminEmailDepartment && student.department !== adminEmailDepartment) return false;
+      if (adminEmailHideSent && alreadySent.has(student.id)) return false;
+      if (!search) return true;
+      return [student.name, student.email, student.usn].some((value) => String(value || "").toLowerCase().includes(search));
+    });
+    const selectedCount = adminEmailSelected.length;
+    const remaining = maxRecipients - selectedCount;
+
+    const toggleStudent = (id) => {
+      if (selectedSet.has(id)) {
+        setAdminEmailSelected(adminEmailSelected.filter((item) => item !== id));
+      } else if (remaining > 0) {
+        setAdminEmailSelected([...adminEmailSelected, id]);
+      } else {
+        setAdminEmailMessage({ type: "error", text: `You can select at most ${maxRecipients} students per email.` });
+      }
+    };
+    // Adds visible, not-yet-selected students until the limit is reached.
+    const fillFromVisible = () => {
+      const additions = visible.filter((student) => !selectedSet.has(student.id)).slice(0, Math.max(0, remaining)).map((student) => student.id);
+      setAdminEmailSelected([...adminEmailSelected, ...additions]);
+      setAdminEmailMessage(null);
+    };
+    const notSentCount = subjectKey ? students.filter((student) => !alreadySent.has(student.id)).length : students.length;
+
+    return (
+      <div id="admin-email-students" style={S.adminCard}>
+        <div style={S.adminSectionTitle}>Email Students</div>
+        <div style={{ fontSize:20, fontWeight:800, color:ADMIN_THEME.text, marginBottom:6 }}>Announce a challenge by email</div>
+        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14, marginBottom:14 }}>
+          Pick up to {maxRecipients} students per email{status?.from ? `, sent from ${status.from}` : ""}. Each student gets their own email starting with "Hi &lt;name&gt;," and a button to open DevOrbit. Students who already got an email with the same subject are marked, so you can send to the next {maxRecipients} tomorrow. Use "Email students" on a challenge below to fill in the message.
+        </div>
+
+        {!configured && (
+          <div style={{ marginBottom:14, padding:"10px 14px", borderRadius:10, fontSize:13, fontWeight:600, color:ADMIN_THEME.error, background:"rgba(220,38,38,0.08)", border:"1px solid rgba(220,38,38,0.25)" }}>
+            Email is not set up on the server. Add RESEND_API_KEY and MAIL_FROM to backend/.env and restart.
+          </div>
+        )}
+        {adminEmailMessage && (
+          <div style={{ marginBottom:14, padding:"10px 14px", borderRadius:10, fontSize:13, fontWeight:600, color:adminEmailMessage.type === "error" ? ADMIN_THEME.error : ADMIN_THEME.success, background:adminEmailMessage.type === "error" ? "rgba(220,38,38,0.08)" : "rgba(22,163,74,0.08)", border:`1px solid ${adminEmailMessage.type === "error" ? "rgba(220,38,38,0.25)" : "rgba(22,163,74,0.25)"}` }}>
+            {adminEmailMessage.text}
+          </div>
+        )}
+        {job && (
+          <div style={{ marginBottom:14, padding:"10px 14px", borderRadius:10, fontSize:13, color:ADMIN_THEME.text, border:`1px solid ${ADMIN_THEME.border}` }}>
+            <strong>{jobLabel[job.status] || job.status}:</strong> "{job.subject}" · {job.sent} of {job.total} sent{job.failed ? ` · ${job.failed} failed` : ""}
+            {job.errors?.length > 0 && <div style={{ color:ADMIN_THEME.error, marginTop:6 }}>{job.errors.join(" | ")}</div>}
+          </div>
+        )}
+
+        <label style={{ display:"block", marginBottom:12 }}>
+          <span style={S.adminFieldLabel}>Subject</span>
+          <input value={adminEmailForm.subject} maxLength={150} onChange={(e) => updateEmail({ subject: e.target.value })} placeholder="e.g. Weekly Challenge #3 is live!" style={S.adminInput} />
+        </label>
+        <label style={{ display:"block", marginBottom:12 }}>
+          <span style={S.adminFieldLabel}>Message</span>
+          <textarea value={adminEmailForm.message} maxLength={5000} onChange={(e) => updateEmail({ message: e.target.value })} placeholder="What the challenge is, the dates, prizes and how to join." style={{ ...S.adminTextarea, minHeight:160 }} />
+        </label>
+
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:8 }}>
+          <span style={S.adminFieldLabel}>
+            Recipients: <strong style={{ color:remaining < 0 ? ADMIN_THEME.error : ADMIN_THEME.text }}>{selectedCount} / {maxRecipients} selected</strong>
+            {subjectKey && ` · ${students.length - notSentCount} already got this subject · ${notSentCount} not yet`}
+          </span>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <button onClick={fillFromVisible} disabled={remaining <= 0 || !visible.length} style={{ ...S.adminButton("default"), padding:"6px 10px", opacity:remaining <= 0 || !visible.length ? 0.6 : 1 }}>
+              Select next {Math.max(0, Math.min(remaining, visible.filter((student) => !selectedSet.has(student.id)).length))}
+            </button>
+            <button onClick={() => setAdminEmailSelected([])} disabled={!selectedCount} style={{ ...S.adminButton("default"), padding:"6px 10px", opacity:selectedCount ? 1 : 0.6 }}>
+              Clear
+            </button>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:8, alignItems:"center" }}>
+          <input value={adminEmailPickerSearch} onChange={(e) => setAdminEmailPickerSearch(e.target.value)} placeholder="Search name, email or USN" style={{ ...S.adminInput, flex:"1 1 200px", padding:"8px 12px" }} />
+          <select value={adminEmailDepartment} onChange={(e) => setAdminEmailDepartment(e.target.value)} style={{ ...S.adminInput, flex:"0 1 180px", padding:"8px 12px" }}>
+            <option value="">All departments</option>
+            {departments.map((department) => <option key={department} value={department}>{department}</option>)}
+          </select>
+          <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, color:ADMIN_THEME.textSecondary, cursor:"pointer" }}>
+            <input type="checkbox" checked={adminEmailHideSent} onChange={(e) => setAdminEmailHideSent(e.target.checked)} />
+            Hide students who already got this subject
+          </label>
+        </div>
+        <div style={{ maxHeight:300, overflowY:"auto", border:`1px solid ${ADMIN_THEME.border}`, borderRadius:12, marginBottom:14 }}>
+          {visible.length ? visible.map((student) => {
+            const checked = selectedSet.has(student.id);
+            const sentAt = alreadySent.get(student.id);
+            return (
+              <label key={student.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderTop:`1px solid ${ADMIN_THEME.divider}`, cursor:"pointer", background:checked ? ADMIN_THEME.primaryLight : "transparent", fontSize:13 }}>
+                <input type="checkbox" checked={checked} onChange={() => toggleStudent(student.id)} />
+                <span style={{ flex:"1 1 140px", minWidth:0, color:ADMIN_THEME.text, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{student.name}</span>
+                {!isPhone && <span style={{ flex:"1 1 200px", minWidth:0, color:ADMIN_THEME.textSecondary, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{student.email}</span>}
+                <span style={{ color:ADMIN_THEME.textMuted, minWidth:60 }}>{student.department || "--"}</span>
+                {sentAt && <span style={{ color:ADMIN_THEME.success, fontSize:11, fontWeight:700 }}>✓ sent {new Date(sentAt).toLocaleDateString("en-IN", { day:"numeric", month:"short" })}</span>}
+              </label>
+            );
+          }) : (
+            <div style={{ padding:16, color:ADMIN_THEME.textMuted, fontSize:13 }}>
+              {status ? (students.length ? "No students match this filter." : "No students yet.") : "Loading students..."}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end" }}>
+          <label style={{ flex:"1 1 240px" }}>
+            <span style={S.adminFieldLabel}>Send a test to</span>
+            <input value={adminEmailForm.testTo} onChange={(e) => updateEmail({ testTo: e.target.value })} placeholder="you@example.com" style={S.adminInput} />
+          </label>
+          <button onClick={() => sendAdminEmail("test")} disabled={disabled} style={{ ...S.adminButton("default"), opacity:disabled ? 0.6 : 1 }}>
+            Send test
+          </button>
+          <button onClick={() => sendAdminEmail("selected")} disabled={disabled || !selectedCount || remaining < 0} style={{ ...S.adminButton("run"), opacity:disabled || !selectedCount || remaining < 0 ? 0.6 : 1 }}>
+            {sending ? `Sending ${job.sent}/${job.total}...` : `Send to ${selectedCount} selected student${selectedCount === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderAdminChallenges = () => {
     const form = adminChallengeForm || createEmptyChallengeForm();
     const updateForm = (changes) => setAdminChallengeForm({ ...form, ...changes });
@@ -5057,6 +5451,8 @@ function CodingPlatform() {
           </div>
         </div>
 
+        {renderAdminEmailCard()}
+
         <div style={S.adminTableWrap}>
           <table style={{ width:"100%", borderCollapse:"collapse" }}>
             <thead>
@@ -5083,6 +5479,7 @@ function CodingPlatform() {
                     <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                       <button onClick={() => viewAdminChallengeStandings(challenge)} style={{ ...S.adminButton("default"), padding:"6px 10px" }}>Standings</button>
                       <button onClick={() => editAdminChallenge(challenge)} style={{ ...S.adminButton("default"), padding:"6px 10px" }}>Edit</button>
+                      <button onClick={() => prefillChallengeEmail(challenge)} style={{ ...S.adminButton("default"), padding:"6px 10px" }}>Email students</button>
                       <button onClick={() => deleteAdminChallenge(challenge)} style={{ ...S.adminButton("default"), padding:"6px 10px", color:ADMIN_THEME.error }}>Delete</button>
                     </div>
                   </td>
@@ -8678,6 +9075,9 @@ function CodingPlatform() {
             {adminTabs.map((tab) => (
               <button key={tab.id} onClick={() => setAdminTab(tab.id)} style={S.adminTabButton(adminTab === tab.id)}>
                 {tab.label}
+                {tab.id === "feedback" && adminFeedbackNewCount > 0 && (
+                  <span style={{ marginLeft:6, background:ADMIN_THEME.error, color:"#fff", borderRadius:999, padding:"1px 7px", fontSize:11, fontWeight:800 }}>{adminFeedbackNewCount} new</span>
+                )}
               </button>
             ))}
           </div>
@@ -9613,6 +10013,7 @@ function CodingPlatform() {
           {adminTab === "malpractice" && renderAdminMalpracticeReports()}
           {adminTab === "leaderboard" && renderAdminLeaderboard()}
           {adminTab === "challenge" && renderAdminChallenges()}
+          {adminTab === "feedback" && renderAdminFeedback()}
           {adminTab === "students" && renderStudentList()}
           {adminTab === "monitor" && renderLiveMonitor()}
           {adminTab === "profile" && renderAdminProfile()}
