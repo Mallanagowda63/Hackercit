@@ -142,6 +142,10 @@ function sendError(res, error, fallback) {
   if (error instanceof Anthropic.AuthenticationError) return res.status(503).json({ error: 'The AI key on the server is not valid. Ask the admin to check it.' });
   if (error instanceof Anthropic.BadRequestError) {
     console.error('[ai-hire] bad request', error.message);
+    // An empty prepaid balance comes back as a 400 invalid_request_error; only its message tells it apart.
+    if (/credit balance/i.test(String(error.message))) {
+      return res.status(503).json({ error: 'AI Hire is paused right now (the AI account needs more credit). Please tell your admin.' });
+    }
     return res.status(400).json({ error: 'The AI could not read this input. Try shorter text or a clearer photo.' });
   }
   if (error instanceof Anthropic.APIConnectionError) return res.status(502).json({ error: 'Could not reach the AI service. Please try again.' });
