@@ -1614,6 +1614,10 @@ function CodingPlatform() {
   const [aiHireSpeaking, setAiHireSpeaking]   = useState(false);
   const [aiHireVoiceOn, setAiHireVoiceOn]     = useState(true);
   const [aiHireLeaveOpen, setAiHireLeaveOpen] = useState(false);
+  const [aiHireListening, setAiHireListening] = useState(false);
+  const aiHireRecognitionRef = useRef(null);
+  const aiHireListenWantedRef = useRef(false);
+  const aiHireDraftRef = useRef("");
   const aiHireStreamRef = useRef(null);
   const aiHireVideoRef = useRef(null);
   const aiHireLastWarningRef = useRef(0);
@@ -3568,7 +3572,15 @@ function CodingPlatform() {
       return false;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" }, audio: false });
+      const video = { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" };
+      let stream;
+      try {
+        // Asking for the microphone here too means speaking answers later needs no new permission prompt.
+        stream = await navigator.mediaDevices.getUserMedia({ video, audio: true });
+        stream.getAudioTracks().forEach((track) => { track.stop(); stream.removeTrack(track); });
+      } catch (_) {
+        stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      }
       aiHireStreamRef.current = stream;
       stream.getVideoTracks().forEach((track) => {
         track.onended = () => { aiHireStreamRef.current = null; setAiHireCamOn(false); setAiHireCamLost(true); };
@@ -3647,7 +3659,7 @@ function CodingPlatform() {
     if (view !== "aihire" || aiHireStep !== "interview") return undefined;
     const warn = () => {
       const now = Date.now();
-      if (now - aiHireLastWarningRef.current < 1500) return; // blur + hidden fire together
+      if (now - aiHireLastWarningRef.current < 1500) return; // blur + hidden fire together (or mic just started)
       aiHireLastWarningRef.current = now;
       setAiHireWarnings((count) => count + 1);
     };
@@ -3677,6 +3689,86 @@ function CodingPlatform() {
     }
     setAiHireNotice(`Warning ${aiHireWarnings} of ${AI_HIRE_MAX_WARNINGS}: stay on this page. Switching tabs, windows or apps is not allowed during the interview.`);
   }, [aiHireWarnings]);
+
+  // Speaking answers: the browser's speech recognition (Chrome / Edge) turns speech into text in the
+  // answer box. Nothing is recorded by DevOrbit.
+  const AiHireSpeechRecognition = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+  const stopAiHireListening = () => {
+    aiHireListenWantedRef.current = false;
+    const recognition = aiHireRecognitionRef.current;
+    aiHireRecognitionRef.current = null;
+    if (recognition) {
+      recognition.onend = null;
+      try { recognition.stop(); } catch (_) { /* already stopped */ }
+    }
+    setAiHireListening(false);
+  };
+
+  const startAiHireListening = () => {
+    if (!AiHireSpeechRecognition) { setAiHireError("Speaking answers works in Chrome or Edge. Please type your answer here."); return; }
+    stopAiHireVoice();
+    setAiHireError("");
+    aiHireListenWantedRef.current = true;
+    // Opening the microphone can briefly move focus; do not count that as leaving the page.
+    aiHireLastWarningRef.current = Date.now() + 3000;
+    const startSession = () => {
+      const recognition = new AiHireSpeechRecognition();
+      recognition.lang = "en-IN";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      // New speech is added after whatever is already in the answer box.
+      const current = aiHireDraftRef.current || "";
+      const base = current && !/\s$/.test(current) ? `${current} ` : current;
+      recognition.onresult = (event) => {
+        let finalText = "";
+        let interim = "";
+        for (let i = 0; i < event.results.length; i += 1) {
+          const piece = event.results[i][0].transcript;
+          if (event.results[i].isFinal) finalText += piece;
+          else interim += piece;
+        }
+        setAiHireDraft(`${base}${finalText}${interim}`.slice(0, 5000));
+      };
+      recognition.onerror = (event) => {
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          aiHireListenWantedRef.current = false;
+          setAiHireError("Microphone access is blocked. Allow the microphone in the address bar, or type your answer.");
+        } else if (event.error === "network") {
+          aiHireListenWantedRef.current = false;
+          setAiHireError("Speech to text needs an internet connection. Please type your answer.");
+        }
+      };
+      // Chrome stops after a pause; keep listening until the student presses Stop.
+      recognition.onend = () => {
+        if (aiHireListenWantedRef.current && aiHireRecognitionRef.current === recognition) {
+          try { startSession(); } catch (_) { setAiHireListening(false); }
+        } else {
+          setAiHireListening(false);
+        }
+      };
+      aiHireRecognitionRef.current = recognition;
+      recognition.start();
+    };
+    try {
+      startSession();
+      setAiHireListening(true);
+    } catch (_) {
+      aiHireListenWantedRef.current = false;
+      setAiHireError("Could not start the microphone. Please type your answer.");
+    }
+  };
+
+  useEffect(() => { aiHireDraftRef.current = aiHireDraft; }, [aiHireDraft]);
+
+  // Stop listening when the question changes, the interview ends or the student leaves the page.
+  useEffect(() => {
+    if (aiHireListenWantedRef.current) stopAiHireListening();
+  }, [view, aiHireStep, aiHireTurns.length, aiHireBusy === "evaluate"]);
+  useEffect(() => () => {
+    aiHireListenWantedRef.current = false;
+    try { aiHireRecognitionRef.current?.stop(); } catch (_) { /* ignore */ }
+  }, []);
 
   const blockAiHirePaste = (e) => {
     e.preventDefault();
@@ -3737,7 +3829,8 @@ function CodingPlatform() {
     const question = aiHirePlan.questions[index];
     if (!question) return;
     const answer = skip ? "" : aiHireDraft.trim();
-    if (!skip && answer.length < 3) { setAiHireError("Type your answer first, or press Skip."); return; }
+    if (!skip && answer.length < 3) { setAiHireError("Speak or type your answer first, or press Skip."); return; }
+    stopAiHireListening();
     stopAiHireVoice();
     setAiHireError("");
     setAiHireBusy("evaluate");
@@ -11926,7 +12019,8 @@ function CodingPlatform() {
             <div style={{ color:C.text, fontWeight:600 }}>Interview rules</div>
             <div>Your camera must stay on. It is only shown on your screen: no photos or video are taken, saved or sent.</div>
             <div>Stay on this page. Switching tabs, windows or apps gives a warning; after {AI_HIRE_MAX_WARNINGS} warnings the interview ends.</div>
-            <div>Copy and paste are turned off. Type your answers in your own words.</div>
+            <div>Answer by speaking or typing, in your own words. Copy and paste are turned off.</div>
+            <div>Allow the camera and the microphone when your browser asks. Speech is turned into text by your browser's speech service; DevOrbit does not record your voice.</div>
           </div>
           {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
           <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
@@ -12048,11 +12142,48 @@ function CodingPlatform() {
 
             {!turn && (
               <div style={{ ...card, display:"grid", gap:14 }}>
-                <label style={{ ...label, marginBottom:0 }} htmlFor="aihire-answer">Your answer</label>
+                <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                  <label style={{ ...label, marginBottom:0 }} htmlFor="aihire-answer">Your answer</label>
+                  <span style={{ fontSize:12.5, color:C.dim }}>Speak or type</span>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap", padding:"14px 16px", borderRadius:10, background:aiHireListening ? "rgba(229,87,95,0.08)" : "#141414", border:`1px solid ${aiHireListening ? "rgba(229,87,95,0.45)" : C.border}`, transition:"background 0.2s, border-color 0.2s" }}>
+                  <button
+                    type="button"
+                    onClick={() => (aiHireListening ? stopAiHireListening() : startAiHireListening())}
+                    disabled={Boolean(aiHireBusy) || aiHireCamLost}
+                    aria-pressed={aiHireListening}
+                    aria-label={aiHireListening ? "Stop speaking" : "Speak your answer"}
+                    style={{ position:"relative", width:56, height:56, borderRadius:"50%", border:"none", flexShrink:0, cursor:aiHireBusy || aiHireCamLost ? "not-allowed" : "pointer", background:aiHireListening ? C.red : C.accent, color:"#1a1009", display:"flex", alignItems:"center", justifyContent:"center", opacity:aiHireBusy || aiHireCamLost ? 0.5 : 1 }}
+                  >
+                    {aiHireListening && <span style={{ position:"absolute", inset:-6, borderRadius:"50%", border:`2px solid ${C.red}`, animation:"dvMicPulse 1.3s ease-out infinite" }} />}
+                    {aiHireListening ? (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                    ) : (
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v3" /></svg>
+                    )}
+                  </button>
+                  <div style={{ flex:"1 1 200px", minWidth:0 }}>
+                    <div style={{ fontSize:15, fontWeight:600, color:aiHireListening ? "#ffb0b0" : C.text, display:"flex", alignItems:"center", gap:8 }}>
+                      {aiHireListening ? "Listening... speak now" : "Speak your answer"}
+                      {aiHireListening && (
+                        <span aria-hidden="true" style={{ display:"inline-flex", gap:2, alignItems:"flex-end", height:14 }}>
+                          {[0, 1, 2, 3].map((bar) => <span key={bar} style={{ width:3, height:14, background:C.red, borderRadius:1, animation:`dvBars 0.55s ease-in-out ${bar * 0.12}s infinite alternate` }} />)}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize:12.5, color:C.muted, marginTop:3, lineHeight:1.5 }}>
+                      {!AiHireSpeechRecognition
+                        ? "Speaking works in Chrome or Edge. In this browser, please type your answer."
+                        : aiHireListening
+                          ? "Your words appear in the box below. Press the button again when you finish."
+                          : "Tap the mic and answer out loud in English. You can fix the text before submitting."}
+                    </div>
+                  </div>
+                </div>
                 <textarea id="aihire-answer" value={aiHireDraft} onChange={(e) => setAiHireDraft(e.target.value)} disabled={Boolean(aiHireBusy) || aiHireCamLost}
                   onPaste={blockAiHirePaste} onDrop={blockAiHirePaste} onCopy={(e) => e.preventDefault()} onCut={(e) => e.preventDefault()} spellCheck={false} autoComplete="off"
                   onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submitAiHireAnswer(false); } }}
-                  placeholder="Answer the way you would speak in an interview. Explain your thinking, give examples from your projects." style={{ ...input, minHeight:180 }} />
+                  placeholder={aiHireListening ? "Listening..." : "Your answer appears here when you speak, or type it. Explain your thinking and give examples from your projects."} style={{ ...input, minHeight:160 }} />
                 {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
                 <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
                   <button onClick={() => submitAiHireAnswer(false)} disabled={Boolean(aiHireBusy)} style={primary(Boolean(aiHireBusy))}>
@@ -12157,7 +12288,7 @@ function CodingPlatform() {
         {renderFullscreenGate()}
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, background:C.bg, color:C.text, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease" }}>
-          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
+          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvMicPulse { 0% { transform: scale(0.95); opacity: 0.8; } 100% { transform: scale(1.3); opacity: 0; } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
           <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("aihire")}</div>
           {aiHireBusy && <AiHireLoadingOverlay kind={aiHireBusy} />}
           {aiHireLeaveOpen && (
