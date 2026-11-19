@@ -1198,14 +1198,14 @@ function CodingPlatform() {
   ];
   const adminTabs = [
     { id: "overview", label: "Overview" },
-    { id: "monitor", label: "🟢 Live Monitor" },
-    { id: "questions", label: "Question Uploads" },
-    { id: "reports", label: "📊 Reports" },
-    { id: "malpractice", label: "🚨 Malpractice Reports" },
+    { id: "monitor", label: "Live monitor" },
+    { id: "questions", label: "Question uploads" },
+    { id: "reports", label: "Reports" },
+    { id: "malpractice", label: "Malpractice" },
     { id: "leaderboard", label: "Leaderboard" },
-    { id: "challenge", label: "🏆 Monthly Challenge" },
-    { id: "feedback", label: "💬 Feedback" },
-    { id: "students", label: "Student List" },
+    { id: "challenge", label: "Monthly challenge" },
+    { id: "feedback", label: "Feedback" },
+    { id: "students", label: "Students" },
     { id: "profile", label: "Profile" },
   ];
   const questionCategories = ["DSA", "SQL", "OOP", "Python", "Other"];
@@ -4740,28 +4740,28 @@ function CodingPlatform() {
     };
   };
   const ADMIN_THEME = {
-    background: "#F9FAFB",
+    background: "#F8F8F7",
     card: "#FFFFFF",
-    border: "#E5E7EB",
-    hoverBackground: "#F3F4F6",
-    primary: "#2563EB",
-    primaryHover: "#1D4ED8",
-    primaryLight: "#DBEAFE",
-    secondary: "#7C3AED",
-    secondaryHover: "#6D28D9",
-    text: "#111827",
-    textSecondary: "#4B5563",
-    textMuted: "#9CA3AF",
-    success: "#16A34A",
-    warning: "#D97706",
-    error: "#DC2626",
-    info: "#2563EB",
+    border: "#E7E5E4",
+    hoverBackground: "#F5F5F4",
+    primary: "#1D3FCF",
+    primaryHover: "#1733A8",
+    primaryLight: "#EEF2FD",
+    secondary: "#1C1917",
+    secondaryHover: "#000000",
+    text: "#1C1917",
+    textSecondary: "#57534E",
+    textMuted: "#A8A29E",
+    success: "#15803D",
+    warning: "#A15C07",
+    error: "#B42318",
+    info: "#1D3FCF",
     sidebarBackground: "#FFFFFF",
-    sidebarActive: "#DBEAFE",
-    buttonSecondary: "#F3F4F6",
-    divider: "#E5E7EB",
-    shadowSoft: "0 1px 3px rgba(0,0,0,0.05)",
-    shadowHover: "0 10px 25px rgba(0,0,0,0.05)",
+    sidebarActive: "#EEF2FD",
+    buttonSecondary: "#FFFFFF",
+    divider: "#EEEDEB",
+    shadowSoft: "none",
+    shadowHover: "0 6px 18px rgba(28,25,23,0.06)",
   };
 
   const getSubmissionLevelMeta = (level) => {
@@ -4858,7 +4858,7 @@ function CodingPlatform() {
   const compactGrid = "minmax(0, 1fr)";
   const S = {
     app:  { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:"#0a0a0f", color:"#e0e0e0", minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
-    adminApp: { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:ADMIN_THEME.background, color:ADMIN_THEME.text, minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
+    adminApp: { fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", background:ADMIN_THEME.background, color:ADMIN_THEME.text, minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
     nav:  { background:"#111118", borderBottom:"1px solid #1e1e2e", padding:`10px ${pageGutter}px`, display:"flex", alignItems:"center", minHeight:isPhone ? 60 : 72, gap:isPhone ? 10 : 24, position:"sticky", top:0, zIndex:100, flexWrap:"wrap" },
     adminNav: { background:ADMIN_THEME.sidebarBackground, borderBottom:`1px solid ${ADMIN_THEME.divider}`, boxShadow:ADMIN_THEME.shadowSoft, padding:`10px ${pageGutter}px`, display:"flex", alignItems:"center", minHeight:isPhone ? 60 : 72, gap:isPhone ? 10 : 24, position:"sticky", top:0, zIndex:100, flexWrap:"wrap" },
     adminNavTitle: { color:ADMIN_THEME.text, fontSize:15, fontWeight:700, fontFamily:"'Space Grotesk',sans-serif", letterSpacing:"0.03em" },
@@ -4889,26 +4889,23 @@ function CodingPlatform() {
     formWrap: { maxWidth:560, width:"100%", boxSizing:"border-box", margin:isPhone ? "24px auto 0" : "42px auto 0", background:"linear-gradient(180deg,#141422,#0d0d15)", border:"1px solid #25253b", borderRadius:isPhone ? 18 : 24, padding:isPhone ? "22px 16px 24px" : "28px 26px 30px", boxShadow:"0 18px 50px #00000045" },
     fieldLabel: { display:"block", marginBottom:8, color:"#8f93b4", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
     input: { width:"100%", boxSizing:"border-box", background:"#0f1018", border:"1px solid #26263d", color:"#eef0ff", borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif" },
-    adminFieldLabel: { display:"block", marginBottom:8, color:ADMIN_THEME.textSecondary, fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" },
-    adminInput: { width:"100%", boxSizing:"border-box", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, color:ADMIN_THEME.text, borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", fontFamily:"'Outfit','Space Grotesk',sans-serif", boxShadow:ADMIN_THEME.shadowSoft },
-    adminTextarea: { width:"100%", boxSizing:"border-box", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, color:ADMIN_THEME.text, borderRadius:12, padding:"13px 14px", fontSize:14, outline:"none", resize:"vertical", minHeight:120, fontFamily:"'Outfit','Space Grotesk',sans-serif", lineHeight:1.6, boxShadow:ADMIN_THEME.shadowSoft },
+    adminFieldLabel: { display:"block", marginBottom:6, color:ADMIN_THEME.textSecondary, fontSize:13, fontWeight:500, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif" },
+    adminInput: { width:"100%", boxSizing:"border-box", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, color:ADMIN_THEME.text, borderRadius:6, padding:"9px 12px", fontSize:14, outline:"none", fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif" },
+    adminTextarea: { width:"100%", boxSizing:"border-box", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, color:ADMIN_THEME.text, borderRadius:6, padding:"10px 12px", fontSize:14, outline:"none", resize:"vertical", minHeight:120, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", lineHeight:1.6 },
     adminButton: (variant) => ({
-      padding:"10px 18px",
-      borderRadius:8,
-      border:`1px solid ${ADMIN_THEME.divider}`,
+      padding:"9px 16px",
+      borderRadius:6,
       cursor:"pointer",
-      fontWeight:700,
-      fontSize:12.5,
-      fontFamily:"'Space Grotesk',sans-serif",
-      letterSpacing:"0.04em",
-      textTransform:"uppercase",
-      transition:"all 0.15s ease",
-      boxShadow:ADMIN_THEME.shadowSoft,
+      fontWeight:500,
+      fontSize:14,
+      fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif",
+      lineHeight:1.3,
+      transition:"background 0.15s ease, border-color 0.15s ease, color 0.15s ease",
       ...(variant === "run"
         ? { background:ADMIN_THEME.secondary, color:"#FFFFFF", border:`1px solid ${ADMIN_THEME.secondary}` }
         : variant === "submit"
           ? { background:ADMIN_THEME.primary, color:"#FFFFFF", border:`1px solid ${ADMIN_THEME.primary}` }
-          : { background:ADMIN_THEME.buttonSecondary, color:ADMIN_THEME.textSecondary, border:`1px solid ${ADMIN_THEME.divider}` }),
+          : { background:ADMIN_THEME.buttonSecondary, color:ADMIN_THEME.text, border:`1px solid ${ADMIN_THEME.border}` }),
     }),
     adminTabBar: { display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", padding:"10px", background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.divider}`, borderRadius:14, boxShadow:ADMIN_THEME.shadowSoft },
     adminTabButton: (active) => ({
@@ -4944,9 +4941,9 @@ function CodingPlatform() {
       boxShadow:"0 10px 24px rgba(0,0,0,0.16)",
     },
     adminAlert: (tone) => ({
-      borderRadius:14,
+      borderRadius:6,
       padding:"12px 14px",
-      fontSize:13,
+      fontSize:13.5,
       border:`1px solid ${tone === "warning"
         ? "rgba(217, 119, 6, 0.18)"
         : tone === "error"
@@ -4955,7 +4952,7 @@ function CodingPlatform() {
             ? "rgba(22, 163, 74, 0.18)"
             : "rgba(37, 99, 235, 0.18)"}`,
       background:tone === "warning"
-        ? "rgba(217, 119, 6, 0.08)"
+        ? "#FDF3E7"
         : tone === "error"
           ? "rgba(220, 38, 38, 0.08)"
           : tone === "success"
@@ -5001,15 +4998,15 @@ function CodingPlatform() {
       textTransform:"uppercase",
       fontFamily:"'Space Grotesk',sans-serif"
     }),
-    adminShell: { maxWidth:1440, margin:"0 auto", width:"100%", boxSizing:"border-box", padding:isPhone ? "18px 14px 32px" : `28px ${pageGutter}px 40px`, display:"grid", gap:isPhone ? 16 : 22 },
+    adminShell: { maxWidth:1240, margin:"0 auto", width:"100%", boxSizing:"border-box", padding:isPhone ? "18px 14px 32px" : `24px ${pageGutter}px 48px`, display:"grid", gap:isPhone ? 16 : 24 },
     adminCardGrid: { display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 150 : 220}px, 1fr))`, gap:isPhone ? 12 : 16 },
-    adminCard: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, padding:"18px 18px 20px", boxShadow:ADMIN_THEME.shadowSoft },
-    adminSectionTitle: { fontFamily:"'Space Grotesk',sans-serif", fontSize:12, fontWeight:700, color:ADMIN_THEME.textSecondary, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 },
+    adminCard: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:8, padding:isPhone ? "18px 16px" : "22px 24px" },
+    adminSectionTitle: { fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", fontSize:13, fontWeight:500, color:ADMIN_THEME.textSecondary, marginBottom:10 },
     adminGridTwo: { display:"grid", gridTemplateColumns:isCompact ? compactGrid : "1.35fr 0.95fr", gap:18, alignItems:"start" },
-    adminTableWrap: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:18, overflowX:"auto", boxShadow:ADMIN_THEME.shadowSoft },
-    adminTableHead: { padding:"14px 16px", textAlign:"left", whiteSpace:"nowrap", fontSize:11, color:ADMIN_THEME.textSecondary, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"'Space Grotesk',sans-serif", background:ADMIN_THEME.hoverBackground },
+    adminTableWrap: { background:ADMIN_THEME.card, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:8, overflowX:"auto" },
+    adminTableHead: { padding:"12px 16px", textAlign:"left", whiteSpace:"nowrap", fontSize:12, color:ADMIN_THEME.textSecondary, fontWeight:500, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", background:"#FAFAF9" },
     adminTableCell: { padding:"14px 16px", borderTop:`1px solid ${ADMIN_THEME.divider}`, fontSize:14, color:ADMIN_THEME.text },
-    adminSubCard: { background:ADMIN_THEME.hoverBackground, border:`1px solid ${ADMIN_THEME.border}`, borderRadius:14, padding:"14px" },
+    adminSubCard: { background:"#FAFAF9", border:`1px solid ${ADMIN_THEME.border}`, borderRadius:6, padding:"14px" },
   };
 
   const userBadge = currentUser.name
@@ -8614,20 +8611,47 @@ function CodingPlatform() {
 
 
 
+  const formatAdminStatus = (status) => {
+    const value = String(status || "DRAFT").toUpperCase();
+    return value.charAt(0) + value.slice(1).toLowerCase();
+  };
+  const adminStatusPill = (status) => {
+    const value = String(status || "DRAFT").toUpperCase();
+    const tone = value === "LIVE"
+      ? { color:"#15803D", background:"#ECFDF3" }
+      : value === "SCHEDULED"
+        ? { color:"#A15C07", background:"#FEF6E7" }
+        : value === "ENDED"
+          ? { color:"#57534E", background:"#F0EFED" }
+          : { color:"#1D3FCF", background:"#EEF2FD" };
+    return { ...tone, fontSize:12, fontWeight:500, padding:"3px 8px", borderRadius:4 };
+  };
+  const adminLevelColor = (level) => {
+    const value = String(level || "").toLowerCase();
+    if (value === "hard") return "#B42318";
+    if (value === "medium") return "#A15C07";
+    if (value === "easy") return "#15803D";
+    return ADMIN_THEME.textSecondary;
+  };
+
   const renderOverviewStats = () => {
+    const liveCount = liveAdminAssignments.length;
     const stats = [
-      { label: "Total Assessments", value: adminAssignments.length, color: "#38bdf8" },
-      { label: "Registered Students", value: registeredStudents.length || participantsCount || 0, color: "#4ade80" },
-      { label: "Live Now", value: liveAdminAssignments.length, color: "#f472b6" },
-      { label: "Pending Drafts", value: adminAssignments.filter((a) => a.status === "DRAFT" || !a.status).length, color: "#facc15" },
+      { label: "Assessments", value: adminAssignments.length },
+      { label: "Registered students", value: registeredStudents.length || participantsCount || 0 },
+      { label: "Live now", value: liveCount, note: liveCount ? `${liveCount === 1 ? "test" : "tests"} running` : "no test running", live: liveCount > 0 },
+      { label: "Pending drafts", value: adminAssignments.filter((a) => a.status === "DRAFT" || !a.status).length },
     ];
 
     return (
-      <div style={S.adminCardGrid}>
-        {stats.map((stat) => (
-          <div key={stat.label} style={{ ...S.adminCard, padding: "16px 18px" }}>
-            <div style={{ color: ADMIN_THEME.textSecondary, fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{stat.label}</div>
-            <div style={{ fontSize: 28, fontWeight: 800, color: stat.color, marginTop: 6, lineHeight: 1 }}>{stat.value}</div>
+      <div style={{ ...S.adminCard, padding:0, display:"grid", gridTemplateColumns:`repeat(${isPhone ? 2 : 4}, minmax(0,1fr))`, overflow:"hidden" }}>
+        {stats.map((stat, index) => (
+          <div key={stat.label} style={{ padding:isPhone ? "16px" : "20px 20px 18px", borderLeft:(isPhone ? index % 2 : index) ? `1px solid ${ADMIN_THEME.divider}` : "none", borderTop:isPhone && index >= 2 ? `1px solid ${ADMIN_THEME.divider}` : "none", minWidth:0 }}>
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12 }}>{stat.label}</div>
+            <div style={{ display:"flex", alignItems:"baseline", gap:10, marginTop:8 }}>
+              <span style={{ fontSize:isPhone ? 22 : 26, fontWeight:600, color:stat.live ? ADMIN_THEME.success : ADMIN_THEME.text, lineHeight:1 }}>{Number(stat.value || 0).toLocaleString("en-IN")}</span>
+              {stat.note && <span style={{ fontSize:11.5, color:ADMIN_THEME.textSecondary }}>{stat.note}</span>}
+            </div>
           </div>
         ))}
       </div>
@@ -9544,14 +9568,32 @@ function CodingPlatform() {
       <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
       <div style={{ ...S.adminApp, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
-        <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-        <nav style={S.adminNav}>
-          <DevOrbitLogo lightSurface onClick={()=>setView("home")} />
-          <span style={S.adminNavTitle}>Admin Portal</span>
-          <div style={{ marginLeft:"auto" }}>
-            <button onClick={signOut} style={S.adminButton("default")}>Sign Out</button>
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <header style={{ background:"#FFFFFF", borderBottom:`1px solid ${ADMIN_THEME.border}`, position:"sticky", top:0, zIndex:100 }}>
+          <div style={{ maxWidth:1240, margin:"0 auto", padding:`0 ${pageGutter}px`, boxSizing:"border-box" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, padding:isPhone ? "12px 0 4px" : "14px 0 2px" }}>
+              <button onClick={()=>setView("home")} style={{ background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit", fontSize:16, fontWeight:700, color:ADMIN_THEME.text }}>ScholarLogic</button>
+              <span style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>Admin</span>
+              <button onClick={signOut} style={{ ...S.adminButton("default"), marginLeft:"auto", padding:"7px 12px", fontSize:13 }}>Sign out</button>
+            </div>
+            <nav aria-label="Admin sections" style={{ display:"flex", gap:isPhone ? 18 : 22, overflowX:"auto", scrollbarWidth:"none" }}>
+              {adminTabs.map((tab) => {
+                const active = adminTab === tab.id;
+                return (
+                  <button key={tab.id} onClick={() => setAdminTab(tab.id)} aria-current={active ? "page" : undefined}
+                    style={{ background:"none", border:"none", borderBottom:`2px solid ${active ? ADMIN_THEME.text : "transparent"}`, padding:"12px 0 11px", cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:active ? 600 : 400, color:active ? ADMIN_THEME.text : ADMIN_THEME.textSecondary, whiteSpace:"nowrap", flexShrink:0, display:"inline-flex", alignItems:"center", gap:6 }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = ADMIN_THEME.text; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = ADMIN_THEME.textSecondary; }}>
+                    {tab.label}
+                    {tab.id === "feedback" && adminFeedbackNewCount > 0 && (
+                      <span style={{ background:ADMIN_THEME.error, color:"#fff", borderRadius:999, padding:"0 6px", fontSize:11, fontWeight:600, lineHeight:"17px" }}>{adminFeedbackNewCount}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
           </div>
-        </nav>
+        </header>
 
         <div style={S.adminShell}>
           {renderAdminPreviewModal()}
@@ -9564,23 +9606,18 @@ function CodingPlatform() {
           {renderStudentActivityModal()}
           {renderLiveTestPopupModal()}
 
-          {adminWarning && (
-            <div style={S.adminAlert("warning")}>
-              {adminWarning}
+          {[
+            ["warning", adminWarning, () => setAdminWarning("")],
+            ["error", portalError, () => setPortalError("")],
+            ["success", portalMessage, () => setPortalMessage("")],
+          ].filter(([, text]) => text).map(([tone, text, dismiss]) => (
+            <div key={tone} role={tone === "error" ? "alert" : "status"} style={{ ...S.adminAlert(tone), display:"flex", alignItems:"center", gap:12 }}>
+              <span style={{ flex:1, minWidth:0 }}>{text}</span>
+              <button onClick={dismiss} aria-label="Dismiss" style={{ background:"none", border:"none", cursor:"pointer", color:"inherit", padding:2, lineHeight:0, flexShrink:0 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
             </div>
-          )}
-
-          {portalError && (
-            <div style={S.adminAlert("error")}>
-              {portalError}
-            </div>
-          )}
-
-          {portalMessage && (
-            <div style={S.adminAlert("success")}>
-              {portalMessage}
-            </div>
-          )}
+          ))}
 
           {adminAssignmentsLoading && (
             <div style={S.adminAlert("info")}>
@@ -9588,249 +9625,266 @@ function CodingPlatform() {
             </div>
           )}
 
-          <div style={S.adminTabBar}>
-            {adminTabs.map((tab) => (
-              <button key={tab.id} onClick={() => setAdminTab(tab.id)} style={S.adminTabButton(adminTab === tab.id)}>
-                {tab.label}
-                {tab.id === "feedback" && adminFeedbackNewCount > 0 && (
-                  <span style={{ marginLeft:6, background:ADMIN_THEME.error, color:"#fff", borderRadius:999, padding:"1px 7px", fontSize:11, fontWeight:800 }}>{adminFeedbackNewCount} new</span>
-                )}
-              </button>
-            ))}
-          </div>
-
           {adminTab === "overview" && (
             <div style={{ display:"grid", gap:isPhone ? 16 : 20, minWidth:0 }}>
               {renderOverviewStats()}
 
-                <div style={S.adminCardGrid}>
-            <div style={S.adminCard}>
-              <div style={S.adminSectionTitle}>Current Test</div>
-              <div style={{ fontSize:24, fontWeight:700, color:ADMIN_THEME.text, marginBottom:14 }}>{adminCurrentTest.title}</div>
-              <div style={{ display:"grid", gap:8, color:ADMIN_THEME.textSecondary, fontSize:14 }}>
-                <div>Level: <span style={{ color:ADMIN_THEME.secondary, fontWeight:700 }}>{adminCurrentTest.level}</span></div>
-                <div>Date: <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{adminCurrentTest.date}</span></div>
-                <div>Duration: <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{adminCurrentTest.duration} mins</span></div>
-                <div>Status: <span style={{ color:adminCurrentStatusColor, fontWeight:700 }}>{adminCurrentStatus}</span></div>
-                <div>Start: <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{formatPortalDate(adminCurrentTest.startsAt)}</span></div>
-                <div>Timer: <span style={{ color:currentTestEnded ? ADMIN_THEME.error : ADMIN_THEME.primary, fontWeight:700 }}>{formatCountdown(adminTimerSeconds)}</span></div>
-              </div>
-              <div style={{ marginTop:14 }}>
-                <label style={S.adminFieldLabel}>Manage Test</label>
-                <select
-                  value={adminCurrentTest.id || ""}
-                  onChange={(e) => {
-                    const selectedAssignment = selectableAdminAssignments.find((assignment) => sameValue(assignment.id, e.target.value));
-                    if (!selectedAssignment) return;
-                    setAdminCurrentTest(selectedAssignment);
-                    setAdminSubmissionProblemId(selectedAssignment?.problems?.[0]?.id || "");
-                    setAdminExecution(null);
-                  }}
-                  style={S.adminInput}
-                >
-                  {selectableAdminAssignments.map((assignment) => (
-                    <option key={assignment.id || "default-test"} value={assignment.id || ""}>
-                      {assignment.title} - {assignment.status || "DRAFT"}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:16 }}>
-                <button
-                  onClick={handleStartAssignedTest}
-                  disabled={adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE"}
-                  style={{
-                    ...S.adminButton("submit"),
-                    opacity: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? 0.6 : 1,
-                    cursor: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {adminStartingTest ? "Starting..." : adminCurrentTest.status === "LIVE" ? "Test Live" : "Start Now"}
-                </button>
-                <button
-                  onClick={handleStopAssignedTest}
-                  disabled={adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE"}
-                  style={{
-                    ...S.adminButton("default"),
-                    color: adminCurrentTest.status === "LIVE" ? ADMIN_THEME.error : ADMIN_THEME.textSecondary,
-                    border: adminCurrentTest.status === "LIVE" ? `1px solid ${ADMIN_THEME.error}` : `1px solid ${ADMIN_THEME.border}`,
-                    opacity: adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE" ? 0.6 : 1,
-                    cursor: adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE" ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {adminStoppingTest ? "Stopping..." : "Stop Test"}
-                </button>
-                <button
-                  onClick={() => syncProblemBankToDatabase(false)}
-                  disabled={adminSyncingProblems}
-                  style={{ ...S.adminButton("default"), opacity: adminSyncingProblems ? 0.6 : 1, cursor: adminSyncingProblems ? "not-allowed" : "pointer" }}
-                >
-                  {adminSyncingProblems ? "Syncing..." : "Sync Problems"}
-                </button>
-                <button
-                  onClick={() => shareTestLink(adminCurrentTest)}
-                  disabled={!adminCurrentTest.id || adminCurrentTest.status === "ENDED"}
-                  title="Copy a link that takes students straight into this test"
-                  style={{
-                    ...S.adminButton("run"),
-                    opacity: !adminCurrentTest.id || adminCurrentTest.status === "ENDED" ? 0.6 : 1,
-                    cursor: !adminCurrentTest.id || adminCurrentTest.status === "ENDED" ? "not-allowed" : "pointer",
-                  }}
-                >
-                  🔗 Share Link
-                </button>
-              </div>
-              {adminCurrentTest.id && adminCurrentTest.status !== "LIVE" && adminCurrentTest.status !== "ENDED" && (
-                <div style={{ marginTop:16, paddingTop:14, borderTop:`1px solid ${ADMIN_THEME.divider}` }}>
-                  {adminCurrentTest.status === "SCHEDULED" ? (
-                    <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", justifyContent:"space-between" }}>
-                      <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
-                        Starts automatically on <span style={{ color:ADMIN_THEME.warning, fontWeight:700 }}>{formatPortalDate(adminCurrentTest.startsAt)}</span>
-                        {adminCurrentTest.endsAt && (
-                          <> · ends <span style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{formatPortalDate(adminCurrentTest.endsAt)}</span></>
-                        )}
+              <div style={{ display:"grid", gridTemplateColumns:isPhone || isTablet ? "minmax(0,1fr)" : "minmax(0,1fr) 300px", gap:24, alignItems:"start" }}>
+                <div style={{ display:"grid", gap:24, minWidth:0 }}>
+                  {/* Current test */}
+                  <div style={{ ...S.adminCard, padding:isPhone ? "18px 16px" : "22px 24px" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:16, flexWrap:"wrap", alignItems:"flex-start" }}>
+                      <div style={{ minWidth:0 }}>
+                        <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginBottom:6 }}>Current test</div>
+                        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                          <span style={{ fontSize:22, fontWeight:600, color:ADMIN_THEME.text }}>{adminCurrentTest.title}</span>
+                          <span style={adminStatusPill(adminCurrentStatus)}>{formatAdminStatus(adminCurrentStatus)}</span>
+                        </div>
                       </div>
+                      <label style={{ display:"flex", alignItems:"center", gap:10, color:ADMIN_THEME.textSecondary, fontSize:13, whiteSpace:"nowrap", flex:isPhone ? "1 1 100%" : "0 0 auto" }}>
+                        Switch test
+                        <select
+                          value={adminCurrentTest.id || ""}
+                          onChange={(e) => {
+                            const selectedAssignment = selectableAdminAssignments.find((assignment) => sameValue(assignment.id, e.target.value));
+                            if (!selectedAssignment) return;
+                            setAdminCurrentTest(selectedAssignment);
+                            setAdminSubmissionProblemId(selectedAssignment?.problems?.[0]?.id || "");
+                            setAdminExecution(null);
+                          }}
+                          style={{ ...S.adminInput, width:isPhone ? "100%" : 200, padding:"8px 10px" }}
+                        >
+                          {selectableAdminAssignments.map((assignment) => (
+                            <option key={assignment.id || "default-test"} value={assignment.id || ""}>
+                              {assignment.title}{assignment.status && assignment.status !== "ENDED" ? ` (${formatAdminStatus(assignment.status).toLowerCase()})` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <div style={{ display:"grid", gridTemplateColumns:`repeat(${isPhone ? 2 : 4}, minmax(0,1fr))`, gap:16, borderTop:`1px solid ${ADMIN_THEME.divider}`, borderBottom:`1px solid ${ADMIN_THEME.divider}`, margin:"18px 0", padding:"16px 0" }}>
+                      {[
+                        ["Level", <span style={{ color:adminLevelColor(adminCurrentTest.level), fontWeight:500 }}>{adminCurrentTest.level || "--"}</span>],
+                        ["Starts", formatPortalDate(adminCurrentTest.startsAt)],
+                        ["Duration", `${adminCurrentTest.duration || "--"} min`],
+                        ["Timer", <span style={{ fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace", color:adminCurrentStatus === "LIVE" ? ADMIN_THEME.primary : ADMIN_THEME.text }}>{formatCountdown(adminTimerSeconds)}</span>],
+                      ].map(([label, value]) => (
+                        <div key={label} style={{ minWidth:0 }}>
+                          <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginBottom:4 }}>{label}</div>
+                          <div style={{ color:ADMIN_THEME.text, fontSize:14 }}>{value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
                       <button
-                        onClick={handleUnscheduleAssignedTest}
-                        disabled={adminSchedulingTest}
-                        style={{ ...S.adminButton("default"), opacity: adminSchedulingTest ? 0.6 : 1, cursor: adminSchedulingTest ? "not-allowed" : "pointer" }}
+                        onClick={handleStartAssignedTest}
+                        disabled={adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE"}
+                        style={{ ...S.adminButton("submit"), opacity: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? 0.55 : 1, cursor: adminStartingTest || !adminCurrentTest.id || adminCurrentTest.status === "LIVE" ? "not-allowed" : "pointer" }}
                       >
-                        {adminSchedulingTest ? "Cancelling..." : "Cancel Schedule"}
+                        {adminStartingTest ? "Starting..." : adminCurrentTest.status === "LIVE" ? "Test is live" : "Start now"}
+                      </button>
+                      <button
+                        onClick={handleStopAssignedTest}
+                        disabled={adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE"}
+                        style={{
+                          ...S.adminButton("default"),
+                          color: adminCurrentTest.status === "LIVE" ? ADMIN_THEME.error : ADMIN_THEME.textMuted,
+                          borderColor: adminCurrentTest.status === "LIVE" ? ADMIN_THEME.error : ADMIN_THEME.border,
+                          background: adminCurrentTest.status === "LIVE" ? "#FFFFFF" : ADMIN_THEME.hoverBackground,
+                          cursor: adminStoppingTest || !adminCurrentTest.id || adminCurrentTest.status !== "LIVE" ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {adminStoppingTest ? "Stopping..." : "Stop test"}
+                      </button>
+                      {!isPhone && <span style={{ width:1, height:28, background:ADMIN_THEME.border, margin:"0 4px" }} />}
+                      <button
+                        onClick={() => syncProblemBankToDatabase(false)}
+                        disabled={adminSyncingProblems}
+                        style={{ ...S.adminButton("default"), opacity: adminSyncingProblems ? 0.6 : 1, cursor: adminSyncingProblems ? "not-allowed" : "pointer" }}
+                      >
+                        {adminSyncingProblems ? "Syncing..." : "Sync problems"}
+                      </button>
+                      <button
+                        onClick={() => shareTestLink(adminCurrentTest)}
+                        disabled={!adminCurrentTest.id || adminCurrentTest.status === "ENDED"}
+                        title={adminCurrentTest.status === "ENDED" ? "This test has ended" : "Copy a link that takes students straight into this test"}
+                        style={{ ...S.adminButton("default"), display:"inline-flex", alignItems:"center", gap:7, opacity: !adminCurrentTest.id || adminCurrentTest.status === "ENDED" ? 0.55 : 1, cursor: !adminCurrentTest.id || adminCurrentTest.status === "ENDED" ? "not-allowed" : "pointer" }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                        Copy share link
                       </button>
                     </div>
-                  ) : (
-                    <>
-                      <div style={{ display:"grid", gap:10 }}>
-                        <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(0, 1fr)", gap:10 }}>
-                          <div>
-                            <label style={S.adminFieldLabel}>Start Date</label>
-                            <input type="date" value={adminScheduleDate} onChange={(e) => setAdminScheduleDate(e.target.value)} style={S.adminInput} />
-                          </div>
-                          <div>
-                            <label style={S.adminFieldLabel}>Start Time</label>
-                            <input type="time" value={adminScheduleTime} onChange={(e) => setAdminScheduleTime(e.target.value)} style={S.adminInput} />
-                          </div>
-                          <div>
-                            <label style={S.adminFieldLabel}>End Date (optional)</label>
-                            <input type="date" value={adminScheduleEndDate} onChange={(e) => setAdminScheduleEndDate(e.target.value)} style={S.adminInput} />
-                          </div>
-                          <div>
-                            <label style={S.adminFieldLabel}>End Time (optional)</label>
-                            <input type="time" value={adminScheduleEndTime} onChange={(e) => setAdminScheduleEndTime(e.target.value)} style={S.adminInput} />
-                          </div>
-                        </div>
-                        <button
-                          onClick={handleScheduleAssignedTest}
-                          disabled={adminSchedulingTest || !adminScheduleDate || !adminScheduleTime}
-                          style={{
-                            ...S.adminButton("run"),
-                            width:"100%",
-                            opacity: adminSchedulingTest || !adminScheduleDate || !adminScheduleTime ? 0.6 : 1,
-                            cursor: adminSchedulingTest || !adminScheduleDate || !adminScheduleTime ? "not-allowed" : "pointer",
-                          }}
-                        >
-                          {adminSchedulingTest ? "Scheduling..." : "Schedule"}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
 
-            <div style={S.adminCard}>
-              <div style={S.adminSectionTitle}>Test Queue</div>
-              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13, marginBottom:12 }}>
-                Live now: <span style={{ color:ADMIN_THEME.success, fontWeight:700 }}>{liveAdminAssignments.length}</span>
-              </div>
-              <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 1fr)", gap:10 }}>
-                {selectableAdminAssignments.slice(0, 5).map((test, index) => (
-                  <div
-                    key={test.id || `test-${index}`}
-                    role="button"
-                    tabIndex={0}
-                    title={test.status === "ENDED" ? "Open this test's report" : "Select this test"}
-                    onClick={() => openTestFromQueue(test)}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTestFromQueue(test); } }}
-                    style={{
-                      background:adminCurrentTest?.id===test.id ? ADMIN_THEME.sidebarActive : ADMIN_THEME.hoverBackground,
-                      border:adminCurrentTest?.id===test.id ? `1px solid ${ADMIN_THEME.primary}` : `1px solid ${ADMIN_THEME.border}`,
-                      borderRadius:12,
-                      color:ADMIN_THEME.text,
-                      padding:"12px 14px",
-                      minWidth:0,
-                      boxSizing:"border-box",
-                      textAlign:"left",
-                      cursor:"pointer",
-                      boxShadow:adminCurrentTest?.id===test.id ? ADMIN_THEME.shadowSoft : "none"
-                    }}
-                  >
-                    <div style={{ display:"flex", justifyContent:"space-between", gap:10, alignItems:"center" }}>
-                      <span title={test.title || test.name} style={{ fontWeight:700, flex:"1 1 auto", minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{test.title || test.name}</span>
-                      <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
-                        <span style={{ color:test.status === "LIVE" ? ADMIN_THEME.success : test.status === "ENDED" ? ADMIN_THEME.error : test.status === "SCHEDULED" ? ADMIN_THEME.warning : ADMIN_THEME.info, fontSize:11, fontWeight:800 }}>{test.status || "ENDED"}</span>
-                        {test.id && (
-                          <button
-                            type="button"
-                            aria-label={`Delete ${test.title || "test"}`}
-                            title={test.status === "LIVE" ? "Stop the test before deleting it" : "Delete this test"}
-                            onClick={(e) => { e.stopPropagation(); handleDeleteTest(test); }}
-                            disabled={deletingTestId === test.id || test.status === "LIVE"}
-                            style={{
-                              background:"transparent",
-                              border:`1px solid ${ADMIN_THEME.border}`,
-                              borderRadius:8,
-                              padding:"3px 7px",
-                              fontSize:13,
-                              lineHeight:1,
-                              cursor:deletingTestId === test.id || test.status === "LIVE" ? "not-allowed" : "pointer",
-                              opacity:deletingTestId === test.id || test.status === "LIVE" ? 0.4 : 1,
-                            }}
-                          >
-                            {deletingTestId === test.id ? "…" : "🗑"}
-                          </button>
+                    {adminCurrentTest.id && adminCurrentTest.status !== "LIVE" && adminCurrentTest.status !== "ENDED" && (
+                      <div style={{ marginTop:18, paddingTop:16, borderTop:`1px solid ${ADMIN_THEME.divider}` }}>
+                        {adminCurrentTest.status === "SCHEDULED" ? (
+                          <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", justifyContent:"space-between" }}>
+                            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>
+                              Starts automatically on <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{formatPortalDate(adminCurrentTest.startsAt)}</span>
+                              {adminCurrentTest.endsAt && (
+                                <> · ends <span style={{ color:ADMIN_THEME.text, fontWeight:600 }}>{formatPortalDate(adminCurrentTest.endsAt)}</span></>
+                              )}
+                            </div>
+                            <button
+                              onClick={handleUnscheduleAssignedTest}
+                              disabled={adminSchedulingTest}
+                              style={{ ...S.adminButton("default"), opacity: adminSchedulingTest ? 0.6 : 1, cursor: adminSchedulingTest ? "not-allowed" : "pointer" }}
+                            >
+                              {adminSchedulingTest ? "Cancelling..." : "Cancel schedule"}
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display:"grid", gap:12 }}>
+                            <div style={{ color:ADMIN_THEME.text, fontSize:14, fontWeight:600 }}>Schedule this test</div>
+                            <div style={{ display:"grid", gridTemplateColumns:`repeat(${isPhone ? 2 : 4}, minmax(0, 1fr))`, gap:10 }}>
+                              <div>
+                                <label style={S.adminFieldLabel}>Start date</label>
+                                <input type="date" value={adminScheduleDate} onChange={(e) => setAdminScheduleDate(e.target.value)} style={S.adminInput} />
+                              </div>
+                              <div>
+                                <label style={S.adminFieldLabel}>Start time</label>
+                                <input type="time" value={adminScheduleTime} onChange={(e) => setAdminScheduleTime(e.target.value)} style={S.adminInput} />
+                              </div>
+                              <div>
+                                <label style={S.adminFieldLabel}>End date (optional)</label>
+                                <input type="date" value={adminScheduleEndDate} onChange={(e) => setAdminScheduleEndDate(e.target.value)} style={S.adminInput} />
+                              </div>
+                              <div>
+                                <label style={S.adminFieldLabel}>End time (optional)</label>
+                                <input type="time" value={adminScheduleEndTime} onChange={(e) => setAdminScheduleEndTime(e.target.value)} style={S.adminInput} />
+                              </div>
+                            </div>
+                            <div>
+                              <button
+                                onClick={handleScheduleAssignedTest}
+                                disabled={adminSchedulingTest || !adminScheduleDate || !adminScheduleTime}
+                                style={{ ...S.adminButton("run"), opacity: adminSchedulingTest || !adminScheduleDate || !adminScheduleTime ? 0.55 : 1, cursor: adminSchedulingTest || !adminScheduleDate || !adminScheduleTime ? "not-allowed" : "pointer" }}
+                              >
+                                {adminSchedulingTest ? "Scheduling..." : "Schedule"}
+                              </button>
+                            </div>
+                          </div>
                         )}
                       </div>
+                    )}
+                  </div>
+
+                  {/* Test queue */}
+                  <div style={{ ...S.adminCard, padding:0, overflow:"hidden" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:12, flexWrap:"wrap", padding:isPhone ? "16px 16px 10px" : "20px 24px 12px" }}>
+                      <span style={{ fontSize:16, fontWeight:600, color:ADMIN_THEME.text }}>Test queue</span>
+                      <span style={{ fontSize:13, color:ADMIN_THEME.textSecondary }}>
+                        {liveAdminAssignments.length} live · {adminAssignments.filter((test) => test.status === "ENDED").length} ended
+                      </span>
                     </div>
-                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:12, marginTop:4 }}>
-                      {test.date} | {test.level || test.difficulty}
-                      {test.status === "ENDED" && <span style={{ color:ADMIN_THEME.primary, fontWeight:700 }}> · View report →</span>}
+                    <div style={{ overflowX:"auto" }}>
+                      <table style={{ width:"100%", borderCollapse:"collapse", minWidth:isPhone ? 560 : 0 }}>
+                        <thead>
+                          <tr>
+                            {["Test", "Scheduled", "Level", "Status", ""].map((heading, index) => (
+                              <th key={index} style={{ textAlign:"left", padding:`8px ${index === 0 ? (isPhone ? 16 : 24) : 12}px`, color:ADMIN_THEME.textSecondary, fontSize:12, fontWeight:500 }}>{heading}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectableAdminAssignments.slice(0, 8).map((test, index) => {
+                            const selected = adminCurrentTest?.id === test.id;
+                            return (
+                              <tr
+                                key={test.id || `test-${index}`}
+                                tabIndex={0}
+                                title={test.status === "ENDED" ? "Open this test's report" : "Select this test"}
+                                onClick={() => openTestFromQueue(test)}
+                                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTestFromQueue(test); } }}
+                                style={{ cursor:"pointer", background:selected ? "#F3F6FD" : "transparent", borderTop:`1px solid ${ADMIN_THEME.divider}` }}
+                                onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = ADMIN_THEME.hoverBackground; }}
+                                onMouseLeave={(e) => { if (!selected) e.currentTarget.style.background = "transparent"; }}
+                              >
+                                <td style={{ padding:`16px 12px 16px ${isPhone ? 16 : 24}px`, fontSize:14, fontWeight:500, color:ADMIN_THEME.text, maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={test.title || test.name}>{test.title || test.name}</td>
+                                <td style={{ padding:"16px 12px", fontSize:13, color:ADMIN_THEME.textSecondary, whiteSpace:"nowrap" }}>{test.startsAt ? formatPortalDate(test.startsAt) : test.date || "--"}</td>
+                                <td style={{ padding:"16px 12px", fontSize:13, color:adminLevelColor(test.level || test.difficulty) }}>{test.level || test.difficulty || "--"}</td>
+                                <td style={{ padding:"16px 12px", fontSize:13 }}>
+                                  {test.status === "LIVE"
+                                    ? <span style={{ display:"inline-flex", alignItems:"center", gap:6, color:ADMIN_THEME.success, fontWeight:500 }}><span style={{ width:7, height:7, borderRadius:"50%", background:ADMIN_THEME.success }} />Live</span>
+                                    : <span style={{ color:ADMIN_THEME.textSecondary }}>{formatAdminStatus(test.status || "ENDED")}</span>}
+                                </td>
+                                <td style={{ padding:`16px ${isPhone ? 16 : 24}px 16px 12px`, textAlign:"right", whiteSpace:"nowrap" }}>
+                                  <span style={{ color:ADMIN_THEME.primary, fontSize:13, marginRight:18 }}>{test.status === "ENDED" ? "View report" : "Select"}</span>
+                                  {test.id && (
+                                    <button
+                                      type="button"
+                                      aria-label={`Delete ${test.title || "test"}`}
+                                      title={test.status === "LIVE" ? "Stop the test before deleting it" : "Delete this test"}
+                                      onClick={(e) => { e.stopPropagation(); handleDeleteTest(test); }}
+                                      disabled={deletingTestId === test.id || test.status === "LIVE"}
+                                      style={{ background:"none", border:"none", padding:2, verticalAlign:"middle", color:ADMIN_THEME.textMuted, cursor:deletingTestId === test.id || test.status === "LIVE" ? "not-allowed" : "pointer", opacity:deletingTestId === test.id || test.status === "LIVE" ? 0.35 : 1 }}
+                                      onMouseEnter={(e) => { e.currentTarget.style.color = ADMIN_THEME.error; }}
+                                      onMouseLeave={(e) => { e.currentTarget.style.color = ADMIN_THEME.textMuted; }}
+                                    >
+                                      {deletingTestId === test.id ? "…" : (
+                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /></svg>
+                                      )}
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {!selectableAdminAssignments.length && (
+                            <tr><td colSpan="5" style={{ padding:"18px 24px", color:ADMIN_THEME.textSecondary, fontSize:14, borderTop:`1px solid ${ADMIN_THEME.divider}` }}>No tests yet. Create one below.</td></tr>
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
 
-            <div style={S.adminCard}>
-              <div style={S.adminSectionTitle}>Participants</div>
-              <div style={{ fontSize:32, fontWeight:800, color:ADMIN_THEME.primary, lineHeight:1, marginBottom:10 }}>{participantsCount}</div>
-              <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14, marginBottom:12 }}>Students with login activity stored in MongoDB</div>
-              <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 10px", borderRadius:999, background:"rgba(22, 163, 74, 0.08)", border:"1px solid rgba(22, 163, 74, 0.18)", color:ADMIN_THEME.success, fontSize:12, fontWeight:700 }}>
-                <span style={{ width:8, height:8, borderRadius:"50%", background:ADMIN_THEME.success, boxShadow:"0 0 0 4px rgba(22, 163, 74, 0.12)" }} />
-                Login-tracked
-              </div>
-            </div>
+                {/* Side column */}
+                <div style={{ display:"grid", gap:24, alignContent:"start" }}>
+                  <div style={{ ...S.adminCard, padding:"22px 24px" }}>
+                    <div style={{ fontSize:16, fontWeight:600, color:ADMIN_THEME.text, marginBottom:10 }}>Test report</div>
+                    <div style={{ fontSize:13.5, color:ADMIN_THEME.textSecondary, lineHeight:1.6, marginBottom:16 }}>
+                      {currentTestEnded
+                        ? <>Every student's attendance, score, time taken, submissions and interruptions for <strong style={{ color:ADMIN_THEME.text }}>{adminCurrentTest.title}</strong>, as an Excel file.</>
+                        : "The report can be downloaded once the test ends."}
+                    </div>
+                    <button
+                      onClick={downloadAdminTestReport}
+                      disabled={!adminTestReport}
+                      style={{ ...S.adminButton("run"), display:"inline-flex", alignItems:"center", gap:8, opacity:adminTestReport ? 1 : 0.45, cursor:adminTestReport ? "pointer" : "not-allowed" }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v12" /><path d="M7 11l5 5 5-5" /><path d="M5 20h14" /></svg>
+                      Download report
+                    </button>
+                  </div>
 
-            <div style={S.adminCard}>
-              <div style={S.adminSectionTitle}>Test Report</div>
-              <div style={{ fontSize:14, color:ADMIN_THEME.textSecondary, marginBottom:14 }}>
-                {currentTestEnded
-                  ? "Download every student's attendance, score, time, submissions and interruptions (opens in Excel)."
-                  : "The report can be downloaded once the test ends."}
+                  <div style={{ ...S.adminCard, padding:"22px 24px" }}>
+                    <div style={{ fontSize:16, fontWeight:600, color:ADMIN_THEME.text, marginBottom:12 }}>Participants</div>
+                    <div style={{ fontSize:28, fontWeight:600, color:ADMIN_THEME.text, lineHeight:1, marginBottom:10 }}>{Number(participantsCount || 0).toLocaleString("en-IN")}</div>
+                    <div style={{ color:ADMIN_THEME.textSecondary, fontSize:13.5, marginBottom:12 }}>Students with recorded login activity.</div>
+                    <div style={{ display:"inline-flex", alignItems:"center", gap:7, color:ADMIN_THEME.success, fontSize:12.5 }}>
+                      <span style={{ width:6, height:6, borderRadius:"50%", background:ADMIN_THEME.success }} />
+                      Login tracking on
+                    </div>
+                  </div>
+
+                  <div style={{ display:"grid", gap:10, padding:"0 4px" }}>
+                    {[
+                      ["Review malpractice reports", "malpractice"],
+                      ["Upload questions", "questions"],
+                      ["Open student list", "students"],
+                    ].map(([label, tab]) => (
+                      <button key={tab} onClick={() => setAdminTab(tab)} style={{ background:"none", border:"none", padding:0, textAlign:"left", color:ADMIN_THEME.primary, fontSize:13.5, cursor:"pointer", fontFamily:"inherit" }}
+                        onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <button
-                onClick={downloadAdminTestReport}
-                disabled={!adminTestReport}
-                style={{
-                  ...(adminTestReport ? S.adminButton("run") : S.adminButton("default")),
-                  opacity:adminTestReport?1:0.7,
-                  cursor:adminTestReport?"pointer":"not-allowed"
-                }}
-              >
-                ⬇ Download Report
-              </button>
-            </div>
-          </div>
 
           {currentTestEnded && adminTestReport && (
             <div ref={adminReportRef} style={{ display:"grid", gap:18, scrollMarginTop:90 }}>
