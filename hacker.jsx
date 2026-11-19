@@ -1145,6 +1145,60 @@ function AiInterviewerAvatar({ speaking = false, size = 120 }) {
   );
 }
 
+// Full-screen loading popup shown while AI Hire waits for the AI.
+const AI_HIRE_LOADING_COPY = {
+  plan: {
+    title: "Preparing your interview",
+    steps: ["Reading the job description...", "Finding the key skills for this role...", "Matching the role with your profile...", "Writing your interview questions..."],
+  },
+  evaluate: {
+    title: "Checking your answer",
+    steps: ["Reading your answer...", "Comparing it with what this role needs...", "Writing feedback and a model answer..."],
+  },
+  report: {
+    title: "Writing your interview report",
+    steps: ["Going through all your answers...", "Calculating your overall score...", "Listing your strengths and focus areas...", "Planning your next steps..."],
+  },
+};
+
+function AiHireLoadingOverlay({ kind }) {
+  const copy = AI_HIRE_LOADING_COPY[kind] || AI_HIRE_LOADING_COPY.plan;
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    setSeconds(0);
+    const timer = setInterval(() => setSeconds((value) => value + 1), 1000);
+    return () => clearInterval(timer);
+  }, [kind]);
+  const step = copy.steps[Math.min(copy.steps.length - 1, Math.floor(seconds / 6))];
+  const slow = seconds >= 45;
+
+  return (
+    <div role="dialog" aria-modal="true" aria-live="polite" aria-label={copy.title}
+      style={{ position:"fixed", inset:0, zIndex:3000, background:"rgba(10,10,10,0.72)", backdropFilter:"blur(5px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif" }}>
+      <style>{"@keyframes dvRing { 0% { transform: scale(0.92); opacity: 0.7; } 100% { transform: scale(1.35); opacity: 0; } } @keyframes dvSlide { 0% { left: -40%; } 100% { left: 100%; } } @keyframes dvFadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } } @media (prefers-reduced-motion: reduce) { .dv-load * { animation: none !important; } }"}</style>
+      <div className="dv-load" style={{ width:"100%", maxWidth:420, background:"#181818", border:"1px solid #2a2a2a", borderRadius:16, padding:"30px 26px 26px", textAlign:"center", boxShadow:"0 24px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ position:"relative", width:120, height:120, margin:"0 auto 18px" }}>
+          {[0, 0.8].map((delay) => (
+            <span key={delay} style={{ position:"absolute", inset:0, borderRadius:"50%", border:"2px solid #e8873a", animation:`dvRing 1.6s ease-out ${delay}s infinite` }} />
+          ))}
+          <div style={{ position:"absolute", inset:6, borderRadius:"50%", overflow:"hidden" }}>
+            <AiInterviewerAvatar size={108} />
+          </div>
+        </div>
+        <div style={{ fontSize:19, fontWeight:600, color:"#f2f2f2" }}>{copy.title}</div>
+        <div key={step} style={{ fontSize:14, color:"#c9c9c9", marginTop:8, minHeight:21, animation:"dvFadeUp 0.35s ease-out" }}>{step}</div>
+        <div style={{ position:"relative", height:5, borderRadius:999, background:"#2a2a2a", overflow:"hidden", margin:"20px 0 12px" }}>
+          <span style={{ position:"absolute", top:0, bottom:0, width:"40%", borderRadius:999, background:"linear-gradient(90deg, transparent, #e8873a, transparent)", animation:"dvSlide 1.3s ease-in-out infinite" }} />
+        </div>
+        <div style={{ fontSize:12.5, color:"#8e8e8e", fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace" }}>{seconds}s</div>
+        <div style={{ fontSize:12.5, color:slow ? "#e9b84a" : "#6b6b6b", marginTop:8, lineHeight:1.5 }}>
+          {slow ? "The AI is busy right now. Still working, please keep this page open." : "Please keep this page open."}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StreakCalendar({ calendar, today, weeks = 26, cell = 12, gap = 3 }) {
   if (!today) return null;
   const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1559,6 +1613,7 @@ function CodingPlatform() {
   const [aiHirePasteBlocked, setAiHirePasteBlocked] = useState(0);
   const [aiHireSpeaking, setAiHireSpeaking]   = useState(false);
   const [aiHireVoiceOn, setAiHireVoiceOn]     = useState(true);
+  const [aiHireLeaveOpen, setAiHireLeaveOpen] = useState(false);
   const aiHireStreamRef = useRef(null);
   const aiHireVideoRef = useRef(null);
   const aiHireLastWarningRef = useRef(0);
@@ -3722,8 +3777,10 @@ function CodingPlatform() {
     }
   };
 
-  const resetAiHire = () => {
-    if (aiHireStep === "interview" && aiHireTurns.length && !window.confirm("Leave this interview? Your answers so far will be lost.")) return;
+  // Leaving mid-interview asks first in a popup (see the AI Hire page); confirmed = true skips it.
+  const resetAiHire = (confirmed = false) => {
+    if (!confirmed && aiHireStep === "interview" && aiHireTurns.length) { setAiHireLeaveOpen(true); return; }
+    setAiHireLeaveOpen(false);
     stopAiHireVoice();
     stopAiHireCamera();
     setAiHireStep("setup");
@@ -11814,7 +11871,6 @@ function CodingPlatform() {
         {(items || []).map((item, index) => <li key={index} style={{ color:C.text, fontSize:14, lineHeight:1.55 }}>{item}</li>)}
       </ul>
     );
-    const busyText = { plan:"Reading the job description and planning your interview...", evaluate:"Checking your answer...", report:"Writing your interview report..." }[aiHireBusy];
 
     const setupView = (
       <div style={{ display:"grid", gridTemplateColumns:isCompact ? "minmax(0,1fr)" : "minmax(0,1fr) 300px", gap:28, alignItems:"start" }}>
@@ -11881,7 +11937,6 @@ function CodingPlatform() {
             {aiHireStatus && aiHireStatus.configured !== false && <span style={{ fontSize:13, color:C.muted }}>{aiHireStatus.interviewsLeft} of {aiHireStatus.dailyLimit} interviews left today</span>}
             {aiHireStatus?.configured === false && <span style={{ fontSize:13, color:C.amber }}>AI Hire is not switched on yet. Ask your admin.</span>}
           </div>
-          {aiHireBusy === "plan" && <div style={{ fontSize:13.5, color:C.muted }}>{busyText} This usually takes under a minute, a little longer when the AI is busy.</div>}
         </div>
         <aside style={{ display:"grid", gap:16, fontSize:14, color:"#c9c9c9", lineHeight:1.6 }}>
           <div style={{ fontSize:13, fontWeight:600, letterSpacing:"0.12em", textTransform:"uppercase", color:C.muted }}>How it works</div>
@@ -11930,7 +11985,7 @@ function CodingPlatform() {
                 );
               })}
             </div>
-            <button onClick={resetAiHire} style={{ ...secondary, fontSize:13, padding:"8px 12px" }}>End and start over</button>
+            <button onClick={() => resetAiHire(false)} style={{ ...secondary, fontSize:13, padding:"8px 12px" }}>End and start over</button>
           </aside>
 
           <div style={{ display:"grid", gap:18 }}>
@@ -12090,7 +12145,7 @@ function CodingPlatform() {
           })}
         </div>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-          <button onClick={resetAiHire} style={primary(false)}>Start a new interview</button>
+          <button onClick={() => resetAiHire(true)} style={primary(false)}>Start a new interview</button>
           <button onClick={() => window.print()} style={secondary}>Print / save as PDF</button>
         </div>
       </div>
@@ -12104,6 +12159,25 @@ function CodingPlatform() {
         <div style={{ ...S.app, background:C.bg, color:C.text, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease" }}>
           <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
           <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("aihire")}</div>
+          {aiHireBusy && <AiHireLoadingOverlay kind={aiHireBusy} />}
+          {aiHireLeaveOpen && (
+            <div role="dialog" aria-modal="true" aria-labelledby="aihire-leave-title" onClick={() => setAiHireLeaveOpen(false)}
+              style={{ position:"fixed", inset:0, zIndex:3000, background:"rgba(10,10,10,0.72)", backdropFilter:"blur(5px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+              <div onClick={(e) => e.stopPropagation()} style={{ width:"100%", maxWidth:400, background:"#181818", border:"1px solid #2a2a2a", borderRadius:16, padding:"26px 24px 22px", textAlign:"center", boxShadow:"0 24px 60px rgba(0,0,0,0.5)" }}>
+                <div style={{ width:52, height:52, margin:"0 auto 14px", borderRadius:"50%", background:"rgba(229,87,95,0.12)", border:"1px solid rgba(229,87,95,0.35)", display:"flex", alignItems:"center", justifyContent:"center", color:C.red }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
+                </div>
+                <div id="aihire-leave-title" style={{ fontSize:18, fontWeight:600, color:C.text }}>Leave this interview?</div>
+                <div style={{ fontSize:14, color:"#c9c9c9", lineHeight:1.6, margin:"8px 0 20px" }}>
+                  You have answered {aiHireTurns.length} of {total} question{total === 1 ? "" : "s"}. If you leave now, your answers will be lost and you will not get a report.
+                </div>
+                <div style={{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap" }}>
+                  <button autoFocus onClick={() => setAiHireLeaveOpen(false)} style={primary(false)}>Stay in interview</button>
+                  <button onClick={() => resetAiHire(true)} style={{ ...secondary, color:"#ff8a8a", borderColor:"rgba(229,87,95,0.45)" }}>Leave</button>
+                </div>
+              </div>
+            </div>
+          )}
           <main className="dv-aihire" style={{ maxWidth:1180, width:"100%", margin:"0 auto", padding:`${isPhone ? 20 : 34}px ${pageGutter}px 60px`, boxSizing:"border-box" }}>
             <div style={{ marginBottom:24 }}>
               <h1 style={{ margin:0, fontSize:isPhone ? 24 : 28, fontWeight:600, color:C.text }}>AI Hire</h1>
