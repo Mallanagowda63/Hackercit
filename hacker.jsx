@@ -865,31 +865,81 @@ function validateCodeSyntax(code = "", language = "python") {
 }
 
 function highlightCodeLine(line = "", language = "javascript") {
-  if (!line) return [{ text: "", color: "#d7dcff" }];
+  const C = { text: "#d4d4d4", keyword: "#9d8cf2", fn: "#e6c07b", string: "#8cc79b", number: "#e8a36a", comment: "#6b6b6b", literal: "#e8a36a" };
+  if (!line) return [{ text: "", color: C.text }];
+
+  const isPython = language === "python";
+  // Lines inside a /** ... */ block (or Python docstring markers are left as normal text).
+  const trimmed = line.trimStart();
+  if (!isPython && (/^\/\*/.test(trimmed) || /^\*(\s|\/|$)/.test(trimmed) || /^\*\//.test(trimmed))) {
+    return [{ text: line, color: C.comment }];
+  }
 
   const keywords = new Set([
-    "def", "return", "if", "else", "elif", "for", "while", "import", "from", "as",
-    "class", "try", "except", "finally", "with", "lambda", "in", "is", "not", "and", "or",
-    "function", "const", "let", "var", "async", "await", "public", "private", "protected",
-    "static", "void", "int", "double", "float", "char", "include", "using", "namespace"
+    "def", "return", "if", "else", "elif", "for", "while", "import", "from", "as", "class", "try", "except",
+    "finally", "with", "lambda", "in", "is", "not", "and", "or", "pass", "break", "continue", "yield", "global",
+    "function", "const", "let", "var", "async", "await", "new", "this", "self", "typeof", "instanceof", "of",
+    "switch", "case", "default", "throw", "catch", "do", "public", "private", "protected", "static", "final",
+    "void", "int", "long", "double", "float", "char", "boolean", "byte", "short", "String", "extends",
+    "implements", "interface", "package", "throws", "include", "using", "namespace",
   ]);
+  const literals = new Set(["true", "false", "null", "undefined", "None", "True", "False", "NaN", "Infinity"]);
 
-  const tokens = line.split(/(\s+|[(){}[\];,.<>:=+\-*/%&|^!~"#'])/);
-  return tokens.filter(Boolean).map((token) => {
-    if (keywords.has(token)) {
-      return { text: token, color: "#93c5fd" };
+  const pieces = [];
+  const push = (text, color) => {
+    if (!text) return;
+    const last = pieces[pieces.length - 1];
+    if (last && last.color === color) last.text += text;
+    else pieces.push({ text, color });
+  };
+
+  let i = 0;
+  let previousWord = "";
+  while (i < line.length) {
+    const rest = line.slice(i);
+    // Comments run to the end of the line.
+    if ((!isPython && rest.startsWith("//")) || (isPython && rest[0] === "#")) {
+      push(rest, C.comment);
+      break;
     }
-    if (/^\d+$/.test(token)) {
-      return { text: token, color: "#fde68a" };
+    // Strings.
+    const quote = rest[0];
+    if (quote === '"' || quote === "'" || (quote === "`" && !isPython)) {
+      let j = 1;
+      while (j < rest.length && rest[j] !== quote) j += rest[j] === "\\" ? 2 : 1;
+      const text = rest.slice(0, Math.min(j + 1, rest.length));
+      push(text, C.string);
+      i += text.length;
+      previousWord = "";
+      continue;
     }
-    if (/^["'].*["']$/.test(token)) {
-      return { text: token, color: "#86efac" };
+    // Numbers.
+    const number = rest.match(/^\d+(\.\d+)?/);
+    if (number && !/[A-Za-z_$]/.test(line[i - 1] || "")) {
+      push(number[0], C.number);
+      i += number[0].length;
+      continue;
     }
-    if (/^\/\//.test(token) || /^\#/.test(token)) {
-      return { text: token, color: "#64748b" };
+    // Words.
+    const word = rest.match(/^[A-Za-z_$][\w$]*/);
+    if (word) {
+      const value = word[0];
+      const after = line.slice(i + value.length);
+      let color = C.text;
+      if (keywords.has(value)) color = C.keyword;
+      else if (literals.has(value)) color = C.literal;
+      else if (/^\s*\(/.test(after) || previousWord === "def" || previousWord === "function") color = C.fn;
+      push(value, color);
+      previousWord = value;
+      i += value.length;
+      continue;
     }
-    return { text: token, color: "#d7dcff" };
-  });
+    // Anything else (spaces, punctuation) stays plain.
+    push(rest[0], C.text);
+    if (!/\s/.test(rest[0])) previousWord = "";
+    i += 1;
+  }
+  return pieces;
 }
 
 // ── IDE EDITOR ───────────────────────────────────────────────────────────────
@@ -950,11 +1000,11 @@ function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLi
   return (
     <div style={{ flex: 1, position: "relative", overflow: "hidden", minHeight }}>
       {/* Current line */}
-      <div aria-hidden="true" style={{ position: "absolute", left: 0, right: 0, top: EDITOR_PADDING_TOP + currentLine * EDITOR_LINE_HEIGHT - scroll.top, height: EDITOR_LINE_HEIGHT, background: "rgba(124,106,247,0.09)", borderTop: "1px solid rgba(124,106,247,0.18)", borderBottom: "1px solid rgba(124,106,247,0.18)", boxSizing: "border-box", pointerEvents: "none" }} />
+      <div aria-hidden="true" style={{ position: "absolute", left: 0, right: 0, top: EDITOR_PADDING_TOP + currentLine * EDITOR_LINE_HEIGHT - scroll.top, height: EDITOR_LINE_HEIGHT, background: "rgba(255,255,255,0.035)", borderTop: "1px solid rgba(255,255,255,0.04)", borderBottom: "1px solid rgba(255,255,255,0.04)", boxSizing: "border-box", pointerEvents: "none" }} />
 
       {/* Highlighted code + indent guides */}
       <div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
-        <div style={{ position: "absolute", top: 0, left: 0, minWidth: "100%", padding: `${EDITOR_PADDING_TOP}px 16px ${EDITOR_PADDING_TOP}px ${EDITOR_TEXT_LEFT}px`, transform: `translate(${-scroll.left}px, ${-scroll.top}px)`, whiteSpace: "pre", color: "#d7dcff", fontFamily: EDITOR_FONT, fontSize: 13.5, lineHeight: `${EDITOR_LINE_HEIGHT}px`, tabSize: 4, MozTabSize: 4, boxSizing: "border-box" }}>
+        <div style={{ position: "absolute", top: 0, left: 0, minWidth: "100%", padding: `${EDITOR_PADDING_TOP}px 16px ${EDITOR_PADDING_TOP}px ${EDITOR_TEXT_LEFT}px`, transform: `translate(${-scroll.left}px, ${-scroll.top}px)`, whiteSpace: "pre", color: "#d4d4d4", fontFamily: EDITOR_FONT, fontSize: 13.5, lineHeight: `${EDITOR_LINE_HEIGHT}px`, tabSize: 4, MozTabSize: 4, boxSizing: "border-box" }}>
           {lines.map((line, lineIndex) => (
             <div key={lineIndex} style={{ position: "relative", height: EDITOR_LINE_HEIGHT }}>
               {Array.from({ length: guides[lineIndex] }, (_, level) => (
@@ -969,14 +1019,14 @@ function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLi
       </div>
 
       {/* Line numbers */}
-      <div aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 44, background: "#0a0a12", borderRight: "1px solid #1a1a2a", overflow: "hidden", zIndex: 1, pointerEvents: "none", userSelect: "none" }}>
+      <div aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 44, background: "#141414", borderRight: "1px solid #232323", overflow: "hidden", zIndex: 1, pointerEvents: "none", userSelect: "none" }}>
         <div style={{ paddingTop: EDITOR_PADDING_TOP, transform: `translateY(${-scroll.top}px)` }}>
           {lines.map((_, lineIndex) => {
             const lineNumber = lineIndex + 1;
             const hasError = Boolean(errorLines && errorLines.has(lineNumber));
             const isCurrent = lineIndex === currentLine;
             return (
-              <div key={lineIndex} style={{ height: EDITOR_LINE_HEIGHT, lineHeight: `${EDITOR_LINE_HEIGHT}px`, paddingRight: 8, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 3, fontFamily: EDITOR_FONT, fontSize: 12, color: hasError ? "#ef4444" : isCurrent ? "#c4b5fd" : "#56607a", fontWeight: hasError || isCurrent ? 700 : 400 }}>
+              <div key={lineIndex} style={{ height: EDITOR_LINE_HEIGHT, lineHeight: `${EDITOR_LINE_HEIGHT}px`, paddingRight: 8, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 3, fontFamily: EDITOR_FONT, fontSize: 12, color: hasError ? "#ef4444" : isCurrent ? "#a3a3a3" : "#555555", fontWeight: hasError || isCurrent ? 700 : 400 }}>
                 {hasError && <span style={{ fontSize: 9 }}>•</span>}
                 <span>{lineNumber}</span>
               </div>
@@ -1001,7 +1051,7 @@ function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLi
         onClick={(e) => syncActiveLine(e.currentTarget)}
         onSelect={(e) => syncActiveLine(e.currentTarget)}
         onFocus={(e) => syncActiveLine(e.currentTarget)}
-        style={{ position: "absolute", inset: 0, zIndex: 2, paddingLeft: EDITOR_TEXT_LEFT, paddingTop: EDITOR_PADDING_TOP, paddingRight: 16, paddingBottom: EDITOR_PADDING_TOP, background: "transparent", color: "transparent", caretColor: "#67e8f9", border: "none", outline: "none", resize: "none", fontFamily: EDITOR_FONT, fontSize: 13.5, lineHeight: `${EDITOR_LINE_HEIGHT}px`, tabSize: 4, MozTabSize: 4, width: "100%", height: "100%", boxSizing: "border-box", whiteSpace: "pre", overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "#2a2a3e #0a0a0f" }}
+        style={{ position: "absolute", inset: 0, zIndex: 2, paddingLeft: EDITOR_TEXT_LEFT, paddingTop: EDITOR_PADDING_TOP, paddingRight: 16, paddingBottom: EDITOR_PADDING_TOP, background: "transparent", color: "transparent", caretColor: "#e8873a", border: "none", outline: "none", resize: "none", fontFamily: EDITOR_FONT, fontSize: 13.5, lineHeight: `${EDITOR_LINE_HEIGHT}px`, tabSize: 4, MozTabSize: 4, width: "100%", height: "100%", boxSizing: "border-box", whiteSpace: "pre", overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "#333 #141414" }}
       />
     </div>
   );
@@ -11925,7 +11975,7 @@ function CodingPlatform() {
 
   const p = selectedProblem;
   const isExamWorkspace = problemNavigationSource === "contest" && contestEntered;
-  const consoleHeight = consoleOpen ? (isPhone ? 320 : 260) : 42;
+  const consoleHeight = consoleOpen ? (isPhone ? 320 : 260) : 0;
   const isTheoryProblem = p && (p.type === "theory" || (Array.isArray(p.options) && p.options.length > 0));
   const problemWorkspaceStyle = isCompact
     ? { display:"grid", gridTemplateColumns:"minmax(0, 1fr)", overflow:"visible", minHeight:"calc(100vh - 116px)" }
@@ -11941,8 +11991,8 @@ function CodingPlatform() {
   const examQuestionStates = isExamWorkspace ? problemNavigation.map(getExamQuestionState) : [];
   const examCompletedCount = examQuestionStates.filter((state) => state === "completed").length;
   const problemPanelStyle = isCompact
-    ? { display:"flex", flexDirection:"column", borderBottom:"1px solid #1e1e2e", overflow:"hidden", minHeight:isPhone ? 360 : 420 }
-    : { width:"42%", display:"flex", flexDirection:"column", borderRight:"1px solid #1e1e2e", overflow:"hidden" };
+    ? { display:"flex", flexDirection:"column", borderBottom:"1px solid #262626", overflow:"hidden", minHeight:isPhone ? 360 : 420 }
+    : { width:"42%", display:"flex", flexDirection:"column", borderRight:"1px solid #262626", overflow:"hidden" };
   const editorPanelStyle = isCompact
     ? { display:"flex", flexDirection:"column", overflow:"hidden", minHeight:isPhone ? 620 : 680 }
     : { flex:1, display:"flex", flexDirection:"column", overflow:"hidden" };
@@ -11951,7 +12001,17 @@ function CodingPlatform() {
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
       <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
       {renderFullscreenGate()}
-      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
+      <div style={{ ...S.app, background:"#131313", color:"#ececec", fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
+      <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+      <style>{`
+        .dv-ws-body { color:#d4d4d4; font-size:15px; line-height:1.75; }
+        .dv-ws-body p { margin:0 0 14px; }
+        .dv-ws-body code { font-family:'IBM Plex Mono','JetBrains Mono',monospace; font-size:13px; background:#232323; border:1px solid #2e2e2e; border-radius:4px; padding:1px 6px; color:#e5e5e5; }
+        .dv-ws-body pre { background:#181818; border:1px solid #262626; border-radius:6px; padding:12px 14px; overflow-x:auto; }
+        .dv-ws-body pre code { background:none; border:none; padding:0; }
+        .dv-ws-body strong { color:#f2f2f2; }
+        .dv-ws-btn:hover:not(:disabled) { border-color:#4a4a4a !important; color:#f2f2f2 !important; }
+      `}</style>
       {exitExamConfirmModalOpen && (
         <div style={S.modalBackdrop} onClick={() => setExitExamConfirmModalOpen(false)}>
           <div style={{ ...S.modalCard, width: "min(520px, 92vw)", padding: "28px", border: "1px solid #7f1d1d" }} onClick={(e) => e.stopPropagation()}>
@@ -12094,55 +12154,55 @@ function CodingPlatform() {
       
       <ErrorBanner errors={errorBanner} onClose={() => setErrorBanner(null)} />
 
-      <nav style={S.nav}>
-        <DevOrbitLogo onClick={isExamWorkspace ? undefined : () => setView("list")} />
-        <span style={{ color:"#444", fontSize:14 }}>/</span>
-        <span style={{ color:"#eef0ff", fontSize:14, fontFamily:"'Outfit','Space Grotesk',sans-serif", fontWeight:600, letterSpacing:"0.01em" }}>{p.title}</span>
-        {problemNavigationSource === "contest" && contestEntered && (
-          <div style={{ display:"inline-flex", alignItems:"center", gap:8, marginLeft:14, padding:"7px 10px", borderRadius:10, background:"#0f1727", border:"1px solid #2d4f7b", color:"#93c5fd", fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
-            <span>Time Left</span>
-            <span style={{ color:contestTimerSeconds <= 60 ? "#ff9b9b" : "#eef0ff", fontFamily:"'JetBrains Mono',monospace", fontSize:13 }}>{formatCountdown(contestTimerSeconds)}</span>
+      <nav style={{ display:"flex", alignItems:"center", gap:isPhone ? 10 : 14, padding:`0 ${isPhone ? 12 : 16}px`, height:52, borderBottom:"1px solid #262626", background:"#131313", flexShrink:0, position:"sticky", top:0, zIndex:60 }}>
+        <button onClick={isExamWorkspace ? undefined : () => setView("list")} disabled={isExamWorkspace}
+          style={{ background:"none", border:"none", padding:0, cursor:isExamWorkspace ? "default" : "pointer", color:"#f2f2f2", fontFamily:"inherit", fontSize:15, fontWeight:700, flexShrink:0 }}>
+          ScholarLogic
+        </button>
+        <span style={{ color:"#444", fontSize:15 }}>/</span>
+        {isExamWorkspace ? (
+          <span style={{ color:"#a3a3a3", fontSize:14, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{activeContestAssignment?.title || "Exam"}</span>
+        ) : (
+          <button onClick={() => setView("list")} className="dv-ws-btn" style={{ background:"none", border:"1px solid transparent", borderRadius:6, padding:"5px 8px", cursor:"pointer", color:"#a3a3a3", fontFamily:"inherit", fontSize:14, display:"inline-flex", alignItems:"center", gap:7 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            Problem list
+          </button>
+        )}
+        {isExamWorkspace && (
+          <div title="Time left" style={{ display:"inline-flex", alignItems:"center", gap:8, marginLeft:6, padding:"5px 10px", borderRadius:6, border:`1px solid ${contestTimerSeconds <= 60 ? "#7f1d1d" : "#333"}`, background:contestTimerSeconds <= 60 ? "rgba(229,87,95,0.1)" : "#1a1a1a", fontSize:13, color:"#a3a3a3", flexShrink:0 }}>
+            {!isPhone && <span>Time left</span>}
+            <span style={{ color:contestTimerSeconds <= 60 ? "#ff8a8a" : "#f2f2f2", fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace", fontWeight:500 }}>{formatCountdown(contestTimerSeconds)}</span>
           </div>
         )}
-        <div style={{ display:"flex", gap:10, alignItems:"center", marginLeft:"auto" }}>
-          {showProblemNavigation && (
-            <>
-              <button
-                onClick={() => openAdjacentProblem(-1)}
-                disabled={!hasPreviousProblem}
-                style={{ ...S.btn("default"), background:"#1e1b4b", color:"#c7d2fe", border:"1px solid #6366f1", opacity: hasPreviousProblem ? 1 : 0.4, cursor: hasPreviousProblem ? "pointer" : "not-allowed" }}
-              >
-                ← PREVIOUS
-              </button>
-              <button
-                onClick={() => openAdjacentProblem(1)}
-                disabled={!hasNextProblem}
-                style={{ ...S.btn("default"), background:"linear-gradient(135deg,#7c3aed,#0ea5e9)", color:"#ffffff", border:"none", boxShadow:"0 4px 14px rgba(124,58,237,0.35)", opacity: hasNextProblem ? 1 : 0.4, cursor: hasNextProblem ? "pointer" : "not-allowed" }}
-              >
-                NEXT →
-              </button>
-            </>
-          )}
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginLeft:"auto", flexShrink:0 }}>
+          {showProblemNavigation && [[-1, hasPreviousProblem, "Previous"], [1, hasNextProblem, "Next"]].map(([step, enabled, label]) => (
+            <button key={label} onClick={() => openAdjacentProblem(step)} disabled={!enabled} className="dv-ws-btn" aria-label={label}
+              style={{ background:"transparent", border:"1px solid #333", borderRadius:6, color:"#d4d4d4", padding:isPhone ? "6px 9px" : "6px 12px", fontFamily:"inherit", fontSize:13, display:"inline-flex", alignItems:"center", gap:6, opacity:enabled ? 1 : 0.4, cursor:enabled ? "pointer" : "not-allowed" }}>
+              {step < 0 && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>}
+              {!isPhone && label}
+              {step > 0 && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>}
+            </button>
+          ))}
         </div>
       </nav>
 
 
 
       {isExamWorkspace && problemNavigation.length > 0 && (
-        <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:"10px 24px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
+        <div style={{ background:"#161616", borderBottom:"1px solid #262626", padding:"10px 16px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
           <div style={{ color:"#e2e4ff", fontSize:13, fontWeight:700, whiteSpace:"nowrap" }}>
             Question {selectedProblemIndex + 1} of {problemNavigation.length}
-            <span style={{ color:"#4ade80", marginLeft:10 }}>✓ {examCompletedCount}/{problemNavigation.length} completed</span>
+            <span style={{ color:"#4cb782", marginLeft:10, fontWeight:500 }}>✓ {examCompletedCount}/{problemNavigation.length} completed</span>
           </div>
           <div style={{ display:"flex", gap:6, flexWrap:"wrap", flex:1 }}>
             {problemNavigation.map((problem, index) => {
               const state = examQuestionStates[index];
               const current = index === selectedProblemIndex;
               const colors = state === "completed"
-                ? { background:"#16a34a", color:"#ffffff", border:"#22c55e" }
+                ? { background:"#1f6f4a", color:"#ffffff", border:"#2f8f62" }
                 : state === "attempted"
-                  ? { background:"#b45309", color:"#ffffff", border:"#f59e0b" }
-                  : { background:"#1a1a2b", color:"#a9aed0", border:"#2b2b45" };
+                  ? { background:"#8a4a12", color:"#ffffff", border:"#b4631f" }
+                  : { background:"#1c1c1c", color:"#a3a3a3", border:"#333" };
               return (
                 <button
                   key={problem.dbId || problem.id || index}
@@ -12155,12 +12215,12 @@ function CodingPlatform() {
                     borderRadius:8,
                     background:colors.background,
                     color:colors.color,
-                    border:current ? "2px solid #a78bfa" : `1px solid ${colors.border}`,
-                    boxShadow:current ? "0 0 0 3px rgba(167,139,250,0.35)" : "none",
+                    border:current ? "2px solid #e8873a" : `1px solid ${colors.border}`,
+                    boxShadow:current ? "0 0 0 3px rgba(232,135,58,0.25)" : "none",
                     fontWeight:800,
                     fontSize:13,
                     cursor:"pointer",
-                    fontFamily:"'Space Grotesk',sans-serif",
+                    fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace",
                   }}
                 >
                   {index + 1}
@@ -12169,9 +12229,9 @@ function CodingPlatform() {
             })}
           </div>
           <div style={{ display:"flex", gap:12, color:"#7a7f9e", fontSize:11, fontWeight:700, whiteSpace:"nowrap" }}>
-            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#16a34a", marginRight:5 }} />Completed</span>
-            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#b45309", marginRight:5 }} />Attempted</span>
-            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#1a1a2b", border:"1px solid #2b2b45", marginRight:5 }} />Not started</span>
+            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#1f6f4a", marginRight:5 }} />Completed</span>
+            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#8a4a12", marginRight:5 }} />Attempted</span>
+            <span><span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:"#1c1c1c", border:"1px solid #333", marginRight:5 }} />Not started</span>
           </div>
         </div>
       )}
@@ -12180,13 +12240,13 @@ function CodingPlatform() {
 
 
         <div style={problemPanelStyle}>
-          <div style={{ display:"flex", borderBottom:"1px solid #1e1e2e", background:"#0d0d15", overflowX:"auto" }}>
+          <div role="tablist" style={{ display:"flex", gap:24, padding:`0 ${isPhone ? 16 : 24}px`, borderBottom:"1px solid #262626", background:"#131313", overflowX:"auto", flexShrink:0 }}>
             {["description","solution","submissions"].map(t=>(
-              <button key={t} onClick={()=>setActiveTab(t)} style={{ background:"none", border:"none", padding:"12px 18px", color:activeTab===t?"#fff":"#555", fontSize:12.5, cursor:"pointer", fontFamily:"'Space Grotesk',sans-serif", borderBottom:activeTab===t?"2px solid #7c6af7":"2px solid transparent", textTransform:"uppercase", letterSpacing:"0.08em", fontWeight:activeTab===t?700:500 }}>{t}</button>
+              <button key={t} role="tab" aria-selected={activeTab===t} onClick={()=>setActiveTab(t)} style={{ background:"none", border:"none", padding:"14px 0 12px", color:activeTab===t?"#f2f2f2":"#8e8e8e", fontSize:14, cursor:"pointer", fontFamily:"inherit", borderBottom:activeTab===t?"2px solid #f2f2f2":"2px solid transparent", fontWeight:activeTab===t?600:400, whiteSpace:"nowrap" }}>{t.charAt(0).toUpperCase() + t.slice(1)}</button>
             ))}
           </div>
 
-          <div style={{ flex:1, overflowY:"auto", padding:isPhone ? 16 : 24, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
+          <div style={{ flex:1, overflowY:"auto", padding:isPhone ? "20px 16px" : "26px 28px", scrollbarWidth:"thin", scrollbarColor:"#333 #131313" }}>
             {activeTab === "description" && (() => {
               // MCQ titles are usually a cut-off copy of the question. When the description just
               // repeats the title, show the full question once as the heading instead of twice.
@@ -12198,57 +12258,58 @@ function CodingPlatform() {
                 && questionText.toLowerCase().startsWith(titleText.toLowerCase());
               return (
               <>
-                <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
-                  {questionRepeatsTitle ? (
-                    <h1 style={{ ...S.problemTitle, fontSize: isPhone ? 20 : 26, lineHeight: 1.35 }}>{p.id}. {questionText}</h1>
-                  ) : (
-                    <h1 style={S.problemTitle}>{p.id}. {p.title}</h1>
+                <h1 style={{ margin:"0 0 12px", color:"#f2f2f2", fontSize:questionRepeatsTitle ? (isPhone ? 19 : 22) : (isPhone ? 22 : 26), lineHeight:1.3, fontWeight:600, letterSpacing:"-0.01em" }}>
+                  {p.id}. {questionRepeatsTitle ? questionText : p.title}
+                </h1>
+                <div style={{ display:"flex", gap:6, marginBottom:22, flexWrap:"wrap", alignItems:"center" }}>
+                  {p.difficulty && (
+                    <span style={{ fontSize:12.5, fontWeight:600, padding:"3px 9px", borderRadius:4,
+                      color:p.difficulty === "Easy" ? "#4cb782" : p.difficulty === "Hard" ? "#e5575f" : "#e9b84a",
+                      background:p.difficulty === "Easy" ? "rgba(76,183,130,0.14)" : p.difficulty === "Hard" ? "rgba(229,87,95,0.14)" : "rgba(233,184,74,0.14)" }}>
+                      {p.difficulty}
+                    </span>
                   )}
-                  <span style={S.badge(p.difficulty)}>{p.difficulty}</span>
+                  {(p.tags || []).map(t=>(
+                    <span key={t} style={{ fontSize:12.5, padding:"3px 9px", borderRadius:4, background:"#232323", color:"#c9c9c9" }}>{t}</span>
+                  ))}
                 </div>
                 {candidateCodingAnswers[p.dbId || p.id]?.submitted && (
-                  <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px", borderRadius: 999, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.4)", color: "#4ade80", fontSize: 12, fontWeight: 800, marginBottom: 16 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", padding:"10px 12px", borderRadius:6, background:"rgba(76,183,130,0.1)", border:"1px solid rgba(76,183,130,0.3)", color:"#4cb782", fontSize:13, fontWeight:500, marginBottom:20 }}>
                     <span>✓ Submitted</span>
-                    <span style={{ color: "#93c5fd" }}>({candidateCodingAnswers[p.dbId || p.id].marks ?? 0} / {p.marks || 10} pts)</span>
-                    <span style={{ color: "#cbd5e1" }}>— Test Cases Passed: {candidateCodingAnswers[p.dbId || p.id].testCasesPassed || 0} / {candidateCodingAnswers[p.dbId || p.id].totalTestCases || 3}</span>
+                    <span style={{ color:"#c9c9c9" }}>{candidateCodingAnswers[p.dbId || p.id].marks ?? 0} / {p.marks || 10} points</span>
+                    <span style={{ color:"#8e8e8e" }}>· test cases passed {candidateCodingAnswers[p.dbId || p.id].testCasesPassed || 0} / {candidateCodingAnswers[p.dbId || p.id].totalTestCases || 3}</span>
                   </div>
                 )}
-                <div style={{ display:"flex", gap:8, marginBottom:20, flexWrap:"wrap" }}>
-                  {p.tags.map(t=><span key={t} style={S.tag}>{t}</span>)}
-                </div>
                 {!questionRepeatsTitle && (
-                  <div style={S.problemBody} dangerouslySetInnerHTML={{ __html:p.description }} />
+                  <div className="dv-ws-body" style={{ marginBottom:26 }} dangerouslySetInnerHTML={{ __html:p.description }} />
                 )}
                 {parseExamplesList(p.examples).map((ex, i) => (
-                  <div key={`ex-${p.id || p.number}-${i}`} style={{ marginBottom: 20 }}>
-                    <div style={S.sectionLabel}>Example {i + 1}</div>
-                    <div style={S.exampleCard}>
+                  <div key={`ex-${p.id || p.number}-${i}`} style={{ marginBottom: 22 }}>
+                    <div style={{ color:"#f2f2f2", fontSize:15, fontWeight:600, marginBottom:10 }}>Example {i + 1}</div>
+                    <div style={{ background:"#181818", border:"1px solid #262626", borderRadius:6, padding:"14px 16px", fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace", fontSize:13.5, lineHeight:1.8 }}>
                       {(ex.input !== "" || ex.output === "") && (
-                        <div style={{ marginBottom: 8 }}>
-                          <span style={S.exampleFieldLabel}>Input</span>
-                          <div style={S.exampleFieldValue}>{cleanExampleField(ex.input)}</div>
+                        <div style={{ display:"flex", gap:10, alignItems:"baseline" }}>
+                          <span style={{ color:"#8e8e8e", flexShrink:0 }}>Input</span>
+                          <span style={{ color:"#ececec", whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>{cleanExampleField(ex.input)}</span>
                         </div>
                       )}
                       {ex.output !== "" && (
-                        <div style={{ marginBottom: ex.explanation ? 8 : 0 }}>
-                          <span style={S.exampleFieldLabel}>Output</span>
-                          <div style={{ ...S.exampleFieldValue, color: "#73f0b3" }}>{cleanExampleField(ex.output)}</div>
+                        <div style={{ display:"flex", gap:10, alignItems:"baseline" }}>
+                          <span style={{ color:"#8e8e8e", flexShrink:0 }}>Output</span>
+                          <span style={{ color:"#ececec", whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>{cleanExampleField(ex.output)}</span>
                         </div>
                       )}
                       {Boolean(ex.explanation) && (
-                        <div>
-                          <span style={S.exampleFieldLabel}>Explanation</span>
-                          <div style={{ ...S.problemBody, marginBottom: 0, fontSize: 14.5, color: "#adb2d4" }}>{ex.explanation}</div>
-                        </div>
+                        <div style={{ fontFamily:"'IBM Plex Sans','Outfit',sans-serif", color:"#a3a3a3", fontSize:13.5, lineHeight:1.6, marginTop:10 }}>{ex.explanation}</div>
                       )}
                     </div>
                   </div>
                 ))}
                 {Array.isArray(p.constraints) && p.constraints.length > 0 && (
-                  <div style={{ marginTop:20 }}>
-                    <div style={S.sectionLabel}>Constraints</div>
-                    <ul style={{ margin:0, paddingLeft:18 }}>
-                      {p.constraints.map((c,i)=><li key={i} style={S.constraintItem} dangerouslySetInnerHTML={{ __html:c }} />)}
+                  <div style={{ marginTop:8 }}>
+                    <div style={{ color:"#f2f2f2", fontSize:15, fontWeight:600, marginBottom:10 }}>Constraints</div>
+                    <ul className="dv-ws-body" style={{ margin:0, paddingLeft:20, fontSize:14 }}>
+                      {p.constraints.map((c,i)=><li key={i} style={{ marginBottom:4 }} dangerouslySetInnerHTML={{ __html:c }} />)}
                     </ul>
                   </div>
                 )}
@@ -12291,9 +12352,9 @@ function CodingPlatform() {
 
         
         {isTheoryProblem ? (
-          <div style={{ ...editorPanelStyle, background: "#0d1020", padding: isPhone ? 16 : 24, overflowY: "auto" }}>
-            <div style={{ color: "#a78bfa", fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 16 }}>
-              Select Answer Option ({p.marks || 2} Marks):
+          <div style={{ ...editorPanelStyle, background: "#131313", padding: isPhone ? "20px 16px" : "26px 28px", overflowY: "auto" }}>
+            <div style={{ color: "#a3a3a3", fontSize: 14, marginBottom: 16 }}>
+              Choose one answer <span style={{ color:"#6b6b6b" }}>· {p.marks || 2} marks</span>
             </div>
             <div style={{ display: "grid", gap: 14 }}>
               {(p.options || []).map((opt, oIdx) => {
@@ -12313,26 +12374,25 @@ function CodingPlatform() {
                       display: "flex",
                       gap: 14,
                       alignItems: "center",
-                      padding: "18px 20px",
-                      borderRadius: 16,
-                      background: isSelected ? "linear-gradient(135deg, rgba(139,92,246,0.22), rgba(30,41,59,0.95))" : "#111118",
-                      border: isSelected ? "2px solid #8b5cf6" : "1px solid #1e1e2e",
-                      color: "#f5f6ff",
+                      padding: "14px 16px",
+                      borderRadius: 6,
+                      background: isSelected ? "rgba(232,135,58,0.08)" : "#181818",
+                      border: isSelected ? "1px solid #e8873a" : "1px solid #2a2a2a",
+                      color: "#ececec",
                       cursor: "pointer",
-                      transition: "all 0.15s ease",
-                      boxShadow: isSelected ? "0 10px 30px rgba(139,92,246,0.25)" : "none",
+                      transition: "border-color 0.15s ease, background 0.15s ease",
                     }}
                   >
                     <input
                       type="radio"
                       checked={isSelected}
                       onChange={() => {}}
-                      style={{ width: 20, height: 20, accentColor: "#8b5cf6", cursor: "pointer" }}
+                      style={{ width: 18, height: 18, accentColor: "#e8873a", cursor: "pointer" }}
                     />
-                    <span style={{ fontWeight: 800, color: isSelected ? "#c4b5fd" : "#64748b", fontSize: 16, width: 24 }}>
+                    <span style={{ fontWeight: 600, color: isSelected ? "#e8873a" : "#6b6b6b", fontSize: 15, width: 22, fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace" }}>
                       {String.fromCharCode(65 + oIdx)}.
                     </span>
-                    <span style={{ fontSize: 15, fontWeight: isSelected ? 700 : 500, lineHeight: 1.5 }}>
+                    <span style={{ fontSize: 15, fontWeight: isSelected ? 500 : 400, lineHeight: 1.55 }}>
                       {opt}
                     </span>
                   </div>
@@ -12341,11 +12401,11 @@ function CodingPlatform() {
             </div>
 
             {(candidateTheoryAnswers[p.dbId] || candidateTheoryAnswers[p.id]) ? (
-              <div style={{ marginTop: 20, padding: "12px 16px", borderRadius: 12, background: "rgba(34, 197, 94, 0.12)", border: "1px solid rgba(34, 197, 94, 0.3)", color: "#4ade80", fontSize: 13, fontWeight: 700 }}>
+              <div style={{ marginTop: 18, padding: "10px 14px", borderRadius: 6, background: "rgba(76,183,130,0.1)", border: "1px solid rgba(76,183,130,0.3)", color: "#4cb782", fontSize: 13, fontWeight: 500 }}>
                 ✓ Option selected and saved: "{candidateTheoryAnswers[p.dbId || p.id]}"
               </div>
             ) : (
-              <div style={{ marginTop: 20, padding: "12px 16px", borderRadius: 12, background: "#1e293b", color: "#94a3b8", fontSize: 13 }}>
+              <div style={{ marginTop: 18, padding: "10px 14px", borderRadius: 6, background: "#1a1a1a", border: "1px solid #262626", color: "#8e8e8e", fontSize: 13 }}>
                 Select one option above. Your choice will be saved automatically.
               </div>
             )}
@@ -12353,46 +12413,36 @@ function CodingPlatform() {
         ) : (
           <div style={editorPanelStyle}>
             {/* Toolbar */}
-            <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:`8px ${isPhone ? 12 : 16}px`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-              <select value={lang} onChange={e=>handleLangChange(e.target.value)}
-                style={{ background:"#1a1a2e", border:"1px solid #2a2a3e", color:"#c8c8e8", padding:"4px 10px", borderRadius:6, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>
+            <div style={{ background:"#131313", borderBottom:"1px solid #262626", padding:`8px ${isPhone ? 12 : 16}px`, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", flexShrink:0 }}>
+              <select value={lang} onChange={e=>handleLangChange(e.target.value)} aria-label="Language"
+                style={{ background:"#181818", border:"1px solid #333", color:"#ececec", padding:"6px 10px", borderRadius:6, fontSize:13.5, fontFamily:"inherit", cursor:"pointer", outline:"none" }}>
                 {SUPPORTED_LANGUAGES.map((l) => (
-                  <option key={l.id} value={l.id}>{l.label}</option>
+                  <option key={l.id} value={l.id} style={{ background:"#1c1c1c" }}>{l.label}</option>
                 ))}
               </select>
 
-              {/* Syntax Validation Status Badge */}
               {(() => {
                 const diag = validateCodeSyntax(code, lang);
-                if (diag.isValid) {
-                  return (
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, background: "rgba(34, 197, 94, 0.14)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
-                      ✓ Syntax Valid
-                    </span>
-                  );
-                }
-                return (
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, background: "rgba(239, 68, 68, 0.14)", color: "#f87171", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
-                    ⚠ {diag.errors[0]?.message || "Syntax Warning"}
+                return diag.isValid ? (
+                  <span style={{ fontSize:12.5, color:"#4cb782", display:"inline-flex", alignItems:"center", gap:5 }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                    Syntax valid
+                  </span>
+                ) : (
+                  <span style={{ fontSize:12.5, color:"#ff8a8a", display:"inline-flex", alignItems:"center", gap:5, minWidth:0 }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M12 7v6M12 17h.01" /></svg>
+                    {diag.errors[0]?.message || "Syntax warning"}
                   </span>
                 );
               })()}
 
-              <div style={{ marginLeft: isPhone ? 0 : "auto", display: "flex", gap: 8, alignItems: "center" }}>
-                <button
-                  onClick={() => setCode(formatCode(code, lang))}
-                  title="Format Code (Ctrl+Shift+F)"
-                  style={{ background: "none", border: "1px solid #2a2a3e", color: "#93c5fd", padding: "4px 10px", borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}
-                >
-                  🧹 Format
+              <div style={{ marginLeft:"auto", display:"flex", gap:8, alignItems:"center" }}>
+                <button onClick={() => setCode(formatCode(code, lang))} title="Format code (Ctrl+Shift+F)" className="dv-ws-btn"
+                  style={{ background:"transparent", border:"1px solid #333", color:"#d4d4d4", padding:"5px 11px", borderRadius:6, fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>
+                  Format
                 </button>
-                <button
-                  onClick={() => {
-                    const defaultCode = p.starterCode?.[lang] || DEFAULT_STARTER_CODE[lang] || "";
-                    setCode(defaultCode);
-                  }}
-                  style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "4px 10px", borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
-                >
+                <button onClick={() => setCode(p.starterCode?.[lang] || DEFAULT_STARTER_CODE[lang] || "")} title="Reset to the starter code" className="dv-ws-btn"
+                  style={{ background:"transparent", border:"1px solid #333", color:"#d4d4d4", padding:"5px 11px", borderRadius:6, fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>
                   Reset
                 </button>
               </div>
@@ -12404,7 +12454,7 @@ function CodingPlatform() {
               const errorLines = new Set(syntaxDiag.errors.map((e) => e.line));
 
               return (
-                <div style={{ flex: 1, minHeight: isCompact ? (isPhone ? 360 : 420) : 0, position: "relative", overflow: "hidden", background: "linear-gradient(180deg,#0d1020,#090b14)", display: "flex", flexDirection: "column" }}>
+                <div style={{ flex: 1, minHeight: isCompact ? (isPhone ? 360 : 420) : 0, position: "relative", overflow: "hidden", background: "#141414", display: "flex", flexDirection: "column" }}>
                   <CodeEditor
                     key={p.dbId || p.id}
                     value={code}
@@ -12417,8 +12467,8 @@ function CodingPlatform() {
 
                   {/* Inline Syntax Diagnostic Warning Bar */}
                   {!syntaxDiag.isValid && (
-                    <div style={{ background: "rgba(239, 68, 68, 0.12)", borderTop: "1px solid rgba(239, 68, 68, 0.3)", color: "#f87171", padding: "6px 16px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, zIndex: 5 }}>
-                      <span>🚨</span>
+                    <div style={{ background: "rgba(229,87,95,0.1)", borderTop: "1px solid rgba(229,87,95,0.3)", color: "#ff8a8a", padding: "6px 16px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 8, zIndex: 5 }}>
+                      <span aria-hidden="true">●</span>
                       <span>Line {syntaxDiag.errors[0]?.line}: {syntaxDiag.errors[0]?.message}</span>
                     </div>
                   )}
@@ -12427,35 +12477,27 @@ function CodingPlatform() {
             })()}
 
             {/* Console */}
-            <div style={{ height:consoleHeight, borderTop:"1px solid #1e1e2e", background:"#0a0a0f", transition:"height 0.2s", overflow:"hidden", display:"flex", flexDirection:"column" }}>
-              <div style={{ display:"flex", alignItems:"center", padding:"0 16px", height:42, borderBottom:consoleOpen?"1px solid #1e1e2e":"none", flexShrink:0 }}>
-                <button onClick={()=>setConsoleOpen(!consoleOpen)} style={{ background:"none", border:"none", color:"#888", fontSize:13, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6 }}>
-                  <span style={{ transform:consoleOpen?"rotate(0deg)":"rotate(-90deg)", display:"inline-block", transition:"transform 0.2s" }}>▾</span>
-                  Console
-                </button>
-                {consoleOpen && (
-                  <div style={{ display:"flex", marginLeft:16 }}>
-                    {["testcase","result"].map(t=>(
-                      <button key={t} onClick={()=>setConsoleTab(t)} style={{ background:"none", border:"none", padding:"4px 14px", color:consoleTab===t?"#fff":"#555", fontSize:12, cursor:"pointer", fontFamily:"inherit", borderBottom:consoleTab===t?"2px solid #7c6af7":"2px solid transparent" }}>
-                        {t==="testcase"?"Test Cases":"Result"}
-                      </button>
-                    ))}
-                  </div>
-                )}
+            <div style={{ height:consoleHeight, borderTop:consoleOpen ? "1px solid #262626" : "none", background:"#131313", transition:"height 0.2s", overflow:"hidden", display:"flex", flexDirection:"column", flexShrink:0 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:22, padding:"0 16px", height:40, borderBottom:"1px solid #262626", flexShrink:0 }}>
+                {["testcase","result"].map(t=>(
+                  <button key={t} onClick={()=>setConsoleTab(t)} style={{ background:"none", border:"none", padding:"10px 0 8px", color:consoleTab===t?"#f2f2f2":"#8e8e8e", fontSize:13, cursor:"pointer", fontFamily:"inherit", borderBottom:consoleTab===t?"2px solid #f2f2f2":"2px solid transparent", fontWeight:consoleTab===t ? 500 : 400 }}>
+                    {t==="testcase"?"Test cases":"Result"}
+                  </button>
+                ))}
               </div>
 
               {consoleOpen && (
-                <div style={{ flex:1, overflowY:"auto", padding:16, scrollbarWidth:"thin", scrollbarColor:"#2a2a3e #0a0a0f" }}>
+                <div style={{ flex:1, overflowY:"auto", padding:16, scrollbarWidth:"thin", scrollbarColor:"#333 #131313" }}>
                   {consoleTab === "testcase" && (
                     <div>
                       {p.testCases.map((tc,i)=>(
                         <div key={i} style={{ marginBottom:12 }}>
-                          <div style={{ fontSize:12, color:"#555", marginBottom:4 }}>Case {i+1}:</div>
-                          <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:6, padding:"10px 12px", fontSize:13 }}>
-                            <div style={{ color:"#555", marginBottom:6 }}>Input</div>
-                            <div style={{ color:"#c8c8e8", marginBottom:10 }}>{tc.input}</div>
-                            <div style={{ color:"#555", marginBottom:6 }}>Expected Output</div>
-                            <div style={{ color:"#4ade80" }}>{tc.expected}</div>
+                          <div style={{ fontSize:12.5, color:"#8e8e8e", marginBottom:6 }}>Case {i+1}</div>
+                          <div style={{ background:"#181818", border:"1px solid #262626", borderRadius:6, padding:"10px 12px", fontSize:13, fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace" }}>
+                            <div style={{ color:"#8e8e8e", marginBottom:4, fontFamily:"'IBM Plex Sans',sans-serif", fontSize:12 }}>Input</div>
+                            <div style={{ color:"#ececec", marginBottom:10, whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>{tc.input}</div>
+                            <div style={{ color:"#8e8e8e", marginBottom:4, fontFamily:"'IBM Plex Sans',sans-serif", fontSize:12 }}>Expected output</div>
+                            <div style={{ color:"#4cb782", whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>{tc.expected}</div>
                           </div>
                         </div>
                       ))}
@@ -12501,7 +12543,7 @@ function CodingPlatform() {
                     </div>
                   )}
                   {consoleTab === "result" && !runResult && (
-                    <div style={{ color:"#444", fontSize:13 }}>Run your code to see results here.</div>
+                    <div style={{ color:"#8e8e8e", fontSize:13 }}>Run your code to see the results here.</div>
                   )}
                 </div>
               )}
@@ -12512,37 +12554,44 @@ function CodingPlatform() {
 
       {/* Bottom Action Bar: fixed so Run/Submit always stay visible (sticky breaks inside the overflow-hidden app). */}
       <div aria-hidden="true" style={{ height: PROBLEM_ACTION_BAR_HEIGHT, flexShrink: 0 }} />
-      <div style={{ background: "#0d0d15", borderTop: "1px solid #1e1e2e", padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 80, minHeight: PROBLEM_ACTION_BAR_HEIGHT, boxSizing: "border-box" }}>
-        <div />
-
-        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ background: "#131313", borderTop: "1px solid #262626", display: "flex", alignItems: "stretch", position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 80, height: PROBLEM_ACTION_BAR_HEIGHT, boxSizing: "border-box" }}>
+        {!isCompact && <div style={{ width:"42%", borderRight:"1px solid #262626", flexShrink:0 }} />}
+        <div style={{ flex:1, minWidth:0, display:"flex", alignItems:"center", gap:10, padding:`0 ${isPhone ? 12 : 16}px` }}>
           {!isTheoryProblem && (
-            <>
-              <button
-                onClick={() => simulateRun(false)}
-                disabled={running || submitting}
-                style={{ ...S.btn("run"), padding: "10px 20px" }}
-              >
-                {running ? "⏳ RUNNING..." : "▶ RUN CODE"}
-              </button>
-              <button
-                onClick={handleSubmitClick}
-                disabled={running || submitting}
-                style={{ ...S.btn("submit"), padding: "10px 22px" }}
-              >
-                {submitting ? "⏳ EVALUATING..." : "✓ SUBMIT CODE"}
-              </button>
-            </>
-          )}
-          {(problemNavigationSource === "contest" || contestEntered) && (
-            <button
-              onClick={() => setFinalSubmitConfirmOpen(true)}
-              style={{ ...S.btn("submit"), background: "linear-gradient(135deg, #ef4444, #dc2626)", padding: "10px 22px" }}
-            >
-              🏁 FINISH EXAM
+            <button onClick={() => setConsoleOpen(!consoleOpen)} aria-expanded={consoleOpen} className="dv-ws-btn"
+              style={{ background:"none", border:"1px solid transparent", borderRadius:6, color:"#c9c9c9", fontFamily:"inherit", fontSize:13.5, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:7, padding:"7px 10px" }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform:consoleOpen ? "rotate(180deg)" : "none", transition:"transform 0.2s" }}><path d="M6 15l6-6 6 6" /></svg>
+              Console
             </button>
           )}
+          <div style={{ marginLeft:"auto", display:"flex", gap:10, alignItems:"center" }}>
+            {!isTheoryProblem && (
+              <>
+                <button onClick={() => simulateRun(false)} disabled={running || submitting} className="dv-ws-btn"
+                  style={{ background:"#1a1a1a", border:"1px solid #333", color:"#ececec", borderRadius:6, padding:isPhone ? "9px 12px" : "10px 18px", fontFamily:"inherit", fontSize:14, fontWeight:600, display:"inline-flex", alignItems:"center", gap:8, cursor:running || submitting ? "not-allowed" : "pointer", opacity:running || submitting ? 0.6 : 1 }}>
+                  {running
+                    ? <span style={{ width:12, height:12, border:"2px solid #555", borderTopColor:"#ececec", borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} />
+                    : <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" /></svg>}
+                  {running ? "Running..." : "Run code"}
+                </button>
+                <button onClick={handleSubmitClick} disabled={running || submitting}
+                  style={{ background:"#e8873a", border:"1px solid #e8873a", color:"#1a1009", borderRadius:6, padding:isPhone ? "9px 14px" : "10px 22px", fontFamily:"inherit", fontSize:14, fontWeight:600, display:"inline-flex", alignItems:"center", gap:8, cursor:running || submitting ? "not-allowed" : "pointer", opacity:running || submitting ? 0.7 : 1 }}
+                  onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = "#f0964d"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "#e8873a"; }}>
+                  {submitting && <span style={{ width:12, height:12, border:"2px solid rgba(26,16,9,0.35)", borderTopColor:"#1a1009", borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} />}
+                  {submitting ? "Evaluating..." : "Submit code"}
+                </button>
+              </>
+            )}
+            {(problemNavigationSource === "contest" || contestEntered) && (
+              <button onClick={() => setFinalSubmitConfirmOpen(true)}
+                style={{ background:"#b42318", border:"1px solid #b42318", color:"#ffffff", borderRadius:6, padding:isPhone ? "9px 12px" : "10px 18px", fontFamily:"inherit", fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                Finish exam
+              </button>
+            )}
+          </div>
         </div>
+        <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } }"}</style>
       </div>
 
       {problemNavigationSource === "contest" && contestEntered && (
