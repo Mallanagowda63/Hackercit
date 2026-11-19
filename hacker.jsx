@@ -5194,6 +5194,46 @@ function CodingPlatform() {
     );
   };
 
+  // Top menu shared by the student pages that use the new minimal design.
+  const renderStudentNav = (active = "", contained = false) => {
+    const streak = streakInfo?.currentStreak || 0;
+    const solvedTotal = problemCatalog.filter((problem) => solved.has(problem.id)).length;
+    const link = (id, label, onClick) => {
+      const isActive = active === id;
+      return (
+        <button key={id} onClick={onClick} aria-current={isActive ? "page" : undefined}
+          style={{ background:"none", border:"none", cursor:"pointer", padding:"16px 0 14px", color:isActive ? "#ececec" : "#8e8e8e", fontFamily:"inherit", fontSize:14.5, fontWeight:isActive ? 600 : 400, borderBottom:`2px solid ${isActive ? "#ececec" : "transparent"}`, whiteSpace:"nowrap", flexShrink:0 }}
+          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = "#c9c9c9"; }}
+          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = "#8e8e8e"; }}>
+          {label}
+        </button>
+      );
+    };
+    return (
+      <nav style={{ borderBottom:"1px solid #222", background:"#131313", flexShrink:0, position:"relative", zIndex:50 }}>
+        <div style={{ padding:`0 ${contained ? pageGutter : isPhone ? 12 : 20}px`, display:"flex", alignItems:"center", gap:isPhone ? 16 : 22, maxWidth:contained ? 1240 : "none", margin:"0 auto", boxSizing:"border-box" }}>
+          <button onClick={() => setView("home")} style={{ background:"none", border:"none", padding:"14px 0", cursor:"pointer", color:"#f2f2f2", fontFamily:"inherit", fontSize:16, fontWeight:700, flexShrink:0 }}>ScholarLogic</button>
+          <div style={{ display:"flex", gap:isPhone ? 16 : 22, overflowX:"auto", flex:"1 1 auto", minWidth:0, scrollbarWidth:"none", marginLeft:isPhone ? 0 : 8 }}>
+            {link("list", "Problems", () => setView("list"))}
+            {link("contest", "Contest", openContest)}
+            {link("leaderboard", "Leaderboard", () => openLeaderboard("All"))}
+            {link("playground", "IDE", openPlayground)}
+            {link("challenge", "Monthly challenge", openChallenge)}
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:isPhone ? 10 : 18, flexShrink:0 }}>
+            {!isPhone && (
+              <span style={{ fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace", fontSize:13.5, color:"#a3a3a3", display:"flex", gap:16 }}>
+                <span style={{ color:streakInfo?.practicedToday ? "#e8873a" : "#a3a3a3" }}>streak {streak}</span>
+                {active !== "playground" && <span>{solvedTotal} solved</span>}
+              </span>
+            )}
+            <button onClick={openProfile} title="Your profile" style={{ width:32, height:32, borderRadius:6, background:"#1c1c1c", border:"1px solid #2a2a2a", color:"#ececec", fontFamily:"inherit", fontWeight:700, fontSize:13.5, cursor:"pointer" }}>{userBadge}</button>
+          </div>
+        </div>
+      </nav>
+    );
+  };
+
   // ── Student home: problem list with a progress sidebar ──
   const renderProblemsHome = () => {
     const T = {
@@ -5318,14 +5358,6 @@ function CodingPlatform() {
         <div style={{ width:`${Math.min(100, Math.max(0, percent))}%`, height:"100%", borderRadius:999, background:color, transition:"width 0.4s ease" }} />
       </div>
     );
-    const navLink = (label, onClick, active = false) => (
-      <button key={label} onClick={onClick} style={{ background:"none", border:"none", cursor:"pointer", padding:"22px 0 20px", color:active ? T.text : T.muted, fontFamily:T.sans, fontSize:15, fontWeight:active ? 600 : 400, borderBottom:`2px solid ${active ? T.text : "transparent"}`, whiteSpace:"nowrap", flexShrink:0 }}
-        onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = T.textSoft; }}
-        onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = T.muted; }}>
-        {label}
-      </button>
-    );
-
     const upNextCard = (
       <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:isPhone ? "18px 16px" : "24px 26px", display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", marginBottom:isPhone ? 24 : 36 }}>
         {upNext ? (
@@ -5535,27 +5567,7 @@ function CodingPlatform() {
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, background:T.bg, color:T.text, fontFamily:T.sans, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
           <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-          <nav style={{ borderBottom:`1px solid ${T.borderSoft}`, background:T.bg, position:"sticky", top:0, zIndex:50 }}>
-            <div style={{ maxWidth:1240, margin:"0 auto", padding:`0 ${pageGutter}px`, display:"flex", alignItems:"center", gap:isPhone ? 18 : 28 }}>
-              <button onClick={() => setView("home")} style={{ background:"none", border:"none", padding:"18px 0", cursor:"pointer", color:T.text, fontFamily:T.sans, fontSize:18, fontWeight:700, flexShrink:0 }}>ScholarLogic</button>
-              <div style={{ display:"flex", gap:isPhone ? 18 : 28, overflowX:"auto", flex:"1 1 auto", minWidth:0, scrollbarWidth:"none" }}>
-                {navLink("Problems", () => setView("list"), true)}
-                {navLink("Contest", openContest)}
-                {navLink("Leaderboard", () => openLeaderboard("All"))}
-                {navLink("IDE", openPlayground)}
-                {navLink("Monthly challenge", openChallenge)}
-              </div>
-              <div style={{ display:"flex", alignItems:"center", gap:isPhone ? 10 : 20, flexShrink:0 }}>
-                {!isPhone && (
-                  <span style={{ fontFamily:T.mono, fontSize:15, color:T.textSoft, display:"flex", gap:20 }}>
-                    <span title={info?.practicedToday ? "You practised today" : "Practise today to keep your streak"} style={{ color:info?.practicedToday ? T.accent : T.textSoft }}>streak {currentStreak}</span>
-                    <span>{solvedCount} solved</span>
-                  </span>
-                )}
-                <button onClick={openProfile} title="Your profile" style={{ width:36, height:36, borderRadius:6, background:"#1c1c1c", border:`1px solid ${T.border}`, color:T.text, fontFamily:T.sans, fontWeight:700, fontSize:15, cursor:"pointer" }}>{userBadge}</button>
-              </div>
-            </div>
-          </nav>
+          <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("list", true)}</div>
 
           <main style={{ maxWidth:1240, width:"100%", margin:"0 auto", padding:`${isPhone ? 20 : 38}px ${pageGutter}px 60px`, boxSizing:"border-box" }}>
             {portalError && (
@@ -11339,73 +11351,79 @@ function CodingPlatform() {
       : "";
     const playgroundDiag = validateCodeSyntax(playgroundCode, playgroundLang);
     const playgroundErrorLines = new Set(playgroundDiag.errors.map((item) => item.line));
-    const panelLabel = { color:"#7a7f9e", fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" };
+    const mono = "'IBM Plex Mono','JetBrains Mono',monospace";
+    const toolButton = { background:"transparent", border:"1px solid #333", color:"#d4d4d4", padding:"6px 11px", borderRadius:6, fontSize:13, cursor:"pointer", fontFamily:"inherit" };
+    const paneHeader = { display:"flex", alignItems:"center", gap:10, padding:`0 ${isPhone ? 12 : 16}px`, height:52, borderBottom:"1px solid #222", flexShrink:0, boxSizing:"border-box" };
+    const outputStatus = playgroundRunning
+      ? <span style={{ color:"#a3a3a3" }}>Running...</span>
+      : !result
+        ? <span style={{ color:"#8e8e8e" }}>Not run yet</span>
+        : result.error
+          ? <span style={{ color:"#ff8a8a" }}>Could not run</span>
+          : (
+            <span style={{ display:"inline-flex", gap:10, alignItems:"center" }}>
+              <span style={{ color:ranOk ? "#4cb782" : "#ff8a8a" }}>{ranOk ? "Finished" : result.status}</span>
+              {result.runtime && <span style={{ color:"#8e8e8e", fontFamily:mono }}>{result.runtime}</span>}
+              {result.memory && <span style={{ color:"#8e8e8e", fontFamily:mono }}>{result.memory}</span>}
+            </span>
+          );
 
     return (
       <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
         <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
         {renderFullscreenGate()}
         {renderLiveTestPopupModal()}
-        <div style={{ ...S.app, height: isCompact ? "auto" : "100vh", overflow: isCompact ? "visible" : "hidden", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
-          <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-          <nav style={S.nav}>
-            <DevOrbitLogo onClick={()=>setView("home")} />
-            <button onClick={()=>setView("list")} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Problems</span>
-              <span style={S.navBtnHint(false)}>Daily coding practice</span>
-            </button>
-            <button onClick={openContest} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Contest</span>
-              <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
-            </button>
-            <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Leaderboard</span>
-              <span style={S.navBtnHint(false)}>See the top performers</span>
-            </button>
-            {renderExtraNavButtons("playground")}
-            <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-              {renderStreakPill()}
-              <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
-            </div>
-          </nav>
+        <div style={{ ...S.app, background:"#131313", color:"#ececec", fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", height: isCompact ? "auto" : "100vh", overflow: isCompact ? "visible" : "hidden", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
+          <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+          <style>{`
+            .dv-ide-btn:hover:not(:disabled) { border-color:#4a4a4a !important; color:#f2f2f2 !important; }
+            .dv-ide-input::placeholder { color:#5c5c5c; }
+            @keyframes dvSpin { to { transform: rotate(360deg); } }
+          `}</style>
+          {renderStudentNav("playground")}
 
-          <div style={{ flex:1, minHeight:0, display:"grid", gridTemplateColumns: isCompact ? "minmax(0, 1fr)" : "minmax(0, 1.7fr) minmax(320px, 1fr)" }}>
+          <div style={{ flex:1, minHeight:0, display:"grid", gridTemplateColumns: isCompact ? "minmax(0, 1fr)" : "minmax(0, 1.6fr) minmax(320px, 1fr)" }}>
             {/* Editor */}
-            <div style={{ display:"flex", flexDirection:"column", minHeight: isCompact ? 480 : 0, borderRight: isCompact ? "none" : "1px solid #1e1e2e", borderBottom: isCompact ? "1px solid #1e1e2e" : "none" }}>
-              <div style={{ background:"#0d0d15", borderBottom:"1px solid #1e1e2e", padding:`8px ${isPhone ? 12 : 16}px`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span style={{ color:"#c4b5fd", fontWeight:800, fontFamily:"'Space Grotesk',sans-serif", fontSize:13, letterSpacing:"0.06em" }}>{"</>"} DevOrbit IDE</span>
+            <div style={{ display:"flex", flexDirection:"column", minHeight: isCompact ? 480 : 0, borderRight: isCompact ? "none" : "1px solid #222", borderBottom: isCompact ? "1px solid #222" : "none" }}>
+              <div style={{ ...paneHeader, height:"auto", minHeight:52, flexWrap:"wrap", padding:`8px ${isPhone ? 12 : 16}px` }}>
+                <span style={{ color:"#f2f2f2", fontWeight:700, fontSize:14.5, marginRight:4 }}>DevOrbit IDE</span>
                 <select
                   value={playgroundLang}
                   onChange={(e) => { updatePlaygroundDraft({ lang: e.target.value }); setPlaygroundResult(null); }}
-                  style={{ background:"#1a1a2e", border:"1px solid #2a2a3e", color:"#c8c8e8", padding:"5px 10px", borderRadius:6, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}
+                  aria-label="Language"
+                  style={{ background:"#181818", border:"1px solid #333", color:"#ececec", padding:"6px 10px", borderRadius:6, fontSize:13.5, fontFamily:"inherit", cursor:"pointer", outline:"none", minWidth:isPhone ? 0 : 150 }}
                 >
-                  {PLAYGROUND_LANGUAGES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                  {PLAYGROUND_LANGUAGES.map((item) => <option key={item.id} value={item.id} style={{ background:"#1c1c1c" }}>{item.label}</option>)}
                 </select>
                 {playgroundDiag.isValid ? (
-                  <span style={{ fontSize:11, fontWeight:700, padding:"3px 8px", borderRadius:999, background:"rgba(34, 197, 94, 0.14)", color:"#4ade80", border:"1px solid rgba(34, 197, 94, 0.3)" }}>✓ Brackets balanced</span>
+                  <span style={{ fontSize:12.5, color:"#4cb782", display:"inline-flex", alignItems:"center", gap:5 }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                    Brackets balanced
+                  </span>
                 ) : (
-                  <span style={{ fontSize:11, fontWeight:700, padding:"3px 8px", borderRadius:999, background:"rgba(239, 68, 68, 0.14)", color:"#f87171", border:"1px solid rgba(239, 68, 68, 0.3)" }}>⚠ {playgroundDiag.errors[0]?.message}</span>
+                  <span style={{ fontSize:12.5, color:"#ff8a8a" }}>{playgroundDiag.errors[0]?.message}</span>
                 )}
-                <div style={{ marginLeft: isPhone ? 0 : "auto", display:"flex", gap:8, alignItems:"center" }}>
-                  <button
-                    onClick={() => setPlaygroundCode(formatCode(playgroundCode, playgroundLang))}
-                    title="Format Code (Ctrl+Shift+F)"
-                    style={{ background:"none", border:"1px solid #2a2a3e", color:"#93c5fd", padding:"5px 10px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit", fontWeight:700 }}
-                  >
-                    🧹 Format
-                  </button>
-                  <button
+                <div style={{ marginLeft:"auto", display:"flex", gap:8, alignItems:"center" }}>
+                  <button className="dv-ide-btn" onClick={() => setPlaygroundCode(formatCode(playgroundCode, playgroundLang))} title="Format code (Ctrl+Shift+F)" style={toolButton}>Format</button>
+                  <button className="dv-ide-btn"
                     onClick={() => { if (window.confirm("Reset the editor to the starter code? Your code for this language will be replaced.")) { setPlaygroundCode(PLAYGROUND_STARTER_CODE[playgroundLang]); setPlaygroundResult(null); } }}
-                    style={{ background:"none", border:"1px solid #2a2a3e", color:"#888", padding:"5px 10px", borderRadius:6, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}
+                    style={toolButton}
                   >
                     Reset
                   </button>
-                  <button onClick={runPlayground} disabled={playgroundRunning} title="Run (Ctrl+Enter)" style={{ ...S.btn("submit"), padding:"7px 18px", opacity: playgroundRunning ? 0.7 : 1 }}>
-                    {playgroundRunning ? "⏳ Running..." : "▶ Run"}
+                  <button onClick={runPlayground} disabled={playgroundRunning} title="Run (Ctrl+Enter)"
+                    style={{ background:"#e8873a", border:"1px solid #e8873a", color:"#1a1009", borderRadius:6, padding:"7px 16px", fontFamily:"inherit", fontSize:14, fontWeight:600, display:"inline-flex", alignItems:"center", gap:8, cursor:playgroundRunning ? "not-allowed" : "pointer", opacity:playgroundRunning ? 0.75 : 1 }}
+                    onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = "#f0964d"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "#e8873a"; }}>
+                    {playgroundRunning
+                      ? <span style={{ width:12, height:12, border:"2px solid rgba(26,16,9,0.35)", borderTopColor:"#1a1009", borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} />
+                      : <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" /></svg>}
+                    {playgroundRunning ? "Running..." : "Run"}
+                    {!isPhone && !playgroundRunning && <span style={{ fontFamily:mono, fontSize:11.5, fontWeight:400, opacity:0.75 }}>Ctrl+Enter</span>}
                   </button>
                 </div>
               </div>
-              <div style={{ flex:1, minHeight:0, display:"flex", flexDirection:"column", background:"linear-gradient(180deg,#0d1020,#090b14)" }}>
+              <div style={{ flex:1, minHeight:0, display:"flex", flexDirection:"column", background:"#141414" }}>
                 <CodeEditor
                   key={playgroundLang}
                   value={playgroundCode}
@@ -11428,44 +11446,46 @@ function CodingPlatform() {
             </div>
 
             {/* Input + output */}
-            <div style={{ display:"flex", flexDirection:"column", minHeight:0, background:"#0a0a0f" }}>
-              <div style={{ padding:"12px 16px 14px", borderBottom:"1px solid #1e1e2e", display:"flex", flexDirection:"column", gap:8 }}>
-                <div style={panelLabel}>Input (stdin)</div>
-                <textarea
-                  value={playgroundDraft.stdin}
-                  onChange={(e) => updatePlaygroundDraft({ stdin: e.target.value })}
-                  spellCheck={false}
-                  placeholder="Type the input your program reads..."
-                  style={{ height:isCompact ? 120 : 150, resize:"vertical", background:"#0d1017", border:"1px solid #24283a", borderRadius:10, padding:"10px 12px", color:"#e6e8ff", fontFamily:EDITOR_FONT, fontSize:13, lineHeight:1.5, outline:"none", boxSizing:"border-box", width:"100%" }}
-                />
+            <div style={{ display:"flex", flexDirection:"column", minHeight:0, background:"#131313" }}>
+              <div style={paneHeader}>
+                <span style={{ fontSize:14, fontWeight:600, color:"#f2f2f2" }}>Input</span>
+                <span style={{ fontSize:13.5, color:"#8e8e8e" }}>stdin</span>
+                {playgroundDraft.stdin && (
+                  <button onClick={() => updatePlaygroundDraft({ stdin: "" })} style={{ marginLeft:"auto", background:"none", border:"none", color:"#a3a3a3", fontFamily:"inherit", fontSize:13, cursor:"pointer", padding:"4px 2px" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = "#f2f2f2"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = "#a3a3a3"; }}>
+                    Clear
+                  </button>
+                )}
               </div>
-              <div style={{ flex:1, minHeight: isCompact ? 240 : 0, display:"flex", flexDirection:"column", padding:"12px 16px 16px", gap:10 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                  <div style={panelLabel}>Output</div>
-                  {result && !result.error && (
-                    <>
-                      <span style={{ fontSize:11, fontWeight:800, padding:"3px 9px", borderRadius:999, color: ranOk ? "#4ade80" : "#ff8f8f", background: ranOk ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)", border:`1px solid ${ranOk ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}` }}>
-                        {ranOk ? "✓ Finished" : result.status}
-                      </span>
-                      <span style={{ color:"#7a7f9e", fontSize:12 }}>⏱ {result.runtime}</span>
-                      <span style={{ color:"#7a7f9e", fontSize:12 }}>💾 {result.memory}</span>
-                    </>
-                  )}
-                </div>
-                <div style={{ flex:1, minHeight:120, overflow:"auto", background:"#0d1017", border:"1px solid #1f2333", borderRadius:10, padding:"12px 14px", fontFamily:EDITOR_FONT, fontSize:13, lineHeight:1.6 }}>
-                  {playgroundRunning && <div style={{ color:"#93c5fd" }}>Running your code...</div>}
-                  {!playgroundRunning && !result && <div style={{ color:"#4b4f66" }}>Press ▶ Run (or Ctrl+Enter) to see the output here.</div>}
-                  {!playgroundRunning && result?.error && <div style={{ color:"#ff8f8f", whiteSpace:"pre-wrap" }}>{result.error}</div>}
-                  {!playgroundRunning && result && !result.error && (
-                    <>
-                      {result.stdout
-                        ? <pre style={{ margin:0, color:"#e6e8ff", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"inherit" }}>{result.stdout}</pre>
-                        : !errorText && <div style={{ color:"#4b4f66" }}>(no output)</div>}
-                      {errorText && <pre style={{ margin: result.stdout ? "12px 0 0" : 0, color:"#ff8f8f", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"inherit" }}>{errorText}</pre>}
-                    </>
-                  )}
-                </div>
-                <div style={{ color:"#4b4f66", fontSize:11.5 }}>Your code and input are saved in this browser. Java code must use <code>public class Main</code>.</div>
+              <textarea
+                className="dv-ide-input"
+                value={playgroundDraft.stdin}
+                onChange={(e) => updatePlaygroundDraft({ stdin: e.target.value })}
+                spellCheck={false}
+                aria-label="Program input"
+                placeholder="Type the input your program reads"
+                style={{ height:isCompact ? 130 : 180, resize:"vertical", background:"#141414", border:"none", borderBottom:"1px solid #222", padding:`14px ${isPhone ? 12 : 16}px`, color:"#ececec", fontFamily:mono, fontSize:13.5, lineHeight:1.6, outline:"none", boxSizing:"border-box", width:"100%", flexShrink:0 }}
+              />
+              <div style={paneHeader}>
+                <span style={{ fontSize:14, fontWeight:600, color:"#f2f2f2" }}>Output</span>
+                <span style={{ marginLeft:"auto", fontSize:12.5 }}>{outputStatus}</span>
+              </div>
+              <div aria-live="polite" style={{ flex:1, minHeight: isCompact ? 220 : 0, overflow:"auto", background:"#141414", padding:`14px ${isPhone ? 12 : 16}px`, fontFamily:mono, fontSize:13.5, lineHeight:1.65 }}>
+                {playgroundRunning && <div style={{ color:"#a3a3a3" }}>Running your code...</div>}
+                {!playgroundRunning && !result && <div style={{ color:"#6b6b6b" }}>Press Run or Ctrl+Enter to see the output here.</div>}
+                {!playgroundRunning && result?.error && <div style={{ color:"#ff8a8a", whiteSpace:"pre-wrap" }}>{result.error}</div>}
+                {!playgroundRunning && result && !result.error && (
+                  <>
+                    {result.stdout
+                      ? <pre style={{ margin:0, color:"#ececec", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"inherit" }}>{result.stdout}</pre>
+                      : !errorText && <div style={{ color:"#6b6b6b" }}>(no output)</div>}
+                    {errorText && <pre style={{ margin: result.stdout ? "12px 0 0" : 0, color:"#ff8a8a", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"inherit" }}>{errorText}</pre>}
+                  </>
+                )}
+              </div>
+              <div style={{ color:"#7a7a7a", fontSize:12, padding:`10px ${isPhone ? 12 : 16}px`, borderTop:"1px solid #222", flexShrink:0 }}>
+                Your code and input are saved in this browser. Java code must use <code style={{ fontFamily:mono, color:"#c9c9c9" }}>public class Main</code>.
               </div>
             </div>
           </div>
