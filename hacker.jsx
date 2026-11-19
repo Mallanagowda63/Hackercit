@@ -1621,6 +1621,9 @@ function CodingPlatform() {
   const [aiHireTurns, setAiHireTurns]         = useState([]);
   const [aiHireAdvanced, setAiHireAdvanced]   = useState({});
   const [aiHireFeedbackIndex, setAiHireFeedbackIndex] = useState(null);
+  const [aiHireTimer, setAiHireTimer] = useState({ index: -1, startsAt: 0, endsAt: 0, limit: 0 });
+  const [aiHireTick, setAiHireTick] = useState(() => Date.now());
+  const aiHireTimeUpRef = useRef(-1);
   const aiHireEvalPromisesRef = useRef({});
   const aiHireEvalResultsRef = useRef({});
   const aiHireRunIdRef = useRef(0);
@@ -3825,6 +3828,8 @@ function CodingPlatform() {
       aiHireEvalPromisesRef.current = {};
       aiHireEvalResultsRef.current = {};
       setAiHireFeedbackIndex(null);
+      aiHireTimeUpRef.current = -1;
+      setAiHireTimer({ index: -1, startsAt: 0, endsAt: 0, limit: 0 });
       aiHireLastWarningRef.current = Date.now();
       setAiHireWarnings(0);
       setAiHirePasteBlocked(0);
@@ -3850,10 +3855,10 @@ function CodingPlatform() {
 
   // Checks one answer in the background. The student goes straight on to the next question; the
   // score and feedback appear when ready, and the report waits for any checks still running.
-  const runAiHireEvaluation = (index, question, answer) => {
+  const runAiHireEvaluation = (index, question, answer, timedOut = false) => {
     const runId = aiHireRunIdRef.current;
     const context = aiHireContext();
-    const promise = aiHireCall("/api/ai-hire/evaluate", { context, question, answer })
+    const promise = aiHireCall("/api/ai-hire/evaluate", { context, question, answer, timedOut })
       .then((data) => {
         if (runId !== aiHireRunIdRef.current) return null;
         aiHireEvalResultsRef.current[index] = { answer, evaluation: data.evaluation };
@@ -3874,25 +3879,59 @@ function CodingPlatform() {
     const turn = aiHireTurns[index];
     if (!aiHirePlan || !turn) return;
     setAiHireTurns((prev) => prev.map((item, i) => (i === index ? { ...item, status: "pending", error: "" } : item)));
-    runAiHireEvaluation(index, aiHirePlan.questions[index], turn.answer);
+    runAiHireEvaluation(index, aiHirePlan.questions[index], turn.answer, Boolean(turn.timedOut));
   };
 
-  const submitAiHireAnswer = (skip = false) => {
+  const submitAiHireAnswer = (skip = false, timedOut = false) => {
     if (!aiHirePlan || aiHireBusy) return;
-    if (!skip && aiHireCamLost) { setAiHireError("Turn your camera back on to continue."); return; }
+    if (!skip && !timedOut && aiHireCamLost) { setAiHireError("Turn your camera back on to continue."); return; }
     const index = aiHireTurns.length;
     const question = aiHirePlan.questions[index];
     if (!question) return;
-    const answer = skip ? "" : aiHireDraft.trim();
-    if (!skip && answer.length < 3) { setAiHireError("Speak or type your answer first, or press Skip."); return; }
+    const typed = aiHireDraft.trim();
+    const answer = skip || (timedOut && typed.length < 3) ? "" : typed;
+    if (!skip && !timedOut && answer.length < 3) { setAiHireError("Speak or type your answer first, or press Skip."); return; }
     stopAiHireListening();
     stopAiHireVoice();
     setAiHireError("");
-    setAiHireTurns((prev) => [...prev, { answer, status: "pending", evaluation: null, error: "" }]);
+    setAiHireTurns((prev) => [...prev, { answer, status: "pending", evaluation: null, error: "", timedOut }]);
     setAiHireFeedbackIndex(null);
     setAiHireDraft("");
-    runAiHireEvaluation(index, question, answer);
+    runAiHireEvaluation(index, question, answer, timedOut);
   };
+
+  // Per-question timer. It starts once Asha has had time to read the question aloud; when it runs
+  // out, whatever is in the answer box is submitted automatically.
+  useEffect(() => {
+    if (view !== "aihire" || aiHireStep !== "interview" || !aiHirePlan) return;
+    const index = aiHireTurns.length;
+    if (index >= aiHirePlan.questions.length) {
+      setAiHireTimer((timer) => (timer.index === -1 ? timer : { index: -1, startsAt: 0, endsAt: 0, limit: 0 }));
+      return;
+    }
+    if (aiHireTimer.index === index) return;
+    const question = aiHirePlan.questions[index];
+    const limit = Number(question.timeLimitSeconds) || ({ Easy: 90, Medium: 150, Hard: 240 }[question.difficulty] || 120);
+    const words = String(question.question || "").split(/\s+/).length;
+    const readSeconds = aiHireVoiceOn ? Math.min(25, 3 + Math.ceil(words / 2.6) + (index === 0 ? 8 : 0)) : 2;
+    const startsAt = Date.now() + readSeconds * 1000;
+    setAiHireTimer({ index, startsAt, endsAt: startsAt + limit * 1000, limit });
+  }, [view, aiHireStep, aiHirePlan, aiHireTurns.length]);
+
+  useEffect(() => {
+    if (view !== "aihire" || aiHireStep !== "interview" || aiHireTimer.index < 0) return undefined;
+    const ticker = setInterval(() => setAiHireTick(Date.now()), 500);
+    return () => clearInterval(ticker);
+  }, [view, aiHireStep, aiHireTimer.index]);
+
+  useEffect(() => {
+    if (aiHireStep !== "interview" || aiHireTimer.index < 0 || aiHireTimer.index !== aiHireTurns.length) return;
+    if (aiHireTick < aiHireTimer.endsAt || aiHireTimeUpRef.current === aiHireTimer.index || aiHireBusy) return;
+    aiHireTimeUpRef.current = aiHireTimer.index;
+    setAiHireLeaveOpen(false);
+    setAiHireNotice(`Time is up for question ${aiHireTimer.index + 1}. ${aiHireDraft.trim().length >= 3 ? "Your answer so far was submitted." : "It was marked as not answered."}`);
+    submitAiHireAnswer(false, true);
+  }, [aiHireTick]);
 
   const finishAiHireInterview = async (endedEarly = false) => {
     if (!aiHirePlan || (aiHireBusy && !endedEarly)) return;
@@ -3936,6 +3975,8 @@ function CodingPlatform() {
     aiHireEvalPromisesRef.current = {};
     aiHireEvalResultsRef.current = {};
     setAiHireFeedbackIndex(null);
+    aiHireTimeUpRef.current = -1;
+    setAiHireTimer({ index: -1, startsAt: 0, endsAt: 0, limit: 0 });
     setAiHireStep("setup");
     setAiHirePlan(null);
     setAiHireTurns([]);
@@ -12076,6 +12117,7 @@ function CodingPlatform() {
             <div>Your camera must stay on. It is only shown on your screen: no photos or video are taken, saved or sent.</div>
             <div>Stay on this page. Switching tabs, windows or apps gives a warning; after {AI_HIRE_MAX_WARNINGS} warnings the interview ends.</div>
             <div>Answer by speaking or typing, in your own words. Copy and paste are turned off.</div>
+            <div>Each question has a time limit, shown next to it. When the time runs out, your answer so far is submitted automatically.</div>
             <div>Allow the camera and the microphone when your browser asks. Speech is turned into text by your browser's speech service; DevOrbit does not record your voice.</div>
           </div>
           {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
@@ -12117,6 +12159,12 @@ function CodingPlatform() {
       const tileLabel = { position:"absolute", left:12, bottom:12, display:"flex", alignItems:"center", gap:7, padding:"5px 10px", borderRadius:8, background:"rgba(0,0,0,0.6)", border:"1px solid #2a2a2a", fontSize:12.5, color:"#c9c9c9" };
       const iconButton = { ...secondary, display:"inline-flex", alignItems:"center", gap:7, fontSize:13.5, padding:"8px 13px" };
       const evaluation = feedbackTurn?.evaluation;
+      const timerOn = !finished && aiHireTimer.index === qIndex && aiHireTimer.limit > 0;
+      const timerStarted = timerOn && aiHireTick >= aiHireTimer.startsAt;
+      const secondsLeft = timerOn ? Math.max(0, Math.min(aiHireTimer.limit, Math.ceil((aiHireTimer.endsAt - aiHireTick) / 1000))) : 0;
+      const timeShare = timerOn ? secondsLeft / aiHireTimer.limit : 1;
+      const timerColor = !timerStarted ? C.muted : secondsLeft <= 10 ? C.red : secondsLeft <= 30 ? C.accent : C.text;
+      const clock = (value) => `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
 
       return (
         <div style={{ display:"grid", gap:20 }}>
@@ -12206,9 +12254,19 @@ function CodingPlatform() {
               {!finished ? (
                 <>
                   {/* Question */}
-                  <div style={{ ...card, borderRadius:14 }}>
-                    <div style={{ fontSize:13, color:C.muted, marginBottom:10 }}>
-                      Question {qIndex + 1} of {total} · {question.category} · <span style={{ color:question.difficulty === "Hard" ? C.red : question.difficulty === "Medium" ? C.amber : C.green }}>{question.difficulty}</span>{question.skill ? ` · ${question.skill}` : ""}
+                  <div style={{ ...card, borderRadius:14, position:"relative", overflow:"hidden" }}>
+                    <div style={{ display:"flex", alignItems:"flex-start", gap:12, marginBottom:10 }}>
+                      <div style={{ flex:1, minWidth:0, fontSize:13, color:C.muted }}>
+                        Question {qIndex + 1} of {total} · {question.category} · <span style={{ color:question.difficulty === "Hard" ? C.red : question.difficulty === "Medium" ? C.amber : C.green }}>{question.difficulty}</span>{question.skill ? ` · ${question.skill}` : ""}
+                      </div>
+                      {timerOn && (
+                        <div role="timer" aria-label={`Time left ${clock(secondsLeft)}`} title={timerStarted ? "Time left to answer this question" : "The timer starts after the question is read"}
+                          style={{ display:"inline-flex", alignItems:"center", gap:7, flexShrink:0, padding:"5px 11px", borderRadius:999, border:`1px solid ${timerStarted && secondsLeft <= 30 ? timerColor : "#333"}`, background:timerStarted && secondsLeft <= 10 ? "rgba(229,87,95,0.12)" : "#141414", color:timerColor, animation:timerStarted && secondsLeft <= 10 ? "dvTimerPulse 1s ease-in-out infinite" : "none" }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2" /><path d="M9 2h6" /></svg>
+                          <span style={{ fontFamily:mono, fontSize:15, fontWeight:500 }}>{clock(secondsLeft)}</span>
+                          {!isPhone && <span style={{ fontSize:12, color:C.muted }}>{timerStarted ? "left" : "to answer"}</span>}
+                        </div>
+                      )}
                     </div>
                     <div onCopy={(e) => e.preventDefault()} style={{ fontSize:isPhone ? 18 : 21, lineHeight:1.45, color:C.text, fontWeight:600, userSelect:"none" }}>{question.question}</div>
                     <div style={{ display:"flex", gap:8, marginTop:18, flexWrap:"wrap" }}>
@@ -12225,6 +12283,11 @@ function CodingPlatform() {
                         {aiHireVoiceOn ? "Voice on" : "Voice off"}
                       </button>
                     </div>
+                    {timerOn && (
+                      <div aria-hidden="true" style={{ position:"absolute", left:0, right:0, bottom:0, height:3, background:"#222" }}>
+                        <div style={{ height:"100%", width:`${Math.round(timeShare * 100)}%`, background:secondsLeft <= 10 ? C.red : secondsLeft <= 30 ? C.accent : C.green, transition:"width 0.5s linear, background 0.3s" }} />
+                      </div>
+                    )}
                   </div>
 
                   {/* Answer */}
@@ -12285,6 +12348,7 @@ function CodingPlatform() {
                 <div style={{ ...card, borderRadius:14, display:"grid", gap:14 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                     <span style={{ fontSize:15, fontWeight:600, color:C.text }}>Feedback on question {feedbackIndex + 1}</span>
+                    {feedbackTurn.timedOut && <span style={{ fontSize:12, padding:"3px 9px", borderRadius:999, border:"1px solid rgba(229,87,95,0.45)", color:"#ffb0b0" }}>Time ran out</span>}
                     {feedbackTurn.status === "done" && (
                       <>
                         <span style={{ fontFamily:mono, fontSize:15, color:scoreColor(evaluation.score) }}>{evaluation.score}/10</span>
@@ -12387,7 +12451,7 @@ function CodingPlatform() {
         {renderFullscreenGate()}
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, background:C.bg, color:C.text, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease" }}>
-          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvMicPulse { 0% { transform: scale(0.95); opacity: 0.8; } 100% { transform: scale(1.3); opacity: 0; } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
+          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvTimerPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } } @keyframes dvMicPulse { 0% { transform: scale(0.95); opacity: 0.8; } 100% { transform: scale(1.3); opacity: 0; } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
           <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("aihire")}</div>
           {aiHireBusy && <AiHireLoadingOverlay kind={aiHireBusy} />}
           {aiHireLeaveOpen && (
