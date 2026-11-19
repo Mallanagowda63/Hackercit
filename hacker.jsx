@@ -980,7 +980,177 @@ function computeIndentGuides(lines, unit) {
   });
 }
 
-function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLines = null, minHeight = 0, ariaLabel = "Code editor" }) {
+// ── Code suggestions (autocomplete) for the editor ──
+// Each entry: label (what is matched and shown), insert (text to put in; "$0" marks where the cursor
+// goes, "\n" lines are indented like the current line), kind and a short detail.
+const kw = (words, detail = "keyword") => words.split(" ").map((word) => ({ label: word, insert: word, kind: "keyword", detail }));
+const fn = (items) => items.map(([label, insert, detail]) => ({ label, insert: insert || `${label}($0)`, kind: "function", detail: detail || "" }));
+const sn = (items) => items.map(([label, insert, detail]) => ({ label, insert, kind: "snippet", detail }));
+const md = (words) => words.split(" ").map((word) => ({ label: word, insert: `${word}($0)`, kind: "method", detail: "method", method: true }));
+
+const CODE_SUGGESTIONS = {
+  python: [
+    ...sn([
+      ["for", "for i in range($0):\n    ", "for loop"],
+      ["for in", "for item in $0:\n    ", "loop over items"],
+      ["while", "while $0:\n    ", "while loop"],
+      ["def", "def solve($0):\n    ", "function"],
+      ["if", "if $0:\n    ", "if block"],
+      ["elif", "elif $0:\n    ", "else-if"],
+      ["else", "else:\n    $0", "else block"],
+      ["try", "try:\n    $0\nexcept Exception as error:\n    print(error)", "try / except"],
+      ["class", "class Solution:\n    def __init__(self):\n        $0", "class"],
+      ["main", "if __name__ == \"__main__\":\n    $0", "main guard"],
+      ["input().split()", "list(map(int, input().split()))$0", "read numbers on one line"],
+      ["sys.stdin.read()", "sys.stdin.read().split()$0", "read all input"],
+    ]),
+    ...fn([
+      ["print"], ["input", "input()$0"], ["len"], ["range"], ["int"], ["str"], ["float"], ["list"], ["dict"], ["set"], ["tuple"],
+      ["sorted"], ["reversed"], ["enumerate"], ["zip"], ["map"], ["filter"], ["sum"], ["min"], ["max"], ["abs"], ["round"],
+      ["isinstance"], ["type"], ["any"], ["all"], ["ord"], ["chr"], ["bin"], ["pow"], ["divmod"],
+    ]).map((item) => ({ ...item, detail: item.detail || "built-in" })),
+    ...md("append extend pop insert remove sort reverse index count split strip join replace lower upper startswith endswith find keys values items get add update copy clear isdigit isalpha"),
+    ...kw("and as assert break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield"),
+  ],
+  javascript: [
+    ...sn([
+      ["for", "for (let i = 0; i < $0; i++) {\n  \n}", "for loop"],
+      ["for of", "for (const item of $0) {\n  \n}", "loop over items"],
+      ["while", "while ($0) {\n  \n}", "while loop"],
+      ["function", "function solve($0) {\n  \n}", "function"],
+      ["arrow", "const solve = ($0) => {\n  \n};", "arrow function"],
+      ["if", "if ($0) {\n  \n}", "if block"],
+      ["else", "else {\n  $0\n}", "else block"],
+      ["try", "try {\n  $0\n} catch (error) {\n  console.error(error);\n}", "try / catch"],
+      ["readInput", "const input = require(\"fs\").readFileSync(0, \"utf-8\").trim().split(\"\\n\");$0", "read all input lines"],
+    ]),
+    ...fn([
+      ["console.log"], ["console.error"], ["Math.max"], ["Math.min"], ["Math.floor"], ["Math.ceil"], ["Math.abs"], ["Math.sqrt"], ["Math.round"], ["Math.pow"],
+      ["parseInt"], ["parseFloat"], ["Number"], ["String"], ["Array.from"], ["Array.isArray"], ["Object.keys"], ["Object.values"], ["Object.entries"],
+      ["JSON.stringify"], ["JSON.parse"], ["require"], ["process.stdout.write"], ["new Map", "new Map($0)"], ["new Set", "new Set($0)"],
+    ]).map((item) => ({ ...item, detail: item.detail || "built-in" })),
+    ...md("push pop shift unshift slice splice map filter reduce forEach find findIndex some every includes indexOf join sort reverse concat split trim toUpperCase toLowerCase startsWith endsWith replace has get set add delete keys values entries toString"),
+    { label: "length", insert: "length", kind: "property", detail: "property", method: true },
+    ...kw("break case catch class const continue default do else export false finally for function if let new null return switch this throw true try typeof undefined var while"),
+  ],
+  java: [
+    ...sn([
+      ["main", "public static void main(String[] args) {\n    $0\n}", "main method"],
+      ["sout", "System.out.println($0);", "print a line"],
+      ["fori", "for (int i = 0; i < $0; i++) {\n    \n}", "for loop"],
+      ["foreach", "for (int value : $0) {\n    \n}", "loop over items"],
+      ["while", "while ($0) {\n    \n}", "while loop"],
+      ["if", "if ($0) {\n    \n}", "if block"],
+      ["else", "else {\n    $0\n}", "else block"],
+      ["try", "try {\n    $0\n} catch (Exception e) {\n    e.printStackTrace();\n}", "try / catch"],
+      ["scanner", "Scanner sc = new Scanner(System.in);$0", "read input"],
+      ["class", "public class Main {\n    $0\n}", "class"],
+    ]),
+    ...fn([
+      ["System.out.println"], ["System.out.print"], ["Math.max"], ["Math.min"], ["Math.abs"], ["Math.sqrt"], ["Math.pow"],
+      ["Integer.parseInt"], ["Integer.MAX_VALUE", "Integer.MAX_VALUE$0", "constant"], ["Integer.MIN_VALUE", "Integer.MIN_VALUE$0", "constant"],
+      ["String.valueOf"], ["Arrays.sort"], ["Arrays.toString"], ["Arrays.fill"], ["Collections.sort"],
+      ["new ArrayList", "new ArrayList<>()$0"], ["new HashMap", "new HashMap<>()$0"], ["new HashSet", "new HashSet<>()$0"], ["new StringBuilder", "new StringBuilder()$0"],
+    ]).map((item) => ({ ...item, detail: item.detail || "built-in" })),
+    ...md("add get put size length charAt substring contains containsKey getOrDefault nextInt nextLine next hasNext append toString equals isEmpty remove indexOf toCharArray split trim"),
+    ...kw("abstract boolean break byte case catch char class continue default do double else extends final finally float for if implements import int interface long new null private protected public return short static String super switch this throw throws try void while true false List Map Set ArrayList HashMap HashSet Scanner", "keyword / type"),
+  ],
+};
+
+const SUGGEST_KIND = {
+  keyword: { mark: "K", color: "#9d8cf2" },
+  function: { mark: "ƒ", color: "#e6c07b" },
+  method: { mark: "m", color: "#7fb7e8" },
+  property: { mark: "p", color: "#7fb7e8" },
+  snippet: { mark: "{}", color: "#e8873a" },
+  word: { mark: "ab", color: "#8e8e8e" },
+};
+
+// Suggestions for the text just before the cursor, or null when nothing fits.
+function getCodeSuggestions(code, caret, language) {
+  const before = code.slice(0, caret);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const lineBefore = before.slice(lineStart);
+  // Not inside a comment or an unfinished string on this line.
+  const withoutStrings = lineBefore.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, "");
+  if (/["'`]/.test(withoutStrings)) return null;
+  if (language === "python" ? withoutStrings.includes("#") : withoutStrings.includes("//")) return null;
+  if (/^\s*\*/.test(lineBefore)) return null;
+  const tokenMatch = lineBefore.match(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.?$/);
+  if (!tokenMatch) return null;
+  const token = tokenMatch[0];
+  const tokenStart = caret - token.length;
+  const dot = token.lastIndexOf(".");
+  const afterDot = dot >= 0 ? token.slice(dot + 1) : "";
+  if (dot < 0 && token.length < 1) return null;
+  if (dot >= 0 && afterDot.length < 1 && !/^(console|Math|System|Arrays|Integer|Object|JSON|Collections|sys|String)\.$/.test(token)) return null;
+
+  const list = CODE_SUGGESTIONS[language] || CODE_SUGGESTIONS.javascript;
+  const lower = token.toLowerCase();
+  const results = [];
+  const seen = new Set();
+  const push = (item, start) => {
+    const key = `${item.label}|${start}`;
+    if (seen.has(key) || results.length >= 40) return;
+    seen.add(key);
+    results.push({ ...item, start });
+  };
+  // Whole-token matches (keywords, functions like console.log, snippets).
+  // A snippet whose name is typed exactly (e.g. "sout") is still offered so it can be expanded.
+  list.forEach((item) => {
+    if (item.method) return;
+    if (item.label.toLowerCase().startsWith(lower) && (item.label !== token || item.kind === "snippet")) push(item, tokenStart);
+  });
+  // Methods after a dot: "nums.ap" -> append (only once a letter is typed after the dot).
+  if (dot >= 0 && afterDot.length >= 1) {
+    list.forEach((item) => {
+      if (item.method && item.label.toLowerCase().startsWith(afterDot.toLowerCase()) && item.label !== afterDot) push(item, tokenStart + dot + 1);
+    });
+  }
+  // Names already used in the code (variables, functions).
+  if (dot < 0) {
+    const words = new Set((code.slice(0, tokenStart) + " " + code.slice(caret)).match(/[A-Za-z_$][\w$]{2,}/g) || []);
+    words.forEach((word) => {
+      if (word !== token && word.toLowerCase().startsWith(lower) && !list.some((item) => item.label === word)) {
+        push({ label: word, insert: word, kind: "word", detail: "in your code" }, tokenStart);
+      }
+    });
+  }
+  if (!results.length) return null;
+  // Closest matches first: whole-token matches (console.log for "console.l"), exact-case prefix,
+  // then snippets/functions, then the rest.
+  const rank = (item) => (item.start === tokenStart ? 0 : 100)
+    + (item.label.startsWith(dot >= 0 && item.method ? afterDot : token) ? 0 : 10)
+    + ({ snippet: 0, function: 1, method: 1, property: 1, word: 2, keyword: 3 }[item.kind] ?? 4);
+  results.sort((a, b) => rank(a) - rank(b) || a.label.length - b.label.length || a.label.localeCompare(b.label));
+  return results.slice(0, 8);
+}
+
+// Text to insert for a suggestion, indented like the current line, and where the cursor ends up.
+function expandSuggestion(item, code, start) {
+  const lineStart = code.lastIndexOf("\n", start - 1) + 1;
+  const indent = (code.slice(lineStart, start).match(/^[ \t]*/) || [""])[0];
+  const text = item.insert.replace(/\n/g, `\n${indent}`);
+  const marker = text.indexOf("$0");
+  return marker >= 0
+    ? { text: text.replace("$0", ""), caretOffset: marker }
+    : { text, caretOffset: text.length };
+}
+
+let codeCharWidthCache = 0;
+function codeCharWidth() {
+  if (codeCharWidthCache) return codeCharWidthCache;
+  try {
+    const context = document.createElement("canvas").getContext("2d");
+    context.font = `13.5px ${EDITOR_FONT}`;
+    codeCharWidthCache = context.measureText("MMMMMMMMMM").width / 10 || 8.1;
+  } catch (_) {
+    codeCharWidthCache = 8.1;
+  }
+  return codeCharWidthCache;
+}
+
+function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLines = null, minHeight = 0, ariaLabel = "Code editor", suggestions = true }) {
   const [scroll, setScroll] = useState({ top: 0, left: 0 });
   const [activeLine, setActiveLine] = useState(0);
   const fallbackRef = useRef(null);
@@ -990,6 +1160,59 @@ function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLi
   const indentUnit = language === "javascript" ? 2 : 4;
   const guides = computeIndentGuides(lines, indentUnit);
   const currentLine = Math.min(activeLine, lines.length - 1);
+  const containerRef = useRef(null);
+  const [suggest, setSuggest] = useState(null); // { items, index, caret }
+
+  const updateSuggestions = (element) => {
+    if (!suggestions || !element) { setSuggest(null); return; }
+    const caret = element.selectionStart;
+    if (caret !== element.selectionEnd) { setSuggest(null); return; }
+    const items = getCodeSuggestions(element.value, caret, language);
+    setSuggest(items ? { items, index: 0, caret } : null);
+  };
+
+  const acceptSuggestion = (item) => {
+    const element = inputRef.current;
+    if (!element || !item) return;
+    const caret = element.selectionStart;
+    const { text, caretOffset } = expandSuggestion(item, code, item.start);
+    const next = code.slice(0, item.start) + text + code.slice(caret);
+    onChange(next);
+    setSuggest(null);
+    const position = item.start + caretOffset;
+    requestAnimationFrame(() => {
+      const target = inputRef.current;
+      if (!target) return;
+      target.focus();
+      target.selectionStart = position;
+      target.selectionEnd = position;
+      setActiveLine(next.slice(0, position).split("\n").length - 1);
+    });
+  };
+
+  // Suggestion keys first (arrows, Enter/Tab to insert, Esc to close); everything else goes to the page.
+  const handleKeyDown = (e) => {
+    if (suggest && suggest.items.length) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        setSuggest((current) => current && { ...current, index: (current.index + step + current.items.length) % current.items.length });
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        acceptSuggestion(suggest.items[suggest.index]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSuggest(null);
+        return;
+      }
+      if (["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(e.key)) setSuggest(null);
+    }
+    if (onKeyDown) onKeyDown(e);
+  };
 
   const syncActiveLine = (element) => {
     if (!element) return;
@@ -998,7 +1221,7 @@ function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLi
   };
 
   return (
-    <div style={{ flex: 1, position: "relative", overflow: "hidden", minHeight }}>
+    <div ref={containerRef} style={{ flex: 1, position: "relative", overflow: "hidden", minHeight }}>
       {/* Current line */}
       <div aria-hidden="true" style={{ position: "absolute", left: 0, right: 0, top: EDITOR_PADDING_TOP + currentLine * EDITOR_LINE_HEIGHT - scroll.top, height: EDITOR_LINE_HEIGHT, background: "rgba(255,255,255,0.035)", borderTop: "1px solid rgba(255,255,255,0.04)", borderBottom: "1px solid rgba(255,255,255,0.04)", boxSizing: "border-box", pointerEvents: "none" }} />
 
@@ -1044,15 +1267,52 @@ function CodeEditor({ value, onChange, language, onKeyDown, textareaRef, errorLi
         autoCapitalize="off"
         autoComplete="off"
         autoCorrect="off"
-        onChange={(e) => { onChange(e.target.value); syncActiveLine(e.target); }}
+        onChange={(e) => { onChange(e.target.value); syncActiveLine(e.target); updateSuggestions(e.target); }}
         onScroll={(e) => setScroll({ top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft })}
-        onKeyDown={onKeyDown}
+        onKeyDown={handleKeyDown}
         onKeyUp={(e) => syncActiveLine(e.currentTarget)}
-        onClick={(e) => syncActiveLine(e.currentTarget)}
+        onClick={(e) => { syncActiveLine(e.currentTarget); setSuggest(null); }}
+        onBlur={() => setSuggest(null)}
         onSelect={(e) => syncActiveLine(e.currentTarget)}
         onFocus={(e) => syncActiveLine(e.currentTarget)}
+        aria-autocomplete="list"
+        aria-expanded={Boolean(suggest)}
         style={{ position: "absolute", inset: 0, zIndex: 2, paddingLeft: EDITOR_TEXT_LEFT, paddingTop: EDITOR_PADDING_TOP, paddingRight: 16, paddingBottom: EDITOR_PADDING_TOP, background: "transparent", color: "transparent", caretColor: "#e8873a", border: "none", outline: "none", resize: "none", fontFamily: EDITOR_FONT, fontSize: 13.5, lineHeight: `${EDITOR_LINE_HEIGHT}px`, tabSize: 4, MozTabSize: 4, width: "100%", height: "100%", boxSizing: "border-box", whiteSpace: "pre", overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "#333 #141414" }}
       />
+
+      {suggest && (() => {
+        const before = code.slice(0, suggest.items[0].start);
+        const lineIndex = before.split("\n").length - 1;
+        const column = before.slice(before.lastIndexOf("\n") + 1).replace(/\t/g, "    ").length;
+        const charWidth = codeCharWidth();
+        const rowHeight = 28;
+        const popupHeight = suggest.items.length * rowHeight + 8;
+        const boxHeight = containerRef.current ? containerRef.current.clientHeight : 400;
+        const boxWidth = containerRef.current ? containerRef.current.clientWidth : 600;
+        const below = EDITOR_PADDING_TOP + (lineIndex + 1) * EDITOR_LINE_HEIGHT - scroll.top + 2;
+        const top = below + popupHeight > boxHeight && below - EDITOR_LINE_HEIGHT - popupHeight - 4 > 0 ? below - EDITOR_LINE_HEIGHT - popupHeight - 4 : below;
+        const left = Math.max(EDITOR_TEXT_LEFT - 4, Math.min(EDITOR_TEXT_LEFT + column * charWidth - scroll.left - 4, boxWidth - 320));
+        return (
+          <div role="listbox" aria-label="Code suggestions" onMouseDown={(e) => e.preventDefault()}
+            style={{ position: "absolute", top, left, zIndex: 5, width: 300, maxWidth: "calc(100% - 16px)", background: "#1d1d1d", border: "1px solid #333", borderRadius: 8, boxShadow: "0 10px 28px rgba(0,0,0,0.5)", padding: 4, fontFamily: EDITOR_FONT, fontSize: 13 }}>
+            {suggest.items.map((item, index) => {
+              const kind = SUGGEST_KIND[item.kind] || SUGGEST_KIND.word;
+              const active = index === suggest.index;
+              return (
+                <div key={`${item.label}-${index}`} role="option" aria-selected={active}
+                  onMouseEnter={() => setSuggest((current) => current && { ...current, index })}
+                  onClick={() => acceptSuggestion(item)}
+                  style={{ display: "flex", alignItems: "center", gap: 9, height: rowHeight, padding: "0 8px", borderRadius: 5, cursor: "pointer", background: active ? "#2f2f2f" : "transparent" }}>
+                  <span style={{ width: 20, flexShrink: 0, textAlign: "center", fontSize: 11, fontWeight: 700, color: kind.color }}>{kind.mark}</span>
+                  <span style={{ flex: 1, minWidth: 0, color: "#ececec", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                  <span style={{ flexShrink: 0, maxWidth: 120, color: "#7a7a7a", fontSize: 11.5, fontFamily: "'IBM Plex Sans','Outfit',sans-serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.detail}</span>
+                </div>
+              );
+            })}
+            <div style={{ padding: "4px 8px 2px", fontSize: 10.5, color: "#666", fontFamily: "'IBM Plex Sans','Outfit',sans-serif" }}>Enter or Tab to insert · Esc to close</div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -3641,17 +3901,42 @@ function CodingPlatform() {
   }, []);
 
   // The interviewer's voice: the browser's text-to-speech, preferring an English female voice.
+  // Asha speaks with an Indian English voice: an Indian female voice first (Microsoft Heera / Neerja on
+  // Windows and Edge, Google's Indian English voice on Android), then any Indian English voice, then
+  // other English voices.
+  const pickAiHireVoice = (voices) => {
+    const list = Array.isArray(voices) ? voices : [];
+    const indian = list.filter((voice) => /^en[-_]IN$/i.test(voice.lang) || /india/i.test(voice.name));
+    const female = /heera|neerja|kajal|swara|aditi|raveena|veena|isha|ananya|female|woman/i;
+    const english = list.filter((voice) => /^en(-|_|$)/i.test(voice.lang));
+    return indian.find((voice) => female.test(voice.name))
+      || indian.find((voice) => /google/i.test(voice.name))
+      || indian[0]
+      || english.find((voice) => /zira|samantha|google uk english female|aria|jenny|sonia|natasha|female/i.test(voice.name))
+      || english[0]
+      || null;
+  };
+
+  // Browsers load their voice list late; ask for it early so the first question uses the right voice.
+  useEffect(() => {
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
+    if (!synth || view !== "aihire") return undefined;
+    synth.getVoices();
+    const onVoices = () => synth.getVoices();
+    synth.addEventListener?.("voiceschanged", onVoices);
+    return () => synth.removeEventListener?.("voiceschanged", onVoices);
+  }, [view]);
+
   const speakAiHire = (text) => {
     const synth = window.speechSynthesis;
     if (!synth || !text) return;
     synth.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    const voices = synth.getVoices();
-    const english = voices.filter((voice) => /^en(-|_|$)/i.test(voice.lang));
-    const preferred = english.find((voice) => /heera|neerja|female|zira|samantha|google uk english female|aria|jenny|sonia|natasha/i.test(voice.name))
-      || english.find((voice) => /en-IN/i.test(voice.lang)) || english[0];
+    const preferred = pickAiHireVoice(synth.getVoices());
     if (preferred) utterance.voice = preferred;
-    utterance.rate = 0.97;
+    // Ask for Indian English even when no Indian voice is installed; some browsers use it to pick one.
+    utterance.lang = preferred?.lang || "en-IN";
+    utterance.rate = 0.95;
     utterance.pitch = 1.05;
     utterance.onstart = () => setAiHireSpeaking(true);
     utterance.onend = () => setAiHireSpeaking(false);
