@@ -1097,6 +1097,54 @@ function streakColor(count) {
   return STREAK_COLORS[4];
 }
 
+// "Asha", the AI interviewer: an illustrated avatar whose mouth moves while she is speaking.
+function AiInterviewerAvatar({ speaking = false, size = 120 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 120 120" role="img" aria-label={speaking ? "AI interviewer speaking" : "AI interviewer"} style={{ display: "block" }}>
+      <defs>
+        <linearGradient id="dvAvatarBg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#3a2a22" />
+          <stop offset="100%" stopColor="#1d1d24" />
+        </linearGradient>
+        <clipPath id="dvAvatarClip"><circle cx="60" cy="60" r="60" /></clipPath>
+      </defs>
+      <g clipPath="url(#dvAvatarClip)">
+        <rect width="120" height="120" fill="url(#dvAvatarBg)" />
+        {/* hair behind */}
+        <path d="M26 64 C22 30 40 14 60 14 C82 14 98 30 94 66 C93 84 90 96 86 104 L34 104 C30 96 27 82 26 64 Z" fill="#1b1311" />
+        {/* shoulders / blazer */}
+        <path d="M18 120 C20 98 36 90 60 90 C84 90 100 98 102 120 Z" fill="#2f3a56" />
+        <path d="M50 92 L60 108 L70 92 Z" fill="#f2efe9" />
+        {/* neck */}
+        <rect x="52" y="74" width="16" height="18" rx="6" fill="#c98b62" />
+        {/* face */}
+        <ellipse cx="60" cy="54" rx="22" ry="26" fill="#d99a6c" />
+        {/* hair front with side parting */}
+        <path d="M37 50 C36 32 48 24 62 24 C76 24 85 34 83 50 C76 40 66 34 56 36 C48 38 42 44 37 50 Z" fill="#241815" />
+        {/* earrings */}
+        <circle cx="38.5" cy="62" r="2" fill="#e8873a" />
+        <circle cx="81.5" cy="62" r="2" fill="#e8873a" />
+        {/* eyebrows and eyes */}
+        <path d="M46 46 Q51 43.5 56 46" stroke="#2a1b16" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+        <path d="M64 46 Q69 43.5 74 46" stroke="#2a1b16" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+        <g className="dv-avatar-eyes">
+          <ellipse cx="51" cy="53" rx="2.6" ry="3" fill="#2a1b16" />
+          <ellipse cx="69" cy="53" rx="2.6" ry="3" fill="#2a1b16" />
+        </g>
+        {/* bindi, nose, cheeks */}
+        <circle cx="60" cy="41" r="1.4" fill="#b2333a" />
+        <path d="M60 56 Q58 62 60.5 63" stroke="#b67650" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+        <circle cx="47" cy="63" r="3.5" fill="#e07d6a" opacity="0.35" />
+        <circle cx="73" cy="63" r="3.5" fill="#e07d6a" opacity="0.35" />
+        {/* mouth: opens and closes while speaking */}
+        <g style={{ transformOrigin: "60px 69px", animation: speaking ? "dvTalk 0.32s ease-in-out infinite alternate" : "none" }}>
+          <path d={speaking ? "M53 68 Q60 75 67 68 Q60 71 53 68 Z" : "M54 68.5 Q60 72.5 66 68.5"} fill={speaking ? "#7a2e2e" : "none"} stroke="#9c4a42" strokeWidth="1.6" strokeLinecap="round" />
+        </g>
+      </g>
+    </svg>
+  );
+}
+
 function StreakCalendar({ calendar, today, weeks = 26, cell = 12, gap = 3 }) {
   if (!today) return null;
   const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1504,6 +1552,17 @@ function CodingPlatform() {
   const [aiHireBusy, setAiHireBusy]           = useState("");
   const [aiHireError, setAiHireError]         = useState("");
   const [aiHireStatus, setAiHireStatus]       = useState(null);
+  const [aiHireCamOn, setAiHireCamOn]         = useState(false);
+  const [aiHireCamLost, setAiHireCamLost]     = useState(false);
+  const [aiHireWarnings, setAiHireWarnings]   = useState(0);
+  const [aiHireNotice, setAiHireNotice]       = useState("");
+  const [aiHirePasteBlocked, setAiHirePasteBlocked] = useState(0);
+  const [aiHireSpeaking, setAiHireSpeaking]   = useState(false);
+  const [aiHireVoiceOn, setAiHireVoiceOn]     = useState(true);
+  const aiHireStreamRef = useRef(null);
+  const aiHireVideoRef = useRef(null);
+  const aiHireLastWarningRef = useRef(0);
+  const aiHireSpokenRef = useRef("");
   const [leaderboardSearch, setLeaderboardSearch] = useState("");
   const [leaderboardScope, setLeaderboardScope] = useState("All");
   const [leaderboardPage, setLeaderboardPage] = useState(1);
@@ -3436,16 +3495,156 @@ function CodingPlatform() {
     reader.readAsDataURL(file);
   });
 
+  const AI_HIRE_MAX_WARNINGS = 3;
+
+  // Camera: shown only to the student. Nothing is recorded, captured or uploaded.
+  const stopAiHireCamera = () => {
+    const stream = aiHireStreamRef.current;
+    if (stream) stream.getTracks().forEach((track) => track.stop());
+    aiHireStreamRef.current = null;
+    if (aiHireVideoRef.current) aiHireVideoRef.current.srcObject = null;
+    setAiHireCamOn(false);
+  };
+
+  const startAiHireCamera = async () => {
+    if (aiHireStreamRef.current) return true;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setAiHireError("This browser cannot use the camera. Open the site in Chrome or Edge.");
+      return false;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" }, audio: false });
+      aiHireStreamRef.current = stream;
+      stream.getVideoTracks().forEach((track) => {
+        track.onended = () => { aiHireStreamRef.current = null; setAiHireCamOn(false); setAiHireCamLost(true); };
+      });
+      setAiHireCamOn(true);
+      setAiHireCamLost(false);
+      return true;
+    } catch (_) {
+      setAiHireError("Allow camera access to start the interview. Click the camera icon in the address bar, choose Allow, and try again.");
+      return false;
+    }
+  };
+
+  // Attach the stream to the <video> whenever it (re)mounts.
+  useEffect(() => {
+    if (aiHireVideoRef.current && aiHireStreamRef.current && aiHireVideoRef.current.srcObject !== aiHireStreamRef.current) {
+      aiHireVideoRef.current.srcObject = aiHireStreamRef.current;
+    }
+  });
+
+  // Leaving the page or the interview turns the camera and the voice off.
+  useEffect(() => {
+    if (view !== "aihire" || aiHireStep !== "interview") {
+      if (aiHireStreamRef.current) stopAiHireCamera();
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+    }
+  }, [view, aiHireStep]);
+  useEffect(() => () => {
+    const stream = aiHireStreamRef.current;
+    if (stream) stream.getTracks().forEach((track) => track.stop());
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  }, []);
+
+  // The interviewer's voice: the browser's text-to-speech, preferring an English female voice.
+  const speakAiHire = (text) => {
+    const synth = window.speechSynthesis;
+    if (!synth || !text) return;
+    synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = synth.getVoices();
+    const english = voices.filter((voice) => /^en(-|_|$)/i.test(voice.lang));
+    const preferred = english.find((voice) => /heera|neerja|female|zira|samantha|google uk english female|aria|jenny|sonia|natasha/i.test(voice.name))
+      || english.find((voice) => /en-IN/i.test(voice.lang)) || english[0];
+    if (preferred) utterance.voice = preferred;
+    utterance.rate = 0.97;
+    utterance.pitch = 1.05;
+    utterance.onstart = () => setAiHireSpeaking(true);
+    utterance.onend = () => setAiHireSpeaking(false);
+    utterance.onerror = () => setAiHireSpeaking(false);
+    synth.speak(utterance);
+  };
+
+  const stopAiHireVoice = () => {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    setAiHireSpeaking(false);
+  };
+
+  // Ask each new question aloud once.
+  useEffect(() => {
+    if (view !== "aihire" || aiHireStep !== "interview" || !aiHirePlan) return;
+    const answered = aiHireTurns.length;
+    const onFeedback = answered > 0 && !aiHireAdvanced[answered - 1];
+    if (onFeedback || answered >= aiHirePlan.questions.length) return;
+    const question = aiHirePlan.questions[answered];
+    const key = `${aiHirePlan.role}|${answered}`;
+    if (aiHireSpokenRef.current === key) return;
+    aiHireSpokenRef.current = key;
+    if (aiHireVoiceOn) {
+      const intro = answered === 0 ? `Hello, I am Asha, and I will be your interviewer for the ${aiHirePlan.role} role today. Let's begin. ` : "";
+      speakAiHire(`${intro}Question ${answered + 1}. ${question.question}`);
+    }
+  }, [view, aiHireStep, aiHirePlan, aiHireTurns, aiHireAdvanced, aiHireVoiceOn]);
+
+  // Anti-cheating: leaving the page (another tab, window or app) is a warning.
+  useEffect(() => {
+    if (view !== "aihire" || aiHireStep !== "interview") return undefined;
+    const warn = () => {
+      const now = Date.now();
+      if (now - aiHireLastWarningRef.current < 1500) return; // blur + hidden fire together
+      aiHireLastWarningRef.current = now;
+      setAiHireWarnings((count) => count + 1);
+    };
+    const onVisibility = () => { if (document.visibilityState === "hidden") warn(); };
+    window.addEventListener("blur", warn);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", warn);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [view, aiHireStep]);
+
+  useEffect(() => {
+    if (!aiHireWarnings || aiHireStep !== "interview") return;
+    if (aiHireWarnings >= AI_HIRE_MAX_WARNINGS) {
+      stopAiHireVoice();
+      if (aiHireTurns.length) {
+        setAiHireNotice(`The interview ended because you left the page ${AI_HIRE_MAX_WARNINGS} times.`);
+        finishAiHireInterview(true);
+      } else {
+        stopAiHireCamera();
+        setAiHireStep("setup");
+        setAiHirePlan(null);
+        setAiHireError(`The interview ended because you left the page ${AI_HIRE_MAX_WARNINGS} times. Start again and stay on this page.`);
+      }
+      return;
+    }
+    setAiHireNotice(`Warning ${aiHireWarnings} of ${AI_HIRE_MAX_WARNINGS}: stay on this page. Switching tabs, windows or apps is not allowed during the interview.`);
+  }, [aiHireWarnings]);
+
+  const blockAiHirePaste = (e) => {
+    e.preventDefault();
+    setAiHirePasteBlocked((count) => count + 1);
+    setAiHireNotice("Copy and paste are turned off during the interview. Type your answer in your own words.");
+  };
+
   const startAiHireInterview = async () => {
     const jdText = aiHireForm.jdText.trim();
     if (!jdText && !aiHireForm.image) { setAiHireError("Paste the job description or upload a photo of it."); return; }
     setAiHireError("");
+    if (!(await startAiHireCamera())) return;
     setAiHireBusy("plan");
     try {
       const data = await performApiRequest("/api/ai-hire/start", {
         method: "POST",
         body: JSON.stringify({ jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim(), questionCount: aiHireForm.questionCount }),
       });
+      aiHireSpokenRef.current = "";
+      aiHireLastWarningRef.current = Date.now();
+      setAiHireWarnings(0);
+      setAiHirePasteBlocked(0);
+      setAiHireNotice("");
       setAiHirePlan(data.plan);
       setAiHireTurns([]);
       setAiHireAdvanced({});
@@ -3454,6 +3653,7 @@ function CodingPlatform() {
       setAiHireStep("interview");
       setAiHireStatus((prev) => (prev ? { ...prev, interviewsLeft: data.interviewsLeft } : prev));
     } catch (error) {
+      stopAiHireCamera();
       setAiHireError(error.message || "Could not prepare the interview. Please try again.");
     } finally {
       setAiHireBusy("");
@@ -3466,11 +3666,13 @@ function CodingPlatform() {
 
   const submitAiHireAnswer = async (skip = false) => {
     if (!aiHirePlan || aiHireBusy) return;
+    if (!skip && aiHireCamLost) { setAiHireError("Turn your camera back on to continue."); return; }
     const index = aiHireTurns.length;
     const question = aiHirePlan.questions[index];
     if (!question) return;
     const answer = skip ? "" : aiHireDraft.trim();
     if (!skip && answer.length < 3) { setAiHireError("Type your answer first, or press Skip."); return; }
+    stopAiHireVoice();
     setAiHireError("");
     setAiHireBusy("evaluate");
     try {
@@ -3487,8 +3689,9 @@ function CodingPlatform() {
     }
   };
 
-  const finishAiHireInterview = async () => {
-    if (!aiHirePlan || aiHireBusy) return;
+  const finishAiHireInterview = async (endedEarly = false) => {
+    if (!aiHirePlan || (aiHireBusy && !endedEarly)) return;
+    stopAiHireVoice();
     setAiHireError("");
     setAiHireBusy("report");
     try {
@@ -3499,12 +3702,14 @@ function CodingPlatform() {
         score: turn.evaluation.score,
         verdict: turn.evaluation.verdict,
       }));
+      const integrity = { tabSwitches: aiHireWarnings, pasteBlocked: aiHirePasteBlocked, endedEarly: Boolean(endedEarly), totalQuestions: aiHirePlan.questions.length };
       const data = await performApiRequest("/api/ai-hire/report", {
         method: "POST",
-        body: JSON.stringify({ context: aiHireContext(), items }),
+        body: JSON.stringify({ context: aiHireContext(), items, integrity }),
       });
-      setAiHireReport(data.report);
+      setAiHireReport({ ...data.report, integrity });
       setAiHireStep("report");
+      stopAiHireCamera();
     } catch (error) {
       setAiHireError(error.message || "Could not create your report. Please try again.");
     } finally {
@@ -3514,6 +3719,8 @@ function CodingPlatform() {
 
   const resetAiHire = () => {
     if (aiHireStep === "interview" && aiHireTurns.length && !window.confirm("Leave this interview? Your answers so far will be lost.")) return;
+    stopAiHireVoice();
+    stopAiHireCamera();
     setAiHireStep("setup");
     setAiHirePlan(null);
     setAiHireTurns([]);
@@ -3521,6 +3728,9 @@ function CodingPlatform() {
     setAiHireDraft("");
     setAiHireReport(null);
     setAiHireError("");
+    setAiHireNotice("");
+    setAiHireWarnings(0);
+    setAiHireCamLost(false);
   };
 
   const handleLangChange = (l) => {
@@ -11651,6 +11861,12 @@ function CodingPlatform() {
               ))}
             </div>
           </div>
+          <div style={{ display:"grid", gap:6, padding:"12px 14px", borderRadius:8, background:"#141414", border:`1px solid ${C.border}`, fontSize:13.5, color:"#c9c9c9", lineHeight:1.55 }}>
+            <div style={{ color:C.text, fontWeight:600 }}>Interview rules</div>
+            <div>Your camera must stay on. It is only shown on your screen: no photos or video are taken, saved or sent.</div>
+            <div>Stay on this page. Switching tabs, windows or apps gives a warning; after {AI_HIRE_MAX_WARNINGS} warnings the interview ends.</div>
+            <div>Copy and paste are turned off. Type your answers in your own words.</div>
+          </div>
           {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
           <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
             <button onClick={startAiHireInterview} disabled={Boolean(aiHireBusy) || aiHireStatus?.configured === false} style={primary(Boolean(aiHireBusy) || aiHireStatus?.configured === false)}>
@@ -11713,6 +11929,42 @@ function CodingPlatform() {
           </aside>
 
           <div style={{ display:"grid", gap:18 }}>
+            {aiHireNotice && (
+              <div role="alert" style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderRadius:8, background:"rgba(229,87,95,0.1)", border:"1px solid rgba(229,87,95,0.35)", color:"#ffb0b0", fontSize:13.5 }}>
+                <span style={{ flex:1 }}>{aiHireNotice}</span>
+                <button onClick={() => setAiHireNotice("")} aria-label="Dismiss" style={{ background:"none", border:"none", color:"inherit", cursor:"pointer", fontSize:16, lineHeight:1 }}>×</button>
+              </div>
+            )}
+
+            <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr 1fr" : "1fr 1fr", gap:12 }}>
+              <div style={{ position:"relative", aspectRatio:"4 / 3", borderRadius:10, overflow:"hidden", background:"linear-gradient(160deg,#2a211d,#16161b)", border:`1px solid ${aiHireSpeaking ? C.accent : C.border}`, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:aiHireSpeaking ? "0 0 0 3px rgba(232,135,58,0.15)" : "none", transition:"border-color 0.2s, box-shadow 0.2s" }}>
+                <div style={{ animation:aiHireSpeaking ? "dvBreathe 1.6s ease-in-out infinite" : "none" }}>
+                  <AiInterviewerAvatar speaking={aiHireSpeaking} size={isPhone ? 92 : 150} />
+                </div>
+                <div style={{ position:"absolute", left:10, bottom:9, right:10, display:"flex", alignItems:"center", gap:7, fontSize:12.5, color:"#ececec" }}>
+                  <span style={{ background:"rgba(0,0,0,0.55)", padding:"3px 8px", borderRadius:5 }}>Asha · AI interviewer</span>
+                  {aiHireSpeaking && (
+                    <span aria-label="Speaking" style={{ display:"inline-flex", gap:2, alignItems:"flex-end", height:12 }}>
+                      {[0, 1, 2].map((bar) => <span key={bar} style={{ width:3, height:12, background:C.accent, borderRadius:1, animation:`dvBars 0.6s ease-in-out ${bar * 0.15}s infinite alternate` }} />)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{ position:"relative", aspectRatio:"4 / 3", borderRadius:10, overflow:"hidden", background:"#0e0e0e", border:`1px solid ${aiHireCamLost ? C.red : C.border}` }}>
+                <video ref={aiHireVideoRef} autoPlay muted playsInline aria-label="Your camera" style={{ width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:aiHireCamOn ? "block" : "none" }} />
+                {!aiHireCamOn && (
+                  <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, padding:12, textAlign:"center", color:aiHireCamLost ? "#ffb0b0" : C.muted, fontSize:13 }}>
+                    {aiHireCamLost ? "Your camera turned off. Turn it back on to continue." : "Starting camera..."}
+                    {aiHireCamLost && <button onClick={startAiHireCamera} style={{ ...secondary, fontSize:13, padding:"7px 12px" }}>Turn camera on</button>}
+                  </div>
+                )}
+                <div style={{ position:"absolute", left:10, bottom:9, display:"flex", alignItems:"center", gap:6, fontSize:12.5, color:"#ececec", background:"rgba(0,0,0,0.55)", padding:"3px 8px", borderRadius:5 }}>
+                  <span style={{ width:7, height:7, borderRadius:"50%", background:aiHireCamOn ? C.green : C.red }} />
+                  You{!isPhone && " · not recorded"}
+                </div>
+              </div>
+            </div>
+
             <div style={card}>
               <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:12, fontSize:12.5, color:C.muted }}>
                 <span>Question {shownIndex + 1} of {total}</span>
@@ -11722,14 +11974,23 @@ function CodingPlatform() {
               </div>
               <div style={{ display:"flex", gap:12, alignItems:"flex-start" }}>
                 <span aria-hidden="true" style={{ width:30, height:30, flexShrink:0, borderRadius:8, background:"rgba(232,135,58,0.14)", color:C.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700 }}>AI</span>
-                <div style={{ fontSize:isPhone ? 17 : 19, lineHeight:1.5, color:C.text, fontWeight:500 }}>{question.question}</div>
+                <div onCopy={(e) => e.preventDefault()} style={{ fontSize:isPhone ? 17 : 19, lineHeight:1.5, color:C.text, fontWeight:500, userSelect:"none", flex:1 }}>{question.question}</div>
               </div>
+              {!turn && (
+                <div style={{ display:"flex", gap:8, marginTop:14, flexWrap:"wrap" }}>
+                  <button onClick={() => speakAiHire(question.question)} style={{ ...secondary, fontSize:13, padding:"6px 11px" }}>Repeat question</button>
+                  <button onClick={() => { const next = !aiHireVoiceOn; setAiHireVoiceOn(next); if (!next) stopAiHireVoice(); }} style={{ ...secondary, fontSize:13, padding:"6px 11px" }}>
+                    {aiHireVoiceOn ? "Voice on" : "Voice off"}
+                  </button>
+                </div>
+              )}
             </div>
 
             {!turn && (
               <div style={{ ...card, display:"grid", gap:14 }}>
                 <label style={{ ...label, marginBottom:0 }} htmlFor="aihire-answer">Your answer</label>
-                <textarea id="aihire-answer" value={aiHireDraft} onChange={(e) => setAiHireDraft(e.target.value)} disabled={Boolean(aiHireBusy)}
+                <textarea id="aihire-answer" value={aiHireDraft} onChange={(e) => setAiHireDraft(e.target.value)} disabled={Boolean(aiHireBusy) || aiHireCamLost}
+                  onPaste={blockAiHirePaste} onDrop={blockAiHirePaste} onCopy={(e) => e.preventDefault()} onCut={(e) => e.preventDefault()} spellCheck={false} autoComplete="off"
                   onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submitAiHireAnswer(false); } }}
                   placeholder="Answer the way you would speak in an interview. Explain your thinking, give examples from your projects." style={{ ...input, minHeight:180 }} />
                 {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
@@ -11740,6 +12001,7 @@ function CodingPlatform() {
                   </button>
                   <button onClick={() => submitAiHireAnswer(true)} disabled={Boolean(aiHireBusy)} style={{ ...secondary, opacity:aiHireBusy ? 0.6 : 1 }}>Skip</button>
                   {!isPhone && <span style={{ fontSize:12.5, color:C.dim, fontFamily:mono }}>Ctrl+Enter to submit</span>}
+                  <span style={{ marginLeft:"auto", fontSize:12.5, color:aiHireWarnings ? "#ffb0b0" : C.dim }}>Warnings {aiHireWarnings}/{AI_HIRE_MAX_WARNINGS}</span>
                 </div>
               </div>
             )}
@@ -11765,7 +12027,7 @@ function CodingPlatform() {
                 {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
                 <div>
                   {isLast ? (
-                    <button onClick={finishAiHireInterview} disabled={Boolean(aiHireBusy)} style={primary(Boolean(aiHireBusy))}>
+                    <button onClick={() => finishAiHireInterview(false)} disabled={Boolean(aiHireBusy)} style={primary(Boolean(aiHireBusy))}>
                       {aiHireBusy === "report" && spinner}
                       {aiHireBusy === "report" ? "Writing your report..." : "See my report"}
                     </button>
@@ -11791,6 +12053,15 @@ function CodingPlatform() {
             <div style={{ fontSize:13, color:C.muted }}>{plan.role}{plan.company ? ` · ${plan.company}` : ""}</div>
             <div style={{ fontSize:22, fontWeight:600, color:C.text, margin:"4px 0 8px" }}>{aiHireReport.recommendation}</div>
             <div style={{ fontSize:14.5, lineHeight:1.65, color:"#c9c9c9" }}>{aiHireReport.summary}</div>
+            {aiHireReport.integrity && (
+              <div style={{ fontSize:13, marginTop:10, color:aiHireReport.integrity.tabSwitches || aiHireReport.integrity.endedEarly ? "#ffb0b0" : C.green }}>
+                {aiHireReport.integrity.endedEarly
+                  ? `Interview ended early: left the page ${aiHireReport.integrity.tabSwitches} times.`
+                  : aiHireReport.integrity.tabSwitches
+                    ? `Left the page ${aiHireReport.integrity.tabSwitches} time${aiHireReport.integrity.tabSwitches === 1 ? "" : "s"} during the interview.`
+                    : "No integrity warnings."}
+              </div>
+            )}
           </div>
         </div>
         <div style={{ display:"grid", gridTemplateColumns:isCompact ? "1fr" : "repeat(3, minmax(0,1fr))", gap:16 }}>
@@ -11826,7 +12097,7 @@ function CodingPlatform() {
         {renderFullscreenGate()}
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, background:C.bg, color:C.text, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease" }}>
-          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
+          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
           <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("aihire")}</div>
           <main className="dv-aihire" style={{ maxWidth:1180, width:"100%", margin:"0 auto", padding:`${isPhone ? 20 : 34}px ${pageGutter}px 60px`, boxSizing:"border-box" }}>
             <div style={{ marginBottom:24 }}>
