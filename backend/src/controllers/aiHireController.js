@@ -14,7 +14,9 @@ const GEMINI_MODELS = String(process.env.AI_HIRE_GEMINI_MODELS || 'gemini-flash-
   .split(',').map((name) => name.trim()).filter(Boolean);
 // Calls run as background jobs (see startJob), so they are not bound by the proxy timeout.
 const GEMINI_BUDGET_MS = 240000; // keep trying models for up to 4 minutes
-const GEMINI_ATTEMPT_MS = 45000; // one model attempt, then move on to the next model
+const GEMINI_ATTEMPT_MS = 60000; // longest wait for one model attempt
+const GEMINI_HEDGE_MS = 5000; // start another model in parallel if no answer by then
+const GEMINI_MAX_PARALLEL = 3; // at most this many models asked at the same time
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 function aiProvider() {
@@ -177,55 +179,109 @@ async function askGemini({ content, schema, maxTokens = 16000 }) {
     generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: maxTokens },
   });
 
-  // Free-tier models are often overloaded (instant 503) or hang. Cycle through the models until one
-  // answers, within a time budget that stays under the 90s Nginx proxy timeout.
+  // Free-tier models are often overloaded (instant 503) or slow because requests queue. To keep the
+  // wait short, requests are "hedged": the first model starts at once, and if it has not answered after
+  // GEMINI_HEDGE_MS (or fails as busy) the next model starts alongside it. The first good answer wins
+  // and the others are cancelled. A clear error (bad input, key, safety, quota) stops everything.
   const deadline = Date.now() + GEMINI_BUDGET_MS;
   const unavailable = new Set();
-  let lastBusy = null;
-  for (let attempt = 0; attempt < GEMINI_MODELS.length * 3; attempt += 1) {
-    const model = GEMINI_MODELS[attempt % GEMINI_MODELS.length];
-    if (unavailable.has(model)) continue;
-    const remaining = deadline - Date.now();
-    if (remaining < 4000) break;
-    if (attempt >= GEMINI_MODELS.length) await new Promise((resolve) => setTimeout(resolve, 800));
-    let response;
+  const controllers = new Set();
+
+  const attempt = async (model) => {
+    const controller = new AbortController();
+    controllers.add(controller);
+    const timer = setTimeout(() => controller.abort(), Math.max(1000, Math.min(GEMINI_ATTEMPT_MS, deadline - Date.now())));
     try {
-      response = await fetch(`${GEMINI_API}/${encodeURIComponent(model)}:generateContent`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
-        body,
-        signal: AbortSignal.timeout(Math.min(GEMINI_ATTEMPT_MS, remaining)),
-      });
-    } catch (_) {
-      console.error('[ai-hire] gemini', model, 'timed out or unreachable');
-      lastBusy = aiError('The AI is busy right now. Please wait a minute and try again.', 503);
-      continue;
-    }
-    const data = await response.json().catch(() => ({}));
-    if (response.ok) {
-      if (data.promptFeedback?.blockReason) throw aiError('The AI could not help with this input. Try a different job description.', 422);
-      const candidate = data.candidates?.[0];
-      if (candidate?.finishReason === 'MAX_TOKENS') throw aiError('The AI response was too long. Please try again.', 502);
-      if (candidate?.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) {
-        throw aiError('The AI could not help with this input. Try a different job description.', 422);
+      let response;
+      try {
+        response = await fetch(`${GEMINI_API}/${encodeURIComponent(model)}:generateContent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
+          body,
+          signal: controller.signal,
+        });
+      } catch (_) {
+        return { busy: true, reason: `${model} timed out or was cancelled` };
       }
-      const text = (candidate?.content?.parts || []).filter((part) => typeof part.text === 'string' && !part.thought).map((part) => part.text).join('');
-      return parseJsonAnswer(text);
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        if (data.promptFeedback?.blockReason) throw aiError('The AI could not help with this input. Try a different job description.', 422);
+        const candidate = data.candidates?.[0];
+        if (candidate?.finishReason === 'MAX_TOKENS') return { busy: true, reason: `${model} hit max tokens` };
+        if (candidate?.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) {
+          throw aiError('The AI could not help with this input. Try a different job description.', 422);
+        }
+        const text = (candidate?.content?.parts || []).filter((part) => typeof part.text === 'string' && !part.thought).map((part) => part.text).join('');
+        try {
+          return { value: JSON.parse(text), model };
+        } catch (_) {
+          return { busy: true, reason: `${model} returned unreadable JSON` };
+        }
+      }
+      const message = data.error?.message || `HTTP ${response.status}`;
+      // Retired or not available on this key: skip it from now on. Overloaded: try another model.
+      if (response.status === 404) unavailable.add(model);
+      if ([404, 500, 503, 504].includes(response.status)) return { busy: true, reason: `${model} ${response.status} ${message.slice(0, 80)}` };
+      if (response.status === 429) throw aiError('The AI is busy right now (free daily limit reached or too many requests). Please try again later.', 429);
+      if (response.status === 401 || response.status === 403) throw aiError('The AI key on the server is not valid. Ask the admin to check it.', 503);
+      if (response.status === 400) throw aiError('The AI could not read this input. Try shorter text or a clearer photo.', 400);
+      throw aiError('The AI service had a problem. Please try again.', 502);
+    } finally {
+      clearTimeout(timer);
+      controllers.delete(controller);
     }
-    const message = data.error?.message || `HTTP ${response.status}`;
-    console.error('[ai-hire] gemini', model, response.status, message);
-    // Retired or not available on this key: skip it from now on. Overloaded: try the next model.
-    if (response.status === 404) unavailable.add(model);
-    if ([404, 500, 503, 504].includes(response.status)) {
-      lastBusy = aiError('The AI is busy right now. Please wait a minute and try again.', 503);
-      continue;
-    }
-    if (response.status === 429) throw aiError('The AI is busy right now (free daily limit reached or too many requests). Please try again later.', 429);
-    if (response.status === 401 || response.status === 403) throw aiError('The AI key on the server is not valid. Ask the admin to check it.', 503);
-    if (response.status === 400) throw aiError('The AI could not read this input. Try shorter text or a clearer photo.', 400);
-    throw aiError('The AI service had a problem. Please try again.', 502);
-  }
-  throw lastBusy || aiError('The AI is busy right now. Please wait a minute and try again.', 503);
+  };
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let next = 0;
+    let running = 0;
+    let hedgeTimer = null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hedgeTimer);
+      controllers.forEach((controller) => controller.abort());
+      fn(value);
+    };
+    const nextModel = () => {
+      for (let i = 0; i < GEMINI_MODELS.length; i += 1) {
+        const model = GEMINI_MODELS[(next + i) % GEMINI_MODELS.length];
+        if (!unavailable.has(model)) {
+          next = (next + i + 1) % GEMINI_MODELS.length;
+          return model;
+        }
+      }
+      return null;
+    };
+    const launch = () => {
+      if (settled) return;
+      clearTimeout(hedgeTimer);
+      const model = nextModel();
+      if (!model || Date.now() > deadline - 3000) {
+        if (!running) finish(reject, aiError('The AI is busy right now. Please wait a minute and try again.', 503));
+        return;
+      }
+      if (running < GEMINI_MAX_PARALLEL) {
+        running += 1;
+        attempt(model)
+          .then((outcome) => {
+            running -= 1;
+            if (outcome.value) {
+              finish(resolve, outcome.value);
+              return;
+            }
+            console.error('[ai-hire] gemini', outcome.reason);
+            // A busy model: start another one shortly (a small pause avoids hammering the API).
+            setTimeout(launch, 400);
+          })
+          .catch((error) => { running -= 1; finish(reject, error); });
+      }
+      // Not answered soon? Start another model in parallel.
+      hedgeTimer = setTimeout(launch, GEMINI_HEDGE_MS);
+    };
+    launch();
+  });
 }
 
 // Sends one structured request to whichever AI provider is configured.

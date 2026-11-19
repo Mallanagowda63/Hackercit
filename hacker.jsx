@@ -1161,6 +1161,25 @@ const AI_HIRE_LOADING_COPY = {
   },
 };
 
+// Asha, the AI interviewer, shown as a voice orb: sound bars move while she speaks.
+function AiVoiceOrb({ speaking = false, size = 132 }) {
+  const bars = [0.45, 0.75, 1, 0.75, 0.45];
+  return (
+    <div role="img" aria-label={speaking ? "AI interviewer speaking" : "AI interviewer"} style={{ position:"relative", width:size, height:size, flexShrink:0 }}>
+      <style>{"@keyframes dvOrbRing { 0% { transform: scale(0.94); opacity: 0.55; } 100% { transform: scale(1.22); opacity: 0; } } @keyframes dvOrbBar { from { transform: scaleY(0.35); } to { transform: scaleY(1); } } @media (prefers-reduced-motion: reduce) { .dv-orb * { animation: none !important; } }"}</style>
+      <div className="dv-orb" style={{ position:"absolute", inset:0 }}>
+        <span style={{ position:"absolute", inset:0, borderRadius:"50%", background:"radial-gradient(circle, rgba(232,135,58,0.16), rgba(232,135,58,0.03) 70%)", border:"1px solid rgba(232,135,58,0.22)" }} />
+        {speaking && <span style={{ position:"absolute", inset:0, borderRadius:"50%", border:"2px solid rgba(232,135,58,0.5)", animation:"dvOrbRing 1.5s ease-out infinite" }} />}
+        <span style={{ position:"absolute", inset:size * 0.09, borderRadius:"50%", background:"radial-gradient(circle at 35% 30%, #2a2a2a, #161616 70%)", border:"1px solid #333", display:"flex", alignItems:"center", justifyContent:"center", gap:size * 0.035 }}>
+          {bars.map((height, index) => (
+            <span key={index} style={{ width:Math.max(3, size * 0.035), height:size * 0.32 * height, borderRadius:999, background:"#e8873a", opacity:speaking ? 1 : 0.55, transformOrigin:"center", animation:speaking ? `dvOrbBar ${0.42 + index * 0.07}s ease-in-out ${index * 0.09}s infinite alternate` : "none" }} />
+          ))}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function AiHireLoadingOverlay({ kind }) {
   const copy = AI_HIRE_LOADING_COPY[kind] || AI_HIRE_LOADING_COPY.plan;
   const [seconds, setSeconds] = useState(0);
@@ -1181,8 +1200,8 @@ function AiHireLoadingOverlay({ kind }) {
           {[0, 0.8].map((delay) => (
             <span key={delay} style={{ position:"absolute", inset:0, borderRadius:"50%", border:"2px solid #e8873a", animation:`dvRing 1.6s ease-out ${delay}s infinite` }} />
           ))}
-          <div style={{ position:"absolute", inset:6, borderRadius:"50%", overflow:"hidden" }}>
-            <AiInterviewerAvatar size={108} />
+          <div style={{ position:"absolute", inset:6 }}>
+            <AiVoiceOrb speaking size={108} />
           </div>
         </div>
         <div style={{ fontSize:19, fontWeight:600, color:"#f2f2f2" }}>{copy.title}</div>
@@ -1601,6 +1620,10 @@ function CodingPlatform() {
   const [aiHirePlan, setAiHirePlan]           = useState(null);
   const [aiHireTurns, setAiHireTurns]         = useState([]);
   const [aiHireAdvanced, setAiHireAdvanced]   = useState({});
+  const [aiHireFeedbackIndex, setAiHireFeedbackIndex] = useState(null);
+  const aiHireEvalPromisesRef = useRef({});
+  const aiHireEvalResultsRef = useRef({});
+  const aiHireRunIdRef = useRef(0);
   const [aiHireDraft, setAiHireDraft]         = useState("");
   const [aiHireReport, setAiHireReport]       = useState(null);
   const [aiHireBusy, setAiHireBusy]           = useState("");
@@ -3642,8 +3665,7 @@ function CodingPlatform() {
   useEffect(() => {
     if (view !== "aihire" || aiHireStep !== "interview" || !aiHirePlan) return;
     const answered = aiHireTurns.length;
-    const onFeedback = answered > 0 && !aiHireAdvanced[answered - 1];
-    if (onFeedback || answered >= aiHirePlan.questions.length) return;
+    if (answered >= aiHirePlan.questions.length) return;
     const question = aiHirePlan.questions[answered];
     const key = `${aiHirePlan.role}|${answered}`;
     if (aiHireSpokenRef.current === key) return;
@@ -3652,7 +3674,7 @@ function CodingPlatform() {
       const intro = answered === 0 ? `Hello, I am Asha, and I will be your interviewer for the ${aiHirePlan.role} role today. Let's begin. ` : "";
       speakAiHire(`${intro}Question ${answered + 1}. ${question.question}`);
     }
-  }, [view, aiHireStep, aiHirePlan, aiHireTurns, aiHireAdvanced, aiHireVoiceOn]);
+  }, [view, aiHireStep, aiHirePlan, aiHireTurns.length, aiHireVoiceOn]);
 
   // Anti-cheating: leaving the page (another tab, window or app) is a warning.
   useEffect(() => {
@@ -3799,6 +3821,10 @@ function CodingPlatform() {
     try {
       const data = await aiHireCall("/api/ai-hire/start", { jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim(), questionCount: aiHireForm.questionCount });
       aiHireSpokenRef.current = "";
+      aiHireRunIdRef.current += 1;
+      aiHireEvalPromisesRef.current = {};
+      aiHireEvalResultsRef.current = {};
+      setAiHireFeedbackIndex(null);
       aiHireLastWarningRef.current = Date.now();
       setAiHireWarnings(0);
       setAiHirePasteBlocked(0);
@@ -3822,7 +3848,36 @@ function CodingPlatform() {
     ? { role: aiHirePlan.role, company: aiHirePlan.company, seniority: aiHirePlan.seniority, summary: aiHirePlan.summary, keySkills: aiHirePlan.keySkills }
     : {};
 
-  const submitAiHireAnswer = async (skip = false) => {
+  // Checks one answer in the background. The student goes straight on to the next question; the
+  // score and feedback appear when ready, and the report waits for any checks still running.
+  const runAiHireEvaluation = (index, question, answer) => {
+    const runId = aiHireRunIdRef.current;
+    const context = aiHireContext();
+    const promise = aiHireCall("/api/ai-hire/evaluate", { context, question, answer })
+      .then((data) => {
+        if (runId !== aiHireRunIdRef.current) return null;
+        aiHireEvalResultsRef.current[index] = { answer, evaluation: data.evaluation };
+        setAiHireTurns((prev) => prev.map((turn, i) => (i === index ? { ...turn, status: "done", evaluation: data.evaluation, error: "" } : turn)));
+        return data.evaluation;
+      })
+      .catch((error) => {
+        if (runId !== aiHireRunIdRef.current) return null;
+        aiHireEvalResultsRef.current[index] = { answer, evaluation: null };
+        setAiHireTurns((prev) => prev.map((turn, i) => (i === index ? { ...turn, status: "failed", error: error.message || "Could not check this answer." } : turn)));
+        return null;
+      });
+    aiHireEvalPromisesRef.current[index] = promise;
+    return promise;
+  };
+
+  const retryAiHireEvaluation = (index) => {
+    const turn = aiHireTurns[index];
+    if (!aiHirePlan || !turn) return;
+    setAiHireTurns((prev) => prev.map((item, i) => (i === index ? { ...item, status: "pending", error: "" } : item)));
+    runAiHireEvaluation(index, aiHirePlan.questions[index], turn.answer);
+  };
+
+  const submitAiHireAnswer = (skip = false) => {
     if (!aiHirePlan || aiHireBusy) return;
     if (!skip && aiHireCamLost) { setAiHireError("Turn your camera back on to continue."); return; }
     const index = aiHireTurns.length;
@@ -3833,31 +3888,31 @@ function CodingPlatform() {
     stopAiHireListening();
     stopAiHireVoice();
     setAiHireError("");
-    setAiHireBusy("evaluate");
-    try {
-      const data = await aiHireCall("/api/ai-hire/evaluate", { context: aiHireContext(), question, answer });
-      setAiHireTurns((prev) => [...prev, { answer, evaluation: data.evaluation, revealed: false }]);
-      setAiHireDraft("");
-    } catch (error) {
-      setAiHireError(error.message || "Could not check your answer. Please try again.");
-    } finally {
-      setAiHireBusy("");
-    }
+    setAiHireTurns((prev) => [...prev, { answer, status: "pending", evaluation: null, error: "" }]);
+    setAiHireFeedbackIndex(null);
+    setAiHireDraft("");
+    runAiHireEvaluation(index, question, answer);
   };
 
   const finishAiHireInterview = async (endedEarly = false) => {
     if (!aiHirePlan || (aiHireBusy && !endedEarly)) return;
+    stopAiHireListening();
     stopAiHireVoice();
     setAiHireError("");
     setAiHireBusy("report");
     try {
-      const items = aiHireTurns.map((turn, index) => ({
-        question: aiHirePlan.questions[index].question,
-        category: aiHirePlan.questions[index].category,
-        answer: turn.answer,
-        score: turn.evaluation.score,
-        verdict: turn.evaluation.verdict,
-      }));
+      await Promise.all(Object.values(aiHireEvalPromisesRef.current));
+      const items = aiHirePlan.questions
+        .map((question, index) => ({ question, result: aiHireEvalResultsRef.current[index] }))
+        .filter((item) => item.result)
+        .map(({ question, result }) => ({
+          question: question.question,
+          category: question.category,
+          answer: result.answer,
+          score: result.evaluation ? result.evaluation.score : 0,
+          verdict: result.evaluation ? result.evaluation.verdict : "Not checked",
+        }));
+      if (!items.length) throw new Error("No answers to review yet.");
       const integrity = { tabSwitches: aiHireWarnings, pasteBlocked: aiHirePasteBlocked, endedEarly: Boolean(endedEarly), totalQuestions: aiHirePlan.questions.length };
       const data = await aiHireCall("/api/ai-hire/report", { context: aiHireContext(), items, integrity });
       setAiHireReport({ ...data.report, integrity });
@@ -3874,8 +3929,13 @@ function CodingPlatform() {
   const resetAiHire = (confirmed = false) => {
     if (!confirmed && aiHireStep === "interview" && aiHireTurns.length) { setAiHireLeaveOpen(true); return; }
     setAiHireLeaveOpen(false);
+    stopAiHireListening();
     stopAiHireVoice();
     stopAiHireCamera();
+    aiHireRunIdRef.current += 1;
+    aiHireEvalPromisesRef.current = {};
+    aiHireEvalResultsRef.current = {};
+    setAiHireFeedbackIndex(null);
     setAiHireStep("setup");
     setAiHirePlan(null);
     setAiHireTurns([]);
@@ -11948,10 +12008,6 @@ function CodingPlatform() {
     const plan = aiHirePlan;
     const total = plan?.questions?.length || 0;
     const answeredCount = aiHireTurns.length;
-    const currentIndex = Math.min(answeredCount, Math.max(0, total - 1));
-    const lastTurn = aiHireTurns[answeredCount - 1];
-    // After each answer its feedback stays on screen until "Next question" is pressed.
-    const showingFeedback = answeredCount > 0 && !aiHireAdvanced[answeredCount - 1];
     const scoreColor = (score, max = 10) => { const ratio = score / max; return ratio >= 0.7 ? C.green : ratio >= 0.45 ? C.amber : C.red; };
     const card = { background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:isPhone ? "18px 16px" : "22px 24px" };
     const label = { fontSize:13, color:C.muted, marginBottom:8, display:"block" };
@@ -12050,184 +12106,227 @@ function CodingPlatform() {
     );
 
     const interviewView = plan && (() => {
-      const shownIndex = showingFeedback ? answeredCount - 1 : currentIndex;
-      const question = plan.questions[shownIndex];
-      const turn = showingFeedback ? lastTurn : null;
-      const evaluation = turn?.evaluation;
-      const isLast = shownIndex === total - 1;
+      const finished = answeredCount >= total;
+      const qIndex = Math.min(answeredCount, total - 1);
+      const question = plan.questions[qIndex];
+      const pendingCount = aiHireTurns.filter((turn) => turn.status === "pending").length;
+      const feedbackIndex = aiHireFeedbackIndex ?? (answeredCount - 1);
+      const feedbackTurn = feedbackIndex >= 0 ? aiHireTurns[feedbackIndex] : null;
+      const words = aiHireDraft.trim() ? aiHireDraft.trim().split(/\s+/).length : 0;
+      const tile = { position:"relative", aspectRatio:"16 / 10", borderRadius:14, overflow:"hidden", background:"#111", border:`1px solid ${C.border}` };
+      const tileLabel = { position:"absolute", left:12, bottom:12, display:"flex", alignItems:"center", gap:7, padding:"5px 10px", borderRadius:8, background:"rgba(0,0,0,0.6)", border:"1px solid #2a2a2a", fontSize:12.5, color:"#c9c9c9" };
+      const iconButton = { ...secondary, display:"inline-flex", alignItems:"center", gap:7, fontSize:13.5, padding:"8px 13px" };
+      const evaluation = feedbackTurn?.evaluation;
+
       return (
-        <div style={{ display:"grid", gridTemplateColumns:isCompact ? "minmax(0,1fr)" : "260px minmax(0,1fr)", gap:24, alignItems:"start" }}>
-          <aside style={{ ...card, padding:"18px", display:"grid", gap:14, order:isCompact ? 2 : 0 }}>
-            <div>
-              <div style={{ fontSize:12.5, color:C.muted }}>Interview for</div>
-              <div style={{ fontSize:16, fontWeight:600, color:C.text, lineHeight:1.35 }}>{plan.role}</div>
-              <div style={{ fontSize:13, color:C.muted }}>{[plan.company, plan.seniority].filter(Boolean).join(" · ")}</div>
-            </div>
-            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-              {(plan.keySkills || []).slice(0, 8).map((skill) => <span key={skill} style={{ fontSize:12, padding:"3px 9px", borderRadius:999, border:"1px solid #3a3a3a", color:"#c9c9c9" }}>{skill}</span>)}
-            </div>
-            <div style={{ display:"grid", gap:6 }}>
-              {plan.questions.map((q, index) => {
-                const done = aiHireTurns[index];
-                const active = index === shownIndex;
-                return (
-                  <div key={index} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 9px", borderRadius:6, background:active ? "#232323" : "transparent", fontSize:13 }}>
-                    <span style={{ width:22, height:22, flexShrink:0, borderRadius:5, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:mono, fontSize:12, border:`1px solid ${done ? scoreColor(done.evaluation.score) : active ? C.text : "#333"}`, color:done ? scoreColor(done.evaluation.score) : C.text }}>{index + 1}</span>
-                    <span style={{ flex:1, minWidth:0, color:active ? C.text : C.muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{q.category}</span>
-                    {done && <span style={{ fontFamily:mono, fontSize:12, color:scoreColor(done.evaluation.score) }}>{done.evaluation.score}/10</span>}
-                  </div>
-                );
-              })}
-            </div>
-            <button onClick={() => resetAiHire(false)} style={{ ...secondary, fontSize:13, padding:"8px 12px" }}>End and start over</button>
-          </aside>
-
-          <div style={{ display:"grid", gap:18 }}>
-            {aiHireNotice && (
-              <div role="alert" style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderRadius:8, background:"rgba(229,87,95,0.1)", border:"1px solid rgba(229,87,95,0.35)", color:"#ffb0b0", fontSize:13.5 }}>
-                <span style={{ flex:1 }}>{aiHireNotice}</span>
-                <button onClick={() => setAiHireNotice("")} aria-label="Dismiss" style={{ background:"none", border:"none", color:"inherit", cursor:"pointer", fontSize:16, lineHeight:1 }}>×</button>
-              </div>
-            )}
-
-            <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr 1fr" : "1fr 1fr", gap:12 }}>
-              <div style={{ position:"relative", aspectRatio:"4 / 3", borderRadius:10, overflow:"hidden", background:"linear-gradient(160deg,#2a211d,#16161b)", border:`1px solid ${aiHireSpeaking ? C.accent : C.border}`, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:aiHireSpeaking ? "0 0 0 3px rgba(232,135,58,0.15)" : "none", transition:"border-color 0.2s, box-shadow 0.2s" }}>
-                <div style={{ animation:aiHireSpeaking ? "dvBreathe 1.6s ease-in-out infinite" : "none" }}>
-                  <AiInterviewerAvatar speaking={aiHireSpeaking} size={isPhone ? 92 : 150} />
-                </div>
-                <div style={{ position:"absolute", left:10, bottom:9, right:10, display:"flex", alignItems:"center", gap:7, fontSize:12.5, color:"#ececec" }}>
-                  <span style={{ background:"rgba(0,0,0,0.55)", padding:"3px 8px", borderRadius:5 }}>Asha · AI interviewer</span>
-                  {aiHireSpeaking && (
-                    <span aria-label="Speaking" style={{ display:"inline-flex", gap:2, alignItems:"flex-end", height:12 }}>
-                      {[0, 1, 2].map((bar) => <span key={bar} style={{ width:3, height:12, background:C.accent, borderRadius:1, animation:`dvBars 0.6s ease-in-out ${bar * 0.15}s infinite alternate` }} />)}
+        <div style={{ display:"grid", gap:20 }}>
+          {/* Progress through the questions */}
+          <div style={{ display:"grid", gridTemplateColumns:`repeat(${total}, minmax(0,1fr))`, gap:isPhone ? 5 : 10 }}>
+            {plan.questions.map((q, index) => {
+              const turn = aiHireTurns[index];
+              const current = index === answeredCount && !finished;
+              const color = turn
+                ? turn.status === "done" ? scoreColor(turn.evaluation.score) : turn.status === "failed" ? C.red : C.accent
+                : current ? C.accent : "#2a2a2a";
+              return (
+                <button key={index} type="button" disabled={!turn} onClick={() => setAiHireFeedbackIndex(index)}
+                  title={turn ? `Question ${index + 1}: see feedback` : `Question ${index + 1}`}
+                  style={{ background:"none", border:"none", padding:0, textAlign:"left", cursor:turn ? "pointer" : "default", minWidth:0, fontFamily:"inherit" }}>
+                  <span style={{ display:"block", height:3, borderRadius:999, background:color, opacity:turn && turn.status === "pending" ? 0.55 : 1 }} />
+                  {!isPhone && (
+                    <span style={{ display:"flex", gap:6, alignItems:"baseline", marginTop:8, fontSize:12.5, color:current ? C.text : C.muted, fontWeight:current ? 600 : 400, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                      <span style={{ fontFamily:mono }}>{index + 1}</span>
+                      <span style={{ overflow:"hidden", textOverflow:"ellipsis" }}>{q.category}</span>
+                      {turn?.status === "done" && <span style={{ marginLeft:"auto", fontFamily:mono, color:scoreColor(turn.evaluation.score) }}>{turn.evaluation.score}</span>}
                     </span>
                   )}
-                </div>
-              </div>
-              <div style={{ position:"relative", aspectRatio:"4 / 3", borderRadius:10, overflow:"hidden", background:"#0e0e0e", border:`1px solid ${aiHireCamLost ? C.red : C.border}` }}>
-                <video ref={aiHireVideoRef} autoPlay muted playsInline aria-label="Your camera" style={{ width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:aiHireCamOn ? "block" : "none" }} />
-                {!aiHireCamOn && (
-                  <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, padding:12, textAlign:"center", color:aiHireCamLost ? "#ffb0b0" : C.muted, fontSize:13 }}>
-                    {aiHireCamLost ? "Your camera turned off. Turn it back on to continue." : "Starting camera..."}
-                    {aiHireCamLost && <button onClick={startAiHireCamera} style={{ ...secondary, fontSize:13, padding:"7px 12px" }}>Turn camera on</button>}
-                  </div>
-                )}
-                <div style={{ position:"absolute", left:10, bottom:9, display:"flex", alignItems:"center", gap:6, fontSize:12.5, color:"#ececec", background:"rgba(0,0,0,0.55)", padding:"3px 8px", borderRadius:5 }}>
-                  <span style={{ width:7, height:7, borderRadius:"50%", background:aiHireCamOn ? C.green : C.red }} />
-                  You{!isPhone && " · not recorded"}
-                </div>
-              </div>
-            </div>
+                </button>
+              );
+            })}
+          </div>
 
-            <div style={card}>
-              <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:12, fontSize:12.5, color:C.muted }}>
-                <span>Question {shownIndex + 1} of {total}</span>
-                <span>·</span><span>{question.category}</span>
-                <span>·</span><span style={{ color:question.difficulty === "Hard" ? C.red : question.difficulty === "Medium" ? C.amber : C.green }}>{question.difficulty}</span>
-                {question.skill && <><span>·</span><span>{question.skill}</span></>}
+          {aiHireNotice && (
+            <div role="alert" style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderRadius:10, background:"rgba(229,87,95,0.1)", border:"1px solid rgba(229,87,95,0.35)", color:"#ffb0b0", fontSize:13.5 }}>
+              <span style={{ flex:1 }}>{aiHireNotice}</span>
+              <button onClick={() => setAiHireNotice("")} aria-label="Dismiss" style={{ background:"none", border:"none", color:"inherit", cursor:"pointer", fontSize:16, lineHeight:1 }}>×</button>
+            </div>
+          )}
+
+          <div style={{ display:"grid", gridTemplateColumns:isCompact ? "minmax(0,1fr)" : "300px minmax(0,1fr)", gap:20, alignItems:"start" }}>
+            {/* Role card */}
+            <aside style={{ ...card, borderRadius:14, display:"grid", gap:16, order:isCompact ? 2 : 0 }}>
+              <div>
+                <div style={{ fontSize:12.5, color:C.muted }}>Interview for</div>
+                <div style={{ fontSize:18, fontWeight:600, color:C.text, lineHeight:1.35, marginTop:2 }}>{plan.role}</div>
+                <div style={{ fontSize:13.5, color:C.muted, marginTop:2 }}>{[plan.company, plan.seniority].filter(Boolean).join(" · ")}</div>
               </div>
-              <div style={{ display:"flex", gap:12, alignItems:"flex-start" }}>
-                <span aria-hidden="true" style={{ width:30, height:30, flexShrink:0, borderRadius:8, background:"rgba(232,135,58,0.14)", color:C.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700 }}>AI</span>
-                <div onCopy={(e) => e.preventDefault()} style={{ fontSize:isPhone ? 17 : 19, lineHeight:1.5, color:C.text, fontWeight:500, userSelect:"none", flex:1 }}>{question.question}</div>
+              {(plan.keySkills || []).length > 0 && (
+                <div>
+                  <div style={{ fontSize:11.5, fontWeight:600, letterSpacing:"0.12em", textTransform:"uppercase", color:C.muted, marginBottom:10 }}>Skills checked</div>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                    {plan.keySkills.slice(0, 10).map((skill) => <span key={skill} style={{ fontSize:12.5, padding:"4px 10px", borderRadius:8, background:"#1c1c1c", border:"1px solid #2e2e2e", color:"#d4d4d4" }}>{skill}</span>)}
+                  </div>
+                </div>
+              )}
+            </aside>
+
+            <div style={{ display:"grid", gap:18, minWidth:0 }}>
+              {/* Interviewer and camera */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:isPhone ? 10 : 16 }}>
+                <div style={{ ...tile, border:`1px solid ${aiHireSpeaking ? "rgba(232,135,58,0.7)" : C.border}`, display:"flex", alignItems:"center", justifyContent:"center", transition:"border-color 0.25s" }}>
+                  <AiVoiceOrb speaking={aiHireSpeaking} size={isPhone ? 76 : 132} />
+                  <div style={{ ...tileLabel, left:isPhone ? 8 : 12, bottom:isPhone ? 8 : 12, padding:isPhone ? "3px 7px" : "5px 10px" }}>
+                    <strong style={{ color:C.text, fontWeight:600 }}>Asha</strong>
+                    {!isPhone && <span>AI interviewer</span>}
+                    {aiHireSpeaking && <span style={{ color:C.accent }}>speaking</span>}
+                  </div>
+                </div>
+                <div style={{ ...tile, border:`1px solid ${aiHireCamLost ? C.red : C.border}` }}>
+                  <video ref={aiHireVideoRef} autoPlay muted playsInline aria-label="Your camera" style={{ width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:aiHireCamOn ? "block" : "none" }} />
+                  {!aiHireCamOn && (
+                    <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, padding:12, textAlign:"center", color:aiHireCamLost ? "#ffb0b0" : C.dim, fontSize:13 }}>
+                      {aiHireCamLost ? (
+                        <>
+                          Your camera turned off. Turn it back on to continue.
+                          <button onClick={startAiHireCamera} style={{ ...secondary, fontSize:13, padding:"7px 12px" }}>Turn camera on</button>
+                        </>
+                      ) : (
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" /></svg>
+                      )}
+                    </div>
+                  )}
+                  <div style={{ ...tileLabel, left:isPhone ? 8 : 12, bottom:isPhone ? 8 : 12, padding:isPhone ? "3px 7px" : "5px 10px" }}>
+                    <span style={{ width:7, height:7, borderRadius:"50%", background:aiHireCamOn ? C.green : C.red }} />
+                    <strong style={{ color:C.text, fontWeight:600 }}>You</strong>
+                    {!isPhone && <span>· not recorded</span>}
+                  </div>
+                </div>
               </div>
-              {!turn && (
-                <div style={{ display:"flex", gap:8, marginTop:14, flexWrap:"wrap" }}>
-                  <button onClick={() => speakAiHire(question.question)} style={{ ...secondary, fontSize:13, padding:"6px 11px" }}>Repeat question</button>
-                  <button onClick={() => { const next = !aiHireVoiceOn; setAiHireVoiceOn(next); if (!next) stopAiHireVoice(); }} style={{ ...secondary, fontSize:13, padding:"6px 11px" }}>
-                    {aiHireVoiceOn ? "Voice on" : "Voice off"}
-                  </button>
+
+              {!finished ? (
+                <>
+                  {/* Question */}
+                  <div style={{ ...card, borderRadius:14 }}>
+                    <div style={{ fontSize:13, color:C.muted, marginBottom:10 }}>
+                      Question {qIndex + 1} of {total} · {question.category} · <span style={{ color:question.difficulty === "Hard" ? C.red : question.difficulty === "Medium" ? C.amber : C.green }}>{question.difficulty}</span>{question.skill ? ` · ${question.skill}` : ""}
+                    </div>
+                    <div onCopy={(e) => e.preventDefault()} style={{ fontSize:isPhone ? 18 : 21, lineHeight:1.45, color:C.text, fontWeight:600, userSelect:"none" }}>{question.question}</div>
+                    <div style={{ display:"flex", gap:8, marginTop:18, flexWrap:"wrap" }}>
+                      <button onClick={() => speakAiHire(question.question)} style={iconButton}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
+                        Repeat question
+                      </button>
+                      <button onClick={() => { const next = !aiHireVoiceOn; setAiHireVoiceOn(next); if (!next) stopAiHireVoice(); }} style={iconButton}>
+                        {aiHireVoiceOn ? (
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>
+                        ) : (
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4z" /><path d="M22 9l-6 6M16 9l6 6" /></svg>
+                        )}
+                        {aiHireVoiceOn ? "Voice on" : "Voice off"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Answer */}
+                  <div style={{ ...card, borderRadius:14, display:"grid", gap:14 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <label htmlFor="aihire-answer" style={{ fontSize:15, fontWeight:600, color:C.text }}>Your answer</label>
+                      {aiHireListening && (
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12.5, color:"#ffb0b0" }}>
+                          <span style={{ display:"inline-flex", gap:2, alignItems:"flex-end", height:12 }}>
+                            {[0, 1, 2, 3].map((bar) => <span key={bar} style={{ width:3, height:12, background:C.red, borderRadius:1, animation:`dvBars 0.55s ease-in-out ${bar * 0.12}s infinite alternate` }} />)}
+                          </span>
+                          Listening...
+                        </span>
+                      )}
+                      <span style={{ marginLeft:"auto", fontSize:12.5, color:C.dim, fontFamily:mono }}>{words} word{words === 1 ? "" : "s"}</span>
+                    </div>
+                    <textarea id="aihire-answer" value={aiHireDraft} onChange={(e) => setAiHireDraft(e.target.value)} disabled={aiHireCamLost}
+                      onPaste={blockAiHirePaste} onDrop={blockAiHirePaste} onCopy={(e) => e.preventDefault()} onCut={(e) => e.preventDefault()} spellCheck={false} autoComplete="off"
+                      onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submitAiHireAnswer(false); } }}
+                      placeholder={aiHireListening ? "Listening... your words appear here." : "Answer the way you would speak in an interview. Explain your thinking and give examples from your projects."}
+                      style={{ ...input, minHeight:170, background:"#0e0e0e", borderColor:aiHireListening ? "rgba(229,87,95,0.5)" : C.border }} />
+                    {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
+                    <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+                      <span style={{ flex:"1 1 220px", fontSize:12.5, color:C.muted }}>
+                        {!AiHireSpeechRecognition ? "Tip: speaking works in Chrome or Edge. Mention one real project." : "Tip: aim for 1-2 minutes of speaking. Mention one real project."}
+                      </span>
+                      {AiHireSpeechRecognition && (
+                        <button type="button" onClick={() => (aiHireListening ? stopAiHireListening() : startAiHireListening())} disabled={aiHireCamLost}
+                          aria-pressed={aiHireListening}
+                          style={{ ...secondary, display:"inline-flex", alignItems:"center", gap:8, padding:"10px 16px", color:aiHireListening ? "#ffffff" : C.text, background:aiHireListening ? C.red : "transparent", borderColor:aiHireListening ? C.red : "#3a3a3a" }}>
+                          {aiHireListening ? (
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                          ) : (
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v3" /></svg>
+                          )}
+                          {aiHireListening ? "Stop" : "Speak"}
+                        </button>
+                      )}
+                      <button onClick={() => submitAiHireAnswer(true)} style={secondary}>Skip</button>
+                      <button onClick={() => submitAiHireAnswer(false)} style={primary(false)}>Submit answer</button>
+                    </div>
+                    <div style={{ fontSize:12, color:aiHireWarnings ? "#ffb0b0" : C.dim, textAlign:"right" }}>Warnings {aiHireWarnings}/{AI_HIRE_MAX_WARNINGS}</div>
+                  </div>
+                </>
+              ) : (
+                <div style={{ ...card, borderRadius:14, display:"grid", gap:12, textAlign:"center", justifyItems:"center", padding:"30px 24px" }}>
+                  <div style={{ fontSize:20, fontWeight:600, color:C.text }}>All {total} questions answered</div>
+                  <div style={{ fontSize:14, color:C.muted }}>
+                    {pendingCount ? `Still checking ${pendingCount} answer${pendingCount === 1 ? "" : "s"}. Your report will include ${pendingCount === 1 ? "it" : "them"}.` : "Your answers are checked. See how you did."}
+                  </div>
+                  {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
+                  <button onClick={() => finishAiHireInterview(false)} disabled={Boolean(aiHireBusy)} style={primary(Boolean(aiHireBusy))}>See my report</button>
+                </div>
+              )}
+
+              {/* Feedback on the latest (or chosen) answer, filled in when its check finishes */}
+              {feedbackTurn && (
+                <div style={{ ...card, borderRadius:14, display:"grid", gap:14 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:15, fontWeight:600, color:C.text }}>Feedback on question {feedbackIndex + 1}</span>
+                    {feedbackTurn.status === "done" && (
+                      <>
+                        <span style={{ fontFamily:mono, fontSize:15, color:scoreColor(evaluation.score) }}>{evaluation.score}/10</span>
+                        <span style={{ fontSize:12.5, fontWeight:600, padding:"3px 10px", borderRadius:999, border:`1px solid ${scoreColor(evaluation.score)}`, color:scoreColor(evaluation.score) }}>{evaluation.verdict}</span>
+                      </>
+                    )}
+                    {aiHireFeedbackIndex !== null && aiHireFeedbackIndex !== answeredCount - 1 && (
+                      <button onClick={() => setAiHireFeedbackIndex(null)} style={{ marginLeft:"auto", background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:13, fontFamily:"inherit", textDecoration:"underline" }}>Show latest</button>
+                    )}
+                  </div>
+                  <div style={{ fontSize:13.5, color:C.muted }}>{plan.questions[feedbackIndex].question}</div>
+                  {feedbackTurn.status === "pending" && (
+                    <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:14, color:"#c9c9c9" }}>
+                      <span style={{ width:14, height:14, border:"2px solid #3a3a3a", borderTopColor:C.accent, borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} />
+                      Checking your answer... {finished ? "" : "You can carry on with the next question."}
+                    </div>
+                  )}
+                  {feedbackTurn.status === "failed" && (
+                    <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", fontSize:14, color:"#ffb0b0" }}>
+                      {feedbackTurn.error || "Could not check this answer."}
+                      <button onClick={() => retryAiHireEvaluation(feedbackIndex)} style={{ ...secondary, fontSize:13, padding:"7px 12px" }}>Try again</button>
+                    </div>
+                  )}
+                  {feedbackTurn.status === "done" && (
+                    <>
+                      <div style={{ fontSize:14.5, lineHeight:1.65, color:C.text }}>{evaluation.feedback}</div>
+                      {feedbackTurn.answer && (
+                        <div style={{ fontSize:13.5, color:C.muted, borderLeft:`2px solid ${C.border}`, paddingLeft:12, whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>{feedbackTurn.answer}</div>
+                      )}
+                      <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "1fr 1fr", gap:16 }}>
+                        {evaluation.strengths?.length > 0 && <div><div style={{ fontSize:13, color:C.green, fontWeight:600, marginBottom:8 }}>What was good</div>{list(evaluation.strengths)}</div>}
+                        {evaluation.improvements?.length > 0 && <div><div style={{ fontSize:13, color:C.amber, fontWeight:600, marginBottom:8 }}>How to improve</div>{list(evaluation.improvements)}</div>}
+                      </div>
+                      <details style={{ background:"#141414", border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 14px" }}>
+                        <summary style={{ cursor:"pointer", fontSize:14, color:C.text }}>See a model answer</summary>
+                        <div style={{ fontSize:14, lineHeight:1.65, color:"#c9c9c9", marginTop:10, whiteSpace:"pre-wrap" }}>{evaluation.sampleAnswer}</div>
+                      </details>
+                    </>
+                  )}
                 </div>
               )}
             </div>
-
-            {!turn && (
-              <div style={{ ...card, display:"grid", gap:14 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-                  <label style={{ ...label, marginBottom:0 }} htmlFor="aihire-answer">Your answer</label>
-                  <span style={{ fontSize:12.5, color:C.dim }}>Speak or type</span>
-                </div>
-                <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap", padding:"14px 16px", borderRadius:10, background:aiHireListening ? "rgba(229,87,95,0.08)" : "#141414", border:`1px solid ${aiHireListening ? "rgba(229,87,95,0.45)" : C.border}`, transition:"background 0.2s, border-color 0.2s" }}>
-                  <button
-                    type="button"
-                    onClick={() => (aiHireListening ? stopAiHireListening() : startAiHireListening())}
-                    disabled={Boolean(aiHireBusy) || aiHireCamLost}
-                    aria-pressed={aiHireListening}
-                    aria-label={aiHireListening ? "Stop speaking" : "Speak your answer"}
-                    style={{ position:"relative", width:56, height:56, borderRadius:"50%", border:"none", flexShrink:0, cursor:aiHireBusy || aiHireCamLost ? "not-allowed" : "pointer", background:aiHireListening ? C.red : C.accent, color:"#1a1009", display:"flex", alignItems:"center", justifyContent:"center", opacity:aiHireBusy || aiHireCamLost ? 0.5 : 1 }}
-                  >
-                    {aiHireListening && <span style={{ position:"absolute", inset:-6, borderRadius:"50%", border:`2px solid ${C.red}`, animation:"dvMicPulse 1.3s ease-out infinite" }} />}
-                    {aiHireListening ? (
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
-                    ) : (
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v3" /></svg>
-                    )}
-                  </button>
-                  <div style={{ flex:"1 1 200px", minWidth:0 }}>
-                    <div style={{ fontSize:15, fontWeight:600, color:aiHireListening ? "#ffb0b0" : C.text, display:"flex", alignItems:"center", gap:8 }}>
-                      {aiHireListening ? "Listening... speak now" : "Speak your answer"}
-                      {aiHireListening && (
-                        <span aria-hidden="true" style={{ display:"inline-flex", gap:2, alignItems:"flex-end", height:14 }}>
-                          {[0, 1, 2, 3].map((bar) => <span key={bar} style={{ width:3, height:14, background:C.red, borderRadius:1, animation:`dvBars 0.55s ease-in-out ${bar * 0.12}s infinite alternate` }} />)}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize:12.5, color:C.muted, marginTop:3, lineHeight:1.5 }}>
-                      {!AiHireSpeechRecognition
-                        ? "Speaking works in Chrome or Edge. In this browser, please type your answer."
-                        : aiHireListening
-                          ? "Your words appear in the box below. Press the button again when you finish."
-                          : "Tap the mic and answer out loud in English. You can fix the text before submitting."}
-                    </div>
-                  </div>
-                </div>
-                <textarea id="aihire-answer" value={aiHireDraft} onChange={(e) => setAiHireDraft(e.target.value)} disabled={Boolean(aiHireBusy) || aiHireCamLost}
-                  onPaste={blockAiHirePaste} onDrop={blockAiHirePaste} onCopy={(e) => e.preventDefault()} onCut={(e) => e.preventDefault()} spellCheck={false} autoComplete="off"
-                  onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submitAiHireAnswer(false); } }}
-                  placeholder={aiHireListening ? "Listening..." : "Your answer appears here when you speak, or type it. Explain your thinking and give examples from your projects."} style={{ ...input, minHeight:160 }} />
-                {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
-                <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
-                  <button onClick={() => submitAiHireAnswer(false)} disabled={Boolean(aiHireBusy)} style={primary(Boolean(aiHireBusy))}>
-                    {aiHireBusy === "evaluate" && spinner}
-                    {aiHireBusy === "evaluate" ? "Checking..." : "Submit answer"}
-                  </button>
-                  <button onClick={() => submitAiHireAnswer(true)} disabled={Boolean(aiHireBusy)} style={{ ...secondary, opacity:aiHireBusy ? 0.6 : 1 }}>Skip</button>
-                  {!isPhone && <span style={{ fontSize:12.5, color:C.dim, fontFamily:mono }}>Ctrl+Enter to submit</span>}
-                  <span style={{ marginLeft:"auto", fontSize:12.5, color:aiHireWarnings ? "#ffb0b0" : C.dim }}>Warnings {aiHireWarnings}/{AI_HIRE_MAX_WARNINGS}</span>
-                </div>
-              </div>
-            )}
-
-            {turn && (
-              <div style={{ ...card, display:"grid", gap:16 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
-                  <div style={{ fontFamily:mono, fontSize:30, fontWeight:500, color:scoreColor(evaluation.score) }}>{evaluation.score}<span style={{ fontSize:16, color:C.muted }}>/10</span></div>
-                  <span style={{ fontSize:13, fontWeight:600, padding:"4px 11px", borderRadius:999, border:`1px solid ${scoreColor(evaluation.score)}`, color:scoreColor(evaluation.score) }}>{evaluation.verdict}</span>
-                </div>
-                <div style={{ fontSize:14.5, lineHeight:1.65, color:C.text }}>{evaluation.feedback}</div>
-                {turn.answer && (
-                  <div style={{ fontSize:13.5, color:C.muted, borderLeft:`2px solid ${C.border}`, paddingLeft:12, whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>{turn.answer}</div>
-                )}
-                <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "1fr 1fr", gap:16 }}>
-                  {evaluation.strengths?.length > 0 && <div><div style={{ fontSize:13, color:C.green, fontWeight:600, marginBottom:8 }}>What was good</div>{list(evaluation.strengths, C.green)}</div>}
-                  {evaluation.improvements?.length > 0 && <div><div style={{ fontSize:13, color:C.amber, fontWeight:600, marginBottom:8 }}>How to improve</div>{list(evaluation.improvements, C.amber)}</div>}
-                </div>
-                <details style={{ background:"#141414", border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 14px" }}>
-                  <summary style={{ cursor:"pointer", fontSize:14, color:C.text }}>See a model answer</summary>
-                  <div style={{ fontSize:14, lineHeight:1.65, color:"#c9c9c9", marginTop:10, whiteSpace:"pre-wrap" }}>{evaluation.sampleAnswer}</div>
-                </details>
-                {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
-                <div>
-                  {isLast ? (
-                    <button onClick={() => finishAiHireInterview(false)} disabled={Boolean(aiHireBusy)} style={primary(Boolean(aiHireBusy))}>
-                      {aiHireBusy === "report" && spinner}
-                      {aiHireBusy === "report" ? "Writing your report..." : "See my report"}
-                    </button>
-                  ) : (
-                    <button onClick={() => setAiHireAdvanced((prev) => ({ ...prev, [answeredCount - 1]: true }))} style={primary(false)}>Next question</button>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       );
@@ -12270,7 +12369,7 @@ function CodingPlatform() {
                   <div style={{ fontSize:14, color:C.text, lineHeight:1.5 }}>{q.question}</div>
                   <div style={{ fontSize:12.5, color:C.muted, marginTop:4 }}>{q.category} · {done?.evaluation?.verdict || "Not answered"}</div>
                 </div>
-                {done && <span style={{ fontFamily:mono, fontSize:14, color:scoreColor(done.evaluation.score), flexShrink:0 }}>{done.evaluation.score}/10</span>}
+                {done?.evaluation && <span style={{ fontFamily:mono, fontSize:14, color:scoreColor(done.evaluation.score), flexShrink:0 }}>{done.evaluation.score}/10</span>}
               </div>
             );
           })}
@@ -12310,6 +12409,13 @@ function CodingPlatform() {
             </div>
           )}
           <main className="dv-aihire" style={{ maxWidth:1180, width:"100%", margin:"0 auto", padding:`${isPhone ? 20 : 34}px ${pageGutter}px 60px`, boxSizing:"border-box" }}>
+            {aiHireStep === "interview" ? (
+              <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:22, paddingBottom:18, borderBottom:"1px solid #1f1f1f" }}>
+                <h1 style={{ margin:0, fontSize:isPhone ? 20 : 22, fontWeight:700, color:C.text }}>AI Hire</h1>
+                <span style={{ fontSize:13.5, color:C.muted }}>{total} questions · feedback after each answer</span>
+                <button onClick={() => resetAiHire(false)} style={{ ...secondary, marginLeft:"auto", fontSize:13.5, padding:"8px 14px" }}>End and start over</button>
+              </div>
+            ) : (
             <div style={{ marginBottom:24 }}>
               <h1 style={{ margin:0, fontSize:isPhone ? 24 : 28, fontWeight:600, color:C.text }}>AI Hire</h1>
               <div style={{ color:C.muted, fontSize:15, marginTop:6 }}>
@@ -12318,6 +12424,7 @@ function CodingPlatform() {
                 {aiHireStep === "report" && "Your interview report."}
               </div>
             </div>
+            )}
             {aiHireStep === "setup" && setupView}
             {aiHireStep === "interview" && interviewView}
             {aiHireStep === "report" && reportView}
