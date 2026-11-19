@@ -3629,6 +3629,20 @@ function CodingPlatform() {
     setAiHireNotice("Copy and paste are turned off during the interview. Type your answer in your own words.");
   };
 
+  // AI steps run as background jobs on the server; poll until the answer is ready.
+  const aiHireCall = async (path, payload) => {
+    const started = await performApiRequest(path, { method: "POST", body: JSON.stringify(payload) });
+    if (!started?.jobId) return started;
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const job = await performApiRequest(`/api/ai-hire/jobs/${started.jobId}`);
+      if (job.status === "done") return job;
+      if (job.status === "failed") throw new Error(job.error || "The AI could not finish. Please try again.");
+    }
+    throw new Error("The AI is taking too long right now. Please try again in a few minutes.");
+  };
+
   const startAiHireInterview = async () => {
     const jdText = aiHireForm.jdText.trim();
     if (!jdText && !aiHireForm.image) { setAiHireError("Paste the job description or upload a photo of it."); return; }
@@ -3636,10 +3650,7 @@ function CodingPlatform() {
     if (!(await startAiHireCamera())) return;
     setAiHireBusy("plan");
     try {
-      const data = await performApiRequest("/api/ai-hire/start", {
-        method: "POST",
-        body: JSON.stringify({ jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim(), questionCount: aiHireForm.questionCount }),
-      });
+      const data = await aiHireCall("/api/ai-hire/start", { jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim(), questionCount: aiHireForm.questionCount });
       aiHireSpokenRef.current = "";
       aiHireLastWarningRef.current = Date.now();
       setAiHireWarnings(0);
@@ -3676,10 +3687,7 @@ function CodingPlatform() {
     setAiHireError("");
     setAiHireBusy("evaluate");
     try {
-      const data = await performApiRequest("/api/ai-hire/evaluate", {
-        method: "POST",
-        body: JSON.stringify({ context: aiHireContext(), question, answer }),
-      });
+      const data = await aiHireCall("/api/ai-hire/evaluate", { context: aiHireContext(), question, answer });
       setAiHireTurns((prev) => [...prev, { answer, evaluation: data.evaluation, revealed: false }]);
       setAiHireDraft("");
     } catch (error) {
@@ -3703,10 +3711,7 @@ function CodingPlatform() {
         verdict: turn.evaluation.verdict,
       }));
       const integrity = { tabSwitches: aiHireWarnings, pasteBlocked: aiHirePasteBlocked, endedEarly: Boolean(endedEarly), totalQuestions: aiHirePlan.questions.length };
-      const data = await performApiRequest("/api/ai-hire/report", {
-        method: "POST",
-        body: JSON.stringify({ context: aiHireContext(), items, integrity }),
-      });
+      const data = await aiHireCall("/api/ai-hire/report", { context: aiHireContext(), items, integrity });
       setAiHireReport({ ...data.report, integrity });
       setAiHireStep("report");
       stopAiHireCamera();
@@ -11876,7 +11881,7 @@ function CodingPlatform() {
             {aiHireStatus && aiHireStatus.configured !== false && <span style={{ fontSize:13, color:C.muted }}>{aiHireStatus.interviewsLeft} of {aiHireStatus.dailyLimit} interviews left today</span>}
             {aiHireStatus?.configured === false && <span style={{ fontSize:13, color:C.amber }}>AI Hire is not switched on yet. Ask your admin.</span>}
           </div>
-          {aiHireBusy === "plan" && <div style={{ fontSize:13.5, color:C.muted }}>{busyText} This takes about 20-40 seconds.</div>}
+          {aiHireBusy === "plan" && <div style={{ fontSize:13.5, color:C.muted }}>{busyText} This usually takes under a minute, a little longer when the AI is busy.</div>}
         </div>
         <aside style={{ display:"grid", gap:16, fontSize:14, color:"#c9c9c9", lineHeight:1.6 }}>
           <div style={{ fontSize:13, fontWeight:600, letterSpacing:"0.12em", textTransform:"uppercase", color:C.muted }}>How it works</div>
