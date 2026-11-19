@@ -1434,6 +1434,16 @@ function CodingPlatform() {
   const [solved, setSolved]                   = useState(new Set());
   const [filterDiff, setFilterDiff]           = useState("All");
   const [searchQuery, setSearchQuery]         = useState("");
+  const [filterTopic, setFilterTopic]         = useState("All");
+  const [weeklyGoal, setWeeklyGoal]           = useState(() => {
+    try {
+      const saved = Number(window.localStorage.getItem("dv-weekly-goal"));
+      return Number.isInteger(saved) && saved >= 1 && saved <= 20 ? saved : 3;
+    } catch (_) {
+      return 3;
+    }
+  });
+  const [goalEditing, setGoalEditing]         = useState(false);
   const [leaderboardSearch, setLeaderboardSearch] = useState("");
   const [leaderboardScope, setLeaderboardScope] = useState("All");
   const [leaderboardPage, setLeaderboardPage] = useState(1);
@@ -4541,9 +4551,15 @@ function CodingPlatform() {
     const isTheory = probType === "theory" || (Array.isArray(p.options) && p.options.length > 0) || hasMcqTag || isMcqAcceptance;
     return !isTheory;
   });
+  // Search matches the title or a topic; the topic chips narrow it further.
+  const problemMatchesSearch = (p) => {
+    const query = searchQuery.trim().toLowerCase();
+    if (filterTopic !== "All" && !(p.tags || []).includes(filterTopic)) return false;
+    if (!query) return true;
+    return p.title.toLowerCase().includes(query) || (p.tags || []).some((tag) => String(tag).toLowerCase().includes(query));
+  };
   const filteredProblems = problemCatalog.filter(p =>
-    (filterDiff === "All" || p.difficulty === filterDiff) &&
-    p.title.toLowerCase().includes(searchQuery.toLowerCase())
+    (filterDiff === "All" || p.difficulty === filterDiff) && problemMatchesSearch(p)
   );
   const activeContestAssignment = activeAssignment || (currentUser.role === "admin" && adminCurrentTest.status === "LIVE" ? adminCurrentTest : null);
   const contestDisplayName = activeContestAssignment?.title
@@ -5126,6 +5142,391 @@ function CodingPlatform() {
         <div style={{ flex:"1 1 300px", minWidth:0 }}>
           <div style={{ color:"#d6d9f0", fontSize:13, marginBottom:10 }}>{message}</div>
           {info && <StreakCalendar calendar={info.calendar} today={info.today} weeks={weeks} />}
+        </div>
+      </div>
+    );
+  };
+
+  // ── Student home: problem list with a progress sidebar ──
+  const renderProblemsHome = () => {
+    const T = {
+      bg: "#131313",
+      surface: "#181818",
+      border: "#2a2a2a",
+      borderSoft: "#222222",
+      text: "#ececec",
+      textSoft: "#c9c9c9",
+      muted: "#8e8e8e",
+      faint: "#5c5c5c",
+      accent: "#e8873a",
+      accentHover: "#f0964d",
+      easy: "#4cb782",
+      medium: "#e9b84a",
+      hard: "#e5575f",
+      sans: "'IBM Plex Sans','Outfit',system-ui,sans-serif",
+      mono: "'IBM Plex Mono','JetBrains Mono',ui-monospace,monospace",
+    };
+    const DIFF_COLOR = { Easy: T.easy, Medium: T.medium, Hard: T.hard };
+    const wide = !isPhone && !isTablet;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const IST_OFFSET_MS = 330 * 60 * 1000;
+    const dayKeyOf = (value) => new Date(new Date(value).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+
+    // Streak and calendar (days are India time, like the backend).
+    const info = streakInfo;
+    const currentStreak = info?.currentStreak || 0;
+    const bestStreak = info?.longestStreak || 0;
+    const todayKey = info?.today || dayKeyOf(Date.now());
+    const todayMs = Date.parse(`${todayKey}T00:00:00Z`);
+    const mondayMs = todayMs - ((new Date(todayMs).getUTCDay() + 6) % 7) * DAY_MS;
+    const weekDays = Array.from({ length: 7 }, (_, index) => {
+      const time = mondayMs + index * DAY_MS;
+      const key = new Date(time).toISOString().slice(0, 10);
+      return { key, label: "MTWTFSS"[index], active: Number(info?.calendar?.[key] || 0) > 0, today: key === todayKey, future: time > todayMs };
+    });
+    const daysLabel = (count) => `${count} day${count === 1 ? "" : "s"}`;
+    const streakText = !info
+      ? "Loading your streak..."
+      : info.practicedToday
+        ? `You practised today. Come back tomorrow to keep it going. Your best is ${daysLabel(bestStreak)}.`
+        : currentStreak > 0
+          ? `Solve a problem today to keep your streak alive. Your best is ${daysLabel(bestStreak)}.`
+          : `Solve one problem today to start a new streak. Your best is ${daysLabel(bestStreak)}.`;
+
+    // Weekly goal: distinct problems accepted since Monday.
+    const weekStartKey = new Date(mondayMs).toISOString().slice(0, 10);
+    const solvedThisWeek = new Set(
+      userSubmissions
+        .filter((submission) => submission.status === "ACCEPTED" && submission.createdAt && dayKeyOf(submission.createdAt) >= weekStartKey)
+        .map((submission) => String(submission.problem?.id ?? submission.problemId))
+    ).size;
+    const goalLeft = Math.max(0, weeklyGoal - solvedThisWeek);
+    const saveGoal = (value) => {
+      setWeeklyGoal(value);
+      setGoalEditing(false);
+      try { window.localStorage.setItem("dv-weekly-goal", String(value)); } catch (_) { /* optional */ }
+    };
+
+    // Progress.
+    const totalCount = problemCatalog.length;
+    const solvedCount = problemCatalog.filter((problem) => solved.has(problem.id)).length;
+    const milestone = [10, 25, 50, 100, 150, 200, 300, 500].find((value) => value > solvedCount && value <= totalCount) || totalCount;
+    const progressText = solvedCount >= totalCount && totalCount
+      ? "You've solved every problem. Impressive!"
+      : `${milestone - solvedCount} more to reach ${milestone} solved.`;
+    const byDifficulty = ["Easy", "Medium", "Hard"].map((label) => {
+      const all = problemCatalog.filter((problem) => problem.difficulty === label);
+      return { label, total: all.length, solved: all.filter((problem) => solved.has(problem.id)).length };
+    });
+
+    // Up next: the first unsolved problem in list order.
+    const upNext = problemCatalog.find((problem) => !solved.has(problem.id)) || null;
+    const upNextHint = !info
+      ? ""
+      : info.practicedToday
+        ? "you've already practised today"
+        : currentStreak > 0
+          ? `solving it today keeps your ${daysLabel(currentStreak)} streak`
+          : "solving it today starts your streak";
+
+    // Topics: the most common tags become chips.
+    const tagCounts = new Map();
+    problemCatalog.forEach((problem) => (problem.tags || []).forEach((tag) => tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1)));
+    const topTopics = [...tagCounts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]))).slice(0, isPhone ? 5 : 8).map(([tag]) => tag);
+    if (filterTopic !== "All" && !topTopics.includes(filterTopic)) topTopics.push(filterTopic);
+    const searchMatched = problemCatalog.filter(problemMatchesSearch);
+    const diffTabs = ["All", "Easy", "Medium", "Hard"].map((label) => ({
+      label,
+      count: label === "All" ? searchMatched.length : searchMatched.filter((problem) => problem.difficulty === label).length,
+    }));
+
+    // Activity heatmap for the sidebar.
+    const heatWeeks = isPhone ? 20 : 28;
+    const heatEndMs = todayMs + (6 - ((new Date(todayMs).getUTCDay() + 6) % 7)) * DAY_MS;
+    const heatStartMs = heatEndMs - (heatWeeks * 7 - 1) * DAY_MS;
+    const heatColumns = Array.from({ length: heatWeeks }, (_, week) => Array.from({ length: 7 }, (__, day) => {
+      const time = heatStartMs + (week * 7 + day) * DAY_MS;
+      const key = new Date(time).toISOString().slice(0, 10);
+      return { key, time, count: Number(info?.calendar?.[key] || 0), future: time > todayMs };
+    }));
+    const heatMonths = heatColumns.map((days, week) => {
+      const month = new Date(days[0].time).getUTCMonth();
+      const previous = week > 0 ? new Date(heatColumns[week - 1][0].time).getUTCMonth() : null;
+      return week === 0 || month !== previous ? CALENDAR_MONTHS[month] : "";
+    });
+    const sinceLabel = heatMonths[0];
+    // A month label needs about 3 columns of room; drop the first one if the next month starts right after.
+    const nextLabelAt = heatMonths.findIndex((label, index) => index > 0 && label);
+    if (nextLabelAt > 0 && nextLabelAt < 3) heatMonths[0] = "";
+    const heatActiveDays = heatColumns.flat().filter((day) => day.count > 0 && !day.future).length;
+    const heatColor = (count) => (count <= 0 ? "#262626" : count === 1 ? "#7a4318" : count <= 3 ? "#b45f22" : "#e8873a");
+
+    const challenge = challengeData?.challenge;
+    const showChallenge = challenge && challenge.status !== "ENDED";
+
+    const sectionTitle = { fontFamily:T.sans, fontSize:13, fontWeight:600, letterSpacing:"0.12em", textTransform:"uppercase", color:T.muted };
+    const linkStyle = { background:"none", border:"none", padding:0, color:T.text, textDecoration:"underline", textUnderlineOffset:3, cursor:"pointer", font:"inherit" };
+    const bar = (percent, color) => (
+      <div style={{ height:6, borderRadius:999, background:"#2a2a2a", overflow:"hidden" }}>
+        <div style={{ width:`${Math.min(100, Math.max(0, percent))}%`, height:"100%", borderRadius:999, background:color, transition:"width 0.4s ease" }} />
+      </div>
+    );
+    const navLink = (label, onClick, active = false) => (
+      <button key={label} onClick={onClick} style={{ background:"none", border:"none", cursor:"pointer", padding:"22px 0 20px", color:active ? T.text : T.muted, fontFamily:T.sans, fontSize:15, fontWeight:active ? 600 : 400, borderBottom:`2px solid ${active ? T.text : "transparent"}`, whiteSpace:"nowrap", flexShrink:0 }}
+        onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = T.textSoft; }}
+        onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = T.muted; }}>
+        {label}
+      </button>
+    );
+
+    const upNextCard = (
+      <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:isPhone ? "18px 16px" : "24px 26px", display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", marginBottom:isPhone ? 24 : 36 }}>
+        {upNext ? (
+          <>
+            <div style={{ flex:"1 1 260px", minWidth:0 }}>
+              <div style={{ color:T.muted, fontSize:13, marginBottom:6 }}>Up next for you</div>
+              <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8, minWidth:0 }}>
+                <span style={{ fontFamily:T.mono, color:T.muted, fontSize:18 }}>{upNext.id}.</span>
+                <span style={{ color:T.text, fontSize:isPhone ? 19 : 22, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{upNext.title}</span>
+              </div>
+              <div style={{ fontSize:14, color:T.muted }}>
+                <span style={{ color:DIFF_COLOR[upNext.difficulty] || T.muted }}>{upNext.difficulty}</span>
+                {(upNext.tags || []).length > 0 && <> · {upNext.tags.slice(0, 3).join(", ")}</>}
+                {upNextHint && <> · {upNextHint}</>}
+              </div>
+            </div>
+            <button onClick={() => openProblem(upNext, "catalog")} style={{ background:T.accent, color:"#1a1009", border:"none", borderRadius:6, padding:"12px 22px", fontFamily:T.sans, fontSize:15, fontWeight:600, cursor:"pointer", flexShrink:0, width:isPhone ? "100%" : "auto" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = T.accentHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = T.accent; }}>
+              Solve now
+            </button>
+          </>
+        ) : (
+          <div>
+            <div style={{ color:T.muted, fontSize:13, marginBottom:6 }}>Up next for you</div>
+            <div style={{ color:T.text, fontSize:20, fontWeight:600 }}>{totalCount ? "You've solved every problem. 🎉" : "Problems are loading..."}</div>
+            {totalCount > 0 && <div style={{ color:T.muted, fontSize:14, marginTop:6 }}>New problems are added regularly. Try the monthly challenge meanwhile.</div>}
+          </div>
+        )}
+      </div>
+    );
+
+    const problemList = (
+      <div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:12, flexWrap:"wrap", marginBottom:18 }}>
+          <h1 style={{ margin:0, color:T.text, fontSize:isPhone ? 24 : 28, fontWeight:600 }}>Problems</h1>
+          <span style={{ color:T.muted, fontSize:15 }}>{totalCount} total, {solvedCount} solved</span>
+        </div>
+
+        <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", marginBottom:14 }}>
+          <input placeholder="Search title or topic" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} aria-label="Search problems"
+            style={{ flex:"1 1 260px", minWidth:0, background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, padding:"11px 14px", color:T.text, fontFamily:T.sans, fontSize:15, outline:"none" }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = "#4a4a4a"; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = T.border; }} />
+          <label style={{ display:"flex", alignItems:"center", gap:10, color:T.muted, fontSize:14, flex:isPhone ? "1 1 100%" : "0 0 auto" }}>
+            Language
+            <select value={lang} onChange={(e) => handleLangChange(e.target.value)}
+              style={{ flex:isPhone ? 1 : "0 0 auto", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, padding:"10px 12px", color:T.text, fontFamily:T.sans, fontSize:15, cursor:"pointer", outline:"none" }}>
+              {SUPPORTED_LANGUAGES.map((language) => <option key={language.id} value={language.id} style={{ background:"#1c1c1c" }}>{language.label}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:22 }}>
+          {["All", ...topTopics].map((topic) => {
+            const active = filterTopic === topic;
+            return (
+              <button key={topic} onClick={() => setFilterTopic(topic)}
+                style={{ background:active ? "#ececec" : "transparent", color:active ? "#151515" : T.textSoft, border:`1px solid ${active ? "#ececec" : T.border}`, borderRadius:5, padding:"7px 13px", fontFamily:T.sans, fontSize:14, fontWeight:active ? 500 : 400, cursor:"pointer" }}
+                onMouseEnter={(e) => { if (!active) e.currentTarget.style.borderColor = "#4a4a4a"; }}
+                onMouseLeave={(e) => { if (!active) e.currentTarget.style.borderColor = T.border; }}>
+                {topic === "All" ? "All topics" : topic}
+              </button>
+            );
+          })}
+        </div>
+
+        <div role="tablist" style={{ display:"flex", gap:isPhone ? 18 : 28, borderBottom:`1px solid ${T.borderSoft}`, overflowX:"auto" }}>
+          {diffTabs.map((tab) => {
+            const active = filterDiff === tab.label;
+            return (
+              <button key={tab.label} role="tab" aria-selected={active} onClick={() => setFilterDiff(tab.label)}
+                style={{ background:"none", border:"none", borderBottom:`2px solid ${active ? T.text : "transparent"}`, marginBottom:-1, padding:"0 0 12px", cursor:"pointer", fontFamily:T.sans, fontSize:16, color:active ? T.text : T.muted, fontWeight:active ? 600 : 400, whiteSpace:"nowrap" }}>
+                {tab.label} <span style={{ fontSize:14, color:active ? T.textSoft : T.faint, fontWeight:400 }}>{tab.count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ width:"100%" }}>
+          <div style={{ display:"grid", gridTemplateColumns:isPhone ? "28px 1fr 64px" : "40px minmax(0,1.4fr) minmax(0,1.2fr) 90px 90px", gap:12, padding:"14px 0", borderBottom:`1px solid ${T.borderSoft}`, color:T.muted, fontSize:14, fontWeight:500 }}>
+            <span />
+            <span>Title</span>
+            {!isPhone && <span>Topics</span>}
+            {!isPhone && <span style={{ textAlign:"right" }}>Acceptance</span>}
+            <span style={{ textAlign:"right" }}>Difficulty</span>
+          </div>
+          {filteredProblems.map((problem) => {
+            const isSolved = solved.has(problem.id);
+            return (
+              <div key={problem.id} role="button" tabIndex={0} onClick={() => openProblem(problem, "catalog")}
+                onKeyDown={(e) => { if (e.key === "Enter") openProblem(problem, "catalog"); }}
+                style={{ display:"grid", gridTemplateColumns:isPhone ? "28px 1fr 64px" : "40px minmax(0,1.4fr) minmax(0,1.2fr) 90px 90px", gap:12, alignItems:"center", padding:"17px 0", borderBottom:`1px solid ${T.borderSoft}`, cursor:"pointer", transition:"background 0.12s ease" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#1a1a1a"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                <span style={{ paddingLeft:2 }} aria-label={isSolved ? "Solved" : "Not solved"}>
+                  {isSolved && <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.2 3L13 4.5" stroke={T.easy} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                </span>
+                <span style={{ minWidth:0, display:"flex", gap:10, alignItems:"baseline" }}>
+                  <span style={{ fontFamily:T.mono, color:T.muted, fontSize:14, flexShrink:0 }}>{problem.id}.</span>
+                  <span style={{ color:T.text, fontSize:16, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{problem.title}</span>
+                </span>
+                {!isPhone && <span style={{ color:T.muted, fontSize:15, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{(problem.tags || []).slice(0, 3).join(", ") || "--"}</span>}
+                {!isPhone && <span style={{ fontFamily:T.mono, color:T.textSoft, fontSize:14, textAlign:"right" }}>{/%/.test(String(problem.acceptance || "")) ? problem.acceptance : "—"}</span>}
+                <span style={{ color:DIFF_COLOR[problem.difficulty] || T.muted, fontSize:15, textAlign:"right" }}>{problem.difficulty}</span>
+              </div>
+            );
+          })}
+          {!filteredProblems.length && (
+            <div style={{ padding:"28px 0", color:T.muted, fontSize:15 }}>
+              No problems match. <button onClick={() => { setSearchQuery(""); setFilterTopic("All"); setFilterDiff("All"); }} style={linkStyle}>Clear filters</button>
+            </div>
+          )}
+        </div>
+        <div style={{ color:T.muted, fontSize:14, marginTop:18 }}>Showing {filteredProblems.length} of {totalCount}</div>
+      </div>
+    );
+
+    const sidebar = (
+      <aside style={{ display:"grid", gap:isPhone ? 30 : 38, alignContent:"start", fontFamily:T.sans }}>
+        <section>
+          <div style={{ ...sectionTitle, marginBottom:12 }}>Streak</div>
+          <div style={{ color:T.text, fontSize:34, fontWeight:600, lineHeight:1.1, marginBottom:10 }}>{daysLabel(currentStreak)}</div>
+          <div style={{ color:T.textSoft, fontSize:15, lineHeight:1.6, marginBottom:16 }}>{streakText}</div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:8, maxWidth:300 }}>
+            {weekDays.map((day) => (
+              <div key={day.key} style={{ display:"grid", gap:8, justifyItems:"center" }} title={day.future ? day.key : `${day.key}: ${day.active ? "practised" : "no practice"}`}>
+                <span style={{ fontSize:12, color:T.muted }}>{day.label}</span>
+                <span style={{ width:"100%", maxWidth:34, aspectRatio:"1", borderRadius:5, boxSizing:"border-box",
+                  background:day.active ? T.accent : day.future ? "transparent" : "#2a2a2a",
+                  border:day.today ? `2px solid ${T.accent}` : day.future ? `1px solid ${T.border}` : "none" }} />
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12 }}>
+            <span style={sectionTitle}>This week's goal</span>
+            <span style={{ fontFamily:T.mono, color:T.text, fontSize:16 }}>{Math.min(solvedThisWeek, weeklyGoal)} / {weeklyGoal}</span>
+          </div>
+          {bar((solvedThisWeek / weeklyGoal) * 100, solvedThisWeek >= weeklyGoal ? T.easy : T.accent)}
+          <div style={{ color:T.textSoft, fontSize:15, marginTop:12, display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+            <span>{goalLeft ? `${goalLeft} problem${goalLeft === 1 ? "" : "s"} before Sunday.` : "Goal reached this week. Nice work!"}</span>
+            {goalEditing ? (
+              <select autoFocus value={weeklyGoal} onChange={(e) => saveGoal(Number(e.target.value))} onBlur={() => setGoalEditing(false)}
+                style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:5, color:T.text, padding:"3px 6px", fontFamily:T.sans, fontSize:14 }}>
+                {[1, 2, 3, 4, 5, 7, 10, 15, 20].map((value) => <option key={value} value={value} style={{ background:"#1c1c1c" }}>{value} per week</option>)}
+              </select>
+            ) : (
+              <button onClick={() => setGoalEditing(true)} style={linkStyle}>Change goal</button>
+            )}
+          </div>
+        </section>
+
+        <section>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12 }}>
+            <span style={sectionTitle}>Progress</span>
+            <span style={{ fontFamily:T.mono, color:T.text, fontSize:16 }}>{solvedCount} / {totalCount}</span>
+          </div>
+          {bar(totalCount ? (solvedCount / totalCount) * 100 : 0, "#ececec")}
+          <div style={{ color:T.textSoft, fontSize:15, marginTop:12, marginBottom:16 }}>{progressText}</div>
+          <div style={{ display:"grid", gap:10 }}>
+            {byDifficulty.map((row) => (
+              <div key={row.label} style={{ display:"flex", justifyContent:"space-between", fontSize:15 }}>
+                <span style={{ color:DIFF_COLOR[row.label] }}>{row.label}</span>
+                <span style={{ fontFamily:T.mono, color:T.textSoft }}>{row.solved} / {row.total}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <div style={{ ...sectionTitle, marginBottom:14 }}>Since {sinceLabel || ""}</div>
+          <div style={{ overflowX:"auto" }}>
+            <div style={{ display:"inline-grid", gap:5 }}>
+              <div style={{ display:"grid", gridTemplateColumns:`repeat(${heatWeeks}, 8px)`, gap:2, fontSize:10, color:T.muted, height:12 }}>
+                {heatMonths.map((label, index) => <div key={index} style={{ whiteSpace:"nowrap", overflow:"visible" }}>{label}</div>)}
+              </div>
+              <div style={{ display:"grid", gridTemplateRows:"repeat(7, 8px)", gridAutoFlow:"column", gridAutoColumns:"8px", gap:2 }}>
+                {heatColumns.flat().map((day) => (
+                  <div key={day.key} title={day.future ? "" : `${day.count} submission${day.count === 1 ? "" : "s"} on ${day.key}`}
+                    style={{ width:8, height:8, borderRadius:1.5, boxSizing:"border-box", background:day.future ? "transparent" : heatColor(day.count), border:day.key === todayKey ? "1px solid #ececec" : "none" }} />
+                ))}
+              </div>
+            </div>
+          </div>
+          <div style={{ color:T.muted, fontSize:14, marginTop:10 }}>{heatActiveDays} active day{heatActiveDays === 1 ? "" : "s"}</div>
+        </section>
+
+        <section style={{ borderTop:`1px solid ${T.border}`, paddingTop:24, display:"grid", gap:14, color:T.textSoft, fontSize:15, lineHeight:1.6 }}>
+          {showChallenge && (
+            <div>
+              {challenge.status === "LIVE" ? "This month's challenge" : "Next challenge"}: win a hoodie and a few gifts.{" "}
+              <button onClick={openChallenge} style={linkStyle}>Details</button>
+            </div>
+          )}
+          <div>Curious how you compare? <button onClick={() => openLeaderboard("All")} style={linkStyle}>See the leaderboard</button></div>
+        </section>
+      </aside>
+    );
+
+    return (
+      <div style={{ position:"relative" }} onContextMenu={(e) => e.preventDefault()}>
+        <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
+        {renderFullscreenGate()}
+        {renderLiveTestPopupModal()}
+        <div style={{ ...S.app, background:T.bg, color:T.text, fontFamily:T.sans, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
+          <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+          <nav style={{ borderBottom:`1px solid ${T.borderSoft}`, background:T.bg, position:"sticky", top:0, zIndex:50 }}>
+            <div style={{ maxWidth:1240, margin:"0 auto", padding:`0 ${pageGutter}px`, display:"flex", alignItems:"center", gap:isPhone ? 18 : 28 }}>
+              <button onClick={() => setView("home")} style={{ background:"none", border:"none", padding:"18px 0", cursor:"pointer", color:T.text, fontFamily:T.sans, fontSize:18, fontWeight:700, flexShrink:0 }}>ScholarLogic</button>
+              <div style={{ display:"flex", gap:isPhone ? 18 : 28, overflowX:"auto", flex:"1 1 auto", minWidth:0, scrollbarWidth:"none" }}>
+                {navLink("Problems", () => setView("list"), true)}
+                {navLink("Contest", openContest)}
+                {navLink("Leaderboard", () => openLeaderboard("All"))}
+                {navLink("IDE", openPlayground)}
+                {navLink("Monthly challenge", openChallenge)}
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:isPhone ? 10 : 20, flexShrink:0 }}>
+                {!isPhone && (
+                  <span style={{ fontFamily:T.mono, fontSize:15, color:T.textSoft, display:"flex", gap:20 }}>
+                    <span title={info?.practicedToday ? "You practised today" : "Practise today to keep your streak"} style={{ color:info?.practicedToday ? T.accent : T.textSoft }}>streak {currentStreak}</span>
+                    <span>{solvedCount} solved</span>
+                  </span>
+                )}
+                <button onClick={openProfile} title="Your profile" style={{ width:36, height:36, borderRadius:6, background:"#1c1c1c", border:`1px solid ${T.border}`, color:T.text, fontFamily:T.sans, fontWeight:700, fontSize:15, cursor:"pointer" }}>{userBadge}</button>
+              </div>
+            </div>
+          </nav>
+
+          <main style={{ maxWidth:1240, width:"100%", margin:"0 auto", padding:`${isPhone ? 20 : 38}px ${pageGutter}px 60px`, boxSizing:"border-box" }}>
+            {portalError && (
+              <div style={{ background:"#1f1212", border:"1px solid #4b1e1e", color:"#f3b0b0", borderRadius:8, padding:"12px 14px", fontSize:14, marginBottom:18 }}>{portalError}</div>
+            )}
+            {wide ? (
+              <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) 300px", gap:48, alignItems:"start" }}>
+                <div style={{ minWidth:0 }}>{upNextCard}{problemList}</div>
+                <div>{sidebar}</div>
+              </div>
+            ) : (
+              <div>
+                {upNextCard}
+                <div style={{ marginBottom:36 }}>{sidebar}</div>
+                {problemList}
+              </div>
+            )}
+          </main>
         </div>
       </div>
     );
@@ -10139,145 +10540,7 @@ function CodingPlatform() {
   );
 
   // ── PROBLEM LIST ───────────────────────────────────────────────────────────
-  if (view === "list") return (
-    <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
-      <ScreenShield active={shieldActive} message={shieldActiveMessage} title={shieldTitle} action={shieldAction} />
-      {renderFullscreenGate()}
-      {renderLiveTestPopupModal()}
-      <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
-      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-      <nav style={S.nav}>
-        <DevOrbitLogo onClick={()=>setView("home")} />
-        <button onClick={()=>setView("list")} style={S.navBtn(true)}>
-          <span style={S.navBtnLabel(true)}>Problems</span>
-          <span style={S.navBtnHint(true)}>Daily coding practice</span>
-        </button>
-        <button onClick={openContest} style={S.navBtn(false)}>
-          <span style={S.navBtnLabel(false)}>Contest</span>
-          <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
-        </button>
-        <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
-          <span style={S.navBtnLabel(false)}>Leaderboard</span>
-          <span style={S.navBtnHint(false)}>See the top performers</span>
-        </button>
-        {renderExtraNavButtons()}
-        <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-          {renderStreakPill()}
-          <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
-          {currentAchievement && <AchievementBadge tier={currentUser.badgeTier} compact />}
-          <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
-        </div>
-      </nav>
-
-      <div style={{ maxWidth:1100, margin:isPhone ? "20px auto" : "32px auto", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box" }}>
-
-        {portalError && (
-          <div style={{ background:"#180b0b", border:"1px solid #4b1717", color:"#ffb0b0", borderRadius:14, padding:"12px 14px", fontSize:13, marginBottom:18 }}>
-            {portalError}
-          </div>
-        )}
-
-        {renderChallengeBanner()}
-        {renderStreakCard(isPhone ? 14 : 26)}
-
-        {/* Stats */}
-        <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit, minmax(${isPhone ? 150 : 220}px, 1fr))`, gap:16, marginBottom:32 }}>
-          {[{label:"Easy",color:"#00b8a3"},{label:"Medium",color:"#ffc01e"},{label:"Hard",color:"#ff375f"}].map(s=>(
-            <div key={s.label} style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:12 }}>
-              <div style={{ width:8, height:32, borderRadius:4, background:s.color }} />
-              <div>
-                <div style={{ fontSize:22, fontWeight:700, color:s.color }}>{problemCatalog.filter(p=>p.difficulty===s.label).length}</div>
-                <div style={{ fontSize:12, color:"#666" }}>{s.label} Problems</div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Filters */}
-        <div style={{ display:"flex", gap:12, marginBottom:14, alignItems:"center", flexWrap:"wrap" }}>
-          <input placeholder="🔍  Search problems..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}
-            style={{ flex:1, minWidth:220, background:"#111118", border:"1px solid #1e1e2e", borderRadius:8, padding:"10px 14px", color:"#eef0ff", fontFamily:"'Outfit','Space Grotesk',sans-serif", fontSize:14, outline:"none", letterSpacing:"0.01em" }} />
-          {["All","Easy","Medium","Hard"].map(d=>(
-            <button key={d} onClick={()=>setFilterDiff(d)} style={{ ...S.btn("default"), background:filterDiff===d?"#1a1a2e":"transparent", color:filterDiff===d?"#7c6af7":"#666", border:filterDiff===d?"1px solid #7c6af7":"1px solid #1e1e2e" }}>{d}</button>
-          ))}
-        </div>
-
-        {/* Language Selection Control */}
-        <div style={{ display:"flex", gap:12, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
-          <span style={{ color:"#7a7f9e", fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif" }}>
-            Language:
-          </span>
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            {SUPPORTED_LANGUAGES.map((l) => {
-              const active = lang === l.id;
-              return (
-                <button
-                  key={l.id}
-                  type="button"
-                  onClick={() => handleLangChange(l.id)}
-                  style={{
-                    ...S.btn("default"),
-                    padding: "8px 16px",
-                    borderRadius: 8,
-                    fontSize: 13,
-                    fontFamily: "'Outfit','Space Grotesk',sans-serif",
-                    fontWeight: active ? 700 : 500,
-                    background: active ? "#1a1a2e" : "transparent",
-                    color: active ? "#7c6af7" : "#666",
-                    border: active ? "1px solid #7c6af7" : "1px solid #1e1e2e",
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!active) {
-                      e.currentTarget.style.borderColor = "#3a3a52";
-                      e.currentTarget.style.color = "#cdd2ef";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!active) {
-                      e.currentTarget.style.borderColor = "#1e1e2e";
-                      e.currentTarget.style.color = "#666";
-                    }
-                  }}
-                >
-                  {l.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Table */}
-        <div style={{ background:"#111118", border:"1px solid #1e1e2e", borderRadius:12, overflowX:"auto" }}>
-          <table style={{ width:"100%", minWidth:isPhone ? 720 : "100%", borderCollapse:"collapse" }}>
-            <thead>
-              <tr style={{ borderBottom:"1px solid #1e1e2e" }}>
-                {["Status","#","Title","Tags","Difficulty","Acceptance"].map(h=>(
-                  <th key={h} style={S.tableHead}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredProblems.map(p=>(
-                <tr key={p.id} onClick={()=>openProblem(p, "catalog")} style={{ borderBottom:"1px solid #0f0f1a", cursor:"pointer" }}
-                  onMouseEnter={e=>e.currentTarget.style.background="#16161f"}
-                  onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                  <td style={{ padding:"14px 16px", width:60 }}>{solved.has(p.id)?<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill="#00b8a3" fillOpacity="0.15"/><path d="M5 8l2 2 4-4" stroke="#00b8a3" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>:<span style={{ color:"#333", fontSize:12 }}>—</span>}</td>
-                  <td style={{ padding:"14px 16px", color:"#444", fontSize:13 }}>{p.id}</td>
-                  <td style={{ padding:"14px 16px" }}><span style={S.tableTitle}>{p.title}</span></td>
-                  <td style={{ padding:"14px 16px" }}><div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>{p.tags.slice(0,2).map(t=><span key={t} style={S.tag}>{t}</span>)}</div></td>
-                  <td style={{ padding:"14px 16px" }}><span style={S.badge(p.difficulty)}>{p.difficulty}</span></td>
-                  <td style={{ padding:"14px 16px", color:"#555", fontSize:13 }}>{p.acceptance}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      </div>
-    </div>
-  );
+  if (view === "list") return renderProblemsHome();
 
   if (view === "profile") return (
     <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
