@@ -1,4 +1,5 @@
 const AnthropicModule = require('@anthropic-ai/sdk');
+const prisma = require('../prismaClient');
 
 const Anthropic = AnthropicModule.default || AnthropicModule;
 
@@ -445,6 +446,36 @@ exports.evaluate = async (req, res) => {
     });
   } catch (error) {
     return sendError(res, error, 'Could not check your answer. Please try again.');
+  }
+};
+
+// POST /api/ai-hire/feedback  { rating 1-5, comment, role }
+// Stored with the test feedback so admins see it in the Feedback tab as "AI Hire · <role>".
+exports.feedback = async (req, res) => {
+  try {
+    const rating = Number(req.body?.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'Choose a rating from 1 to 5.' });
+    const comment = clip(req.body?.comment, 1000);
+    const role = clip(req.body?.role, 120);
+    const now = new Date();
+    await prisma.testFeedback.create({
+      data: {
+        assignmentId: 'ai-hire',
+        assignmentTitle: role ? `AI Hire · ${role}` : 'AI Hire',
+        userId: req.user.id,
+        userName: req.user.name || '',
+        userEmail: req.user.email || '',
+        rating,
+        comment,
+        seenByAdmin: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    return res.status(201).json({ ok: true });
+  } catch (error) {
+    console.error('[ai-hire] feedback', error);
+    return res.status(500).json({ error: 'Could not save your feedback.' });
   }
 };
 

@@ -8,5 +8,6 @@ router.post('/start', requireAuth, controller.start);
 router.post('/evaluate', requireAuth, controller.evaluate);
 router.post('/report', requireAuth, controller.report);
 router.get('/jobs/:id', requireAuth, controller.job);
+router.post('/feedback', requireAuth, controller.feedback);
 
 module.exports = router;

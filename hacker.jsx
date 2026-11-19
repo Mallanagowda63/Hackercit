@@ -1884,6 +1884,8 @@ function CodingPlatform() {
   const [aiHireTimer, setAiHireTimer] = useState({ index: -1, startsAt: 0, endsAt: 0, limit: 0 });
   const [aiHireTick, setAiHireTick] = useState(() => Date.now());
   const aiHireTimeUpRef = useRef(-1);
+  const [aiHireRating, setAiHireRating] = useState(0);
+  const [aiHireComment, setAiHireComment] = useState("");
   const aiHireEvalPromisesRef = useRef({});
   const aiHireEvalResultsRef = useRef({});
   const aiHireRunIdRef = useRef(0);
@@ -4115,6 +4117,8 @@ function CodingPlatform() {
       setAiHireFeedbackIndex(null);
       aiHireTimeUpRef.current = -1;
       setAiHireTimer({ index: -1, startsAt: 0, endsAt: 0, limit: 0 });
+      setAiHireRating(0);
+      setAiHireComment("");
       aiHireLastWarningRef.current = Date.now();
       setAiHireWarnings(0);
       setAiHirePasteBlocked(0);
@@ -4183,6 +4187,32 @@ function CodingPlatform() {
     setAiHireFeedbackIndex(null);
     setAiHireDraft("");
     runAiHireEvaluation(index, question, answer, timedOut);
+  };
+
+  // When the last question is answered: Asha says goodbye and the camera and microphone turn off.
+  useEffect(() => {
+    if (view !== "aihire" || aiHireStep !== "interview" || !aiHirePlan) return;
+    if (aiHireTurns.length < aiHirePlan.questions.length) return;
+    const key = `${aiHirePlan.role}|done`;
+    if (aiHireSpokenRef.current === key) return;
+    aiHireSpokenRef.current = key;
+    stopAiHireListening();
+    stopAiHireCamera();
+    if (aiHireVoiceOn) speakAiHire("That brings us to the end of the interview. Thank you, you did well. Please tell us how it went, and then see your report.");
+  }, [view, aiHireStep, aiHirePlan, aiHireTurns.length]);
+
+  // Saves the rating (shown to admins in the Feedback tab), then builds the report.
+  const submitAiHireFeedbackAndFinish = async () => {
+    if (!aiHireRating || aiHireBusy) return;
+    try {
+      await performApiRequest("/api/ai-hire/feedback", {
+        method: "POST",
+        body: JSON.stringify({ rating: aiHireRating, comment: aiHireComment.trim(), role: aiHirePlan?.role || "" }),
+      });
+    } catch (_) {
+      // Feedback is optional; never block the report on it.
+    }
+    finishAiHireInterview(false);
   };
 
   // Per-question timer. It starts once Asha has had time to read the question aloud; when it runs
@@ -12450,6 +12480,91 @@ function CodingPlatform() {
       const timeShare = timerOn ? secondsLeft / aiHireTimer.limit : 1;
       const timerColor = !timerStarted ? C.muted : secondsLeft <= 10 ? C.red : secondsLeft <= 30 ? C.accent : C.text;
       const clock = (value) => `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
+      // Shown once every question is answered: a short celebration, then a feedback question.
+      const finishCard = finished && (() => {
+        const ratings = [
+          { value: 1, emoji: "😞", label: "Poor" },
+          { value: 2, emoji: "😕", label: "Okay" },
+          { value: 3, emoji: "🙂", label: "Good" },
+          { value: 4, emoji: "😀", label: "Great" },
+          { value: 5, emoji: "🤩", label: "Excellent" },
+        ];
+        const confettiColors = ["#e8873a", "#4cb782", "#e9b84a", "#7fb7e8", "#9d8cf2", "#ff8a8a"];
+        const answeredWell = aiHireTurns.filter((turn) => turn.status === "done" && turn.evaluation.score >= 7).length;
+        return (
+          <div className="dv-finish" style={{ position:"relative", overflow:"hidden", borderRadius:18, border:"1px solid #2a2a2a", background:"radial-gradient(120% 90% at 50% 0%, rgba(232,135,58,0.14), rgba(19,19,19,0) 60%), #161616", padding:isPhone ? "34px 18px 26px" : "46px 40px 34px", textAlign:"center" }}>
+            {/* Confetti burst */}
+            <div aria-hidden="true" style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"hidden" }}>
+              {Array.from({ length: 34 }, (_, index) => {
+                const left = (index * 37) % 100;
+                const delay = (index % 9) * 0.12;
+                const drift = ((index * 53) % 120) - 60;
+                const size = 6 + (index % 4) * 2;
+                return (
+                  <span key={index} style={{ position:"absolute", top:-16, left:`${left}%`, width:size, height:size * (index % 3 === 0 ? 2.2 : 1), borderRadius:index % 2 ? 2 : "50%", background:confettiColors[index % confettiColors.length], "--dv-drift":`${drift}px`, animation:`dvConfetti ${2.4 + (index % 5) * 0.35}s cubic-bezier(.2,.7,.4,1) ${delay}s 1 both` }} />
+                );
+              })}
+            </div>
+
+            <div style={{ position:"relative" }}>
+              <svg width={isPhone ? 76 : 92} height={isPhone ? 76 : 92} viewBox="0 0 100 100" role="img" aria-label="Interview complete" style={{ display:"block", margin:"0 auto 18px", animation:"dvPop 0.6s cubic-bezier(.2,1.4,.4,1) both" }}>
+                <circle cx="50" cy="50" r="44" fill="rgba(76,183,130,0.12)" stroke="#4cb782" strokeWidth="5" strokeDasharray="277" strokeDashoffset="277" style={{ animation:"dvDraw 0.7s ease-out 0.15s forwards" }} />
+                <path d="M30 52 L44 65 L70 37" fill="none" stroke="#4cb782" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="60" strokeDashoffset="60" style={{ animation:"dvDraw 0.45s ease-out 0.75s forwards" }} />
+              </svg>
+              <div style={{ fontSize:isPhone ? 24 : 30, fontWeight:700, color:C.text, animation:"dvRise 0.5s ease-out 0.4s both" }}>Interview complete!</div>
+              <div style={{ fontSize:15, color:"#c9c9c9", marginTop:8, lineHeight:1.6, animation:"dvRise 0.5s ease-out 0.55s both" }}>
+                Great job{currentUser?.name ? `, ${String(currentUser.name).trim().split(/\s+/)[0]}` : ""}. You answered all {total} questions for the {plan.role} role.
+              </div>
+              <div style={{ display:"flex", justifyContent:"center", gap:isPhone ? 10 : 18, flexWrap:"wrap", marginTop:20, animation:"dvRise 0.5s ease-out 0.7s both" }}>
+                {[
+                  [String(total), "questions"],
+                  [String(answeredWell), "strong answers"],
+                  [aiHireWarnings ? String(aiHireWarnings) : "0", "warnings"],
+                ].map(([value, label]) => (
+                  <div key={label} style={{ minWidth:96, padding:"10px 14px", borderRadius:12, background:"#1c1c1c", border:"1px solid #2a2a2a" }}>
+                    <div style={{ fontFamily:mono, fontSize:20, color:C.text }}>{value}</div>
+                    <div style={{ fontSize:12, color:C.muted }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize:13, color:C.muted, marginTop:14, minHeight:20 }}>
+                {pendingCount
+                  ? <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><span style={{ width:12, height:12, border:"2px solid #3a3a3a", borderTopColor:C.accent, borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} />Asha is still checking {pendingCount} answer{pendingCount === 1 ? "" : "s"}...</span>
+                  : "All your answers are checked."}
+              </div>
+
+              {/* Feedback */}
+              <div style={{ maxWidth:520, margin:"26px auto 0", padding:isPhone ? "18px 14px" : "22px 24px", borderRadius:14, background:"#1a1a1a", border:"1px solid #2a2a2a", textAlign:"left", animation:"dvRise 0.5s ease-out 0.9s both" }}>
+                <div style={{ fontSize:16, fontWeight:600, color:C.text }}>How was your interview?</div>
+                <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>Your feedback helps us make AI Hire better.</div>
+                <div role="radiogroup" aria-label="Rate your interview" style={{ display:"grid", gridTemplateColumns:"repeat(5, minmax(0,1fr))", gap:isPhone ? 6 : 10, marginTop:16 }}>
+                  {ratings.map((option) => {
+                    const selected = aiHireRating === option.value;
+                    return (
+                      <button key={option.value} type="button" role="radio" aria-checked={selected} aria-label={option.label} onClick={() => setAiHireRating(option.value)}
+                        style={{ display:"grid", justifyItems:"center", gap:4, padding:isPhone ? "10px 2px" : "12px 4px", borderRadius:12, cursor:"pointer", fontFamily:"inherit", background:selected ? "rgba(232,135,58,0.14)" : "#141414", border:`1px solid ${selected ? C.accent : "#2a2a2a"}`, transform:selected ? "translateY(-2px)" : "none", transition:"transform 0.15s, border-color 0.15s, background 0.15s" }}>
+                        <span style={{ fontSize:isPhone ? 24 : 28, lineHeight:1, filter:aiHireRating && !selected ? "grayscale(0.7) opacity(0.6)" : "none" }}>{option.emoji}</span>
+                        <span style={{ fontSize:11.5, color:selected ? C.accent : C.muted, fontWeight:selected ? 600 : 400 }}>{option.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <textarea value={aiHireComment} onChange={(e) => setAiHireComment(e.target.value.slice(0, 1000))} placeholder="Anything we can improve? (optional)" aria-label="Feedback comment"
+                  style={{ ...input, minHeight:80, marginTop:14, background:"#0e0e0e" }} />
+                {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14, marginTop:10 }}>{aiHireError}</div>}
+                <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginTop:14 }}>
+                  <button onClick={submitAiHireFeedbackAndFinish} disabled={Boolean(aiHireBusy) || !aiHireRating} style={{ ...primary(Boolean(aiHireBusy) || !aiHireRating), flex:isPhone ? "1 1 100%" : "0 0 auto", justifyContent:"center" }}>
+                    Submit feedback & see my report
+                  </button>
+                  <button onClick={() => finishAiHireInterview(false)} disabled={Boolean(aiHireBusy)} style={{ background:"none", border:"none", color:C.muted, fontFamily:"inherit", fontSize:13.5, cursor:"pointer", textDecoration:"underline", padding:"6px 2px" }}>
+                    Skip and see my report
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })();
 
       return (
         <div style={{ display:"grid", gap:20 }}>
@@ -12485,6 +12600,7 @@ function CodingPlatform() {
             </div>
           )}
 
+          {finished ? finishCard : (
           <div style={{ display:"grid", gridTemplateColumns:isCompact ? "minmax(0,1fr)" : "300px minmax(0,1fr)", gap:20, alignItems:"start" }}>
             {/* Role card */}
             <aside style={{ ...card, borderRadius:14, display:"grid", gap:16, order:isCompact ? 2 : 0 }}>
@@ -12677,6 +12793,7 @@ function CodingPlatform() {
               )}
             </div>
           </div>
+          )}
         </div>
       );
     })();
@@ -12736,7 +12853,7 @@ function CodingPlatform() {
         {renderFullscreenGate()}
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, background:C.bg, color:C.text, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease" }}>
-          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvTimerPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } } @keyframes dvMicPulse { 0% { transform: scale(0.95); opacity: 0.8; } 100% { transform: scale(1.3); opacity: 0; } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
+          <style>{"@keyframes dvSpin { to { transform: rotate(360deg); } } @keyframes dvTalk { from { transform: scaleY(0.55); } to { transform: scaleY(1.25); } } @keyframes dvBars { from { transform: scaleY(0.3); } to { transform: scaleY(1); } } @keyframes dvConfetti { 0% { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate3d(var(--dv-drift), 620px, 0) rotate(540deg); opacity: 0; } } @keyframes dvDraw { to { stroke-dashoffset: 0; } } @keyframes dvPop { 0% { transform: scale(0.4); opacity: 0; } 100% { transform: scale(1); opacity: 1; } } @keyframes dvRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } } @keyframes dvTimerPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } } @keyframes dvMicPulse { 0% { transform: scale(0.95); opacity: 0.8; } 100% { transform: scale(1.3); opacity: 0; } } @keyframes dvBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } } @media (prefers-reduced-motion: reduce) { .dv-aihire * { animation: none !important; } .dv-finish circle, .dv-finish path { stroke-dashoffset: 0 !important; } .dv-finish [aria-hidden=true] { display: none; } } .dv-aihire textarea::placeholder { color:#5c5c5c; } .dv-aihire textarea:focus { border-color:#4a4a4a !important; }"}</style>
           <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("aihire")}</div>
           {aiHireBusy && <AiHireLoadingOverlay kind={aiHireBusy} />}
           {aiHireLeaveOpen && (
