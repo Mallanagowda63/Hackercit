@@ -40,6 +40,7 @@ app.use('/api/proctoring', proctoringRoutes);
 app.use('/api/challenges', challengeRoutes);
 app.use('/api/admin/announcements', require('./routes/announcements'));
 app.use('/api/admin/feedback', require('./routes/adminFeedback'));
+app.use('/api/ai-hire', require('./routes/aiHire'));
 
 async function health(req, res) {
   const database = await prisma.$ping()

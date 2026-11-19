@@ -1,0 +1,11 @@
+const express = require('express');
+const router = express.Router();
+const controller = require('../controllers/aiHireController');
+const { requireAuth } = require('../middleware/authMiddleware');
+
+router.get('/status', requireAuth, controller.status);
+router.post('/start', requireAuth, controller.start);
+router.post('/evaluate', requireAuth, controller.evaluate);
+router.post('/report', requireAuth, controller.report);
+
+module.exports = router;
