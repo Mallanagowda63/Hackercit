@@ -4907,7 +4907,7 @@ function CodingPlatform() {
   const pageGutter = isPhone ? 14 : isTablet ? 20 : 24;
   const compactGrid = "minmax(0, 1fr)";
   const S = {
-    app:  { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:"#0a0a0f", color:"#e0e0e0", minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
+    app:  { fontFamily:"'Outfit','Space Grotesk',sans-serif", background:"#131313", color:"#e0e0e0", minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
     adminApp: { fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif", background:ADMIN_THEME.background, color:ADMIN_THEME.text, minHeight:"100vh", display:"flex", flexDirection:"column", overflowX:"hidden" },
     nav:  { background:"#111118", borderBottom:"1px solid #1e1e2e", padding:`10px ${pageGutter}px`, display:"flex", alignItems:"center", minHeight:isPhone ? 60 : 72, gap:isPhone ? 10 : 24, position:"sticky", top:0, zIndex:100, flexWrap:"wrap" },
     adminNav: { background:ADMIN_THEME.sidebarBackground, borderBottom:`1px solid ${ADMIN_THEME.divider}`, boxShadow:ADMIN_THEME.shadowSoft, padding:`10px ${pageGutter}px`, display:"flex", alignItems:"center", minHeight:isPhone ? 60 : 72, gap:isPhone ? 10 : 24, position:"sticky", top:0, zIndex:100, flexWrap:"wrap" },
@@ -5195,7 +5195,7 @@ function CodingPlatform() {
   };
 
   // Top menu shared by the student pages that use the new minimal design.
-  const renderStudentNav = (active = "", contained = false) => {
+  const renderStudentNav = (active = "", contained = false, extra = null) => {
     const streak = streakInfo?.currentStreak || 0;
     const solvedTotal = problemCatalog.filter((problem) => solved.has(problem.id)).length;
     const link = (id, label, onClick) => {
@@ -5210,7 +5210,8 @@ function CodingPlatform() {
       );
     };
     return (
-      <nav style={{ borderBottom:"1px solid #222", background:"#131313", flexShrink:0, position:"relative", zIndex:50 }}>
+      <nav style={{ borderBottom:"1px solid #222", background:"#131313", flexShrink:0, position:"relative", zIndex:50, fontFamily:"'IBM Plex Sans','Outfit',system-ui,sans-serif" }}>
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
         <div style={{ padding:`0 ${contained ? pageGutter : isPhone ? 12 : 20}px`, display:"flex", alignItems:"center", gap:isPhone ? 16 : 22, maxWidth:contained ? 1240 : "none", margin:"0 auto", boxSizing:"border-box" }}>
           <button onClick={() => setView("home")} style={{ background:"none", border:"none", padding:"14px 0", cursor:"pointer", color:"#f2f2f2", fontFamily:"inherit", fontSize:16, fontWeight:700, flexShrink:0 }}>ScholarLogic</button>
           <div style={{ display:"flex", gap:isPhone ? 16 : 22, overflowX:"auto", flex:"1 1 auto", minWidth:0, scrollbarWidth:"none", marginLeft:isPhone ? 0 : 8 }}>
@@ -5221,13 +5222,14 @@ function CodingPlatform() {
             {link("challenge", "Monthly challenge", openChallenge)}
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:isPhone ? 10 : 18, flexShrink:0 }}>
+            {extra}
             {!isPhone && (
               <span style={{ fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace", fontSize:13.5, color:"#a3a3a3", display:"flex", gap:16 }}>
                 <span style={{ color:streakInfo?.practicedToday ? "#e8873a" : "#a3a3a3" }}>streak {streak}</span>
                 {active !== "playground" && <span>{solvedTotal} solved</span>}
               </span>
             )}
-            <button onClick={openProfile} title="Your profile" style={{ width:32, height:32, borderRadius:6, background:"#1c1c1c", border:"1px solid #2a2a2a", color:"#ececec", fontFamily:"inherit", fontWeight:700, fontSize:13.5, cursor:"pointer" }}>{userBadge}</button>
+            <button onClick={openProfile} title="Your profile" aria-current={active === "profile" ? "page" : undefined} style={{ width:32, height:32, borderRadius:6, background:"#1c1c1c", border:`1px solid ${active === "profile" ? "#e8873a" : "#2a2a2a"}`, color:"#ececec", fontFamily:"inherit", fontWeight:700, fontSize:13.5, cursor:"pointer" }}>{userBadge}</button>
           </div>
         </div>
       </nav>
@@ -5567,7 +5569,7 @@ function CodingPlatform() {
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, background:T.bg, color:T.text, fontFamily:T.sans, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
           <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-          <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("list", true)}</div>
+          <div style={{ position:"sticky", top:0, zIndex:50 }}>{renderStudentNav("list")}</div>
 
           <main style={{ maxWidth:1240, width:"100%", margin:"0 auto", padding:`${isPhone ? 20 : 38}px ${pageGutter}px 60px`, boxSizing:"border-box" }}>
             {portalError && (
@@ -10665,29 +10667,7 @@ function CodingPlatform() {
       {renderLiveTestPopupModal()}
       <div style={{ ...S.app, background:"#0f172a", color:"#e2e8f0", fontFamily:"'Poppins','Inter','Outfit',sans-serif", opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-        <nav style={{ ...S.nav, background:"#0b1220", borderBottom:"1px solid #1e293b" }}>
-          <DevOrbitLogo onClick={()=>setView("home")} />
-          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Problems</span>
-            <span style={S.navBtnHint(false)}>Practice arena</span>
-          </button>
-          <button onClick={openContest} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Contest</span>
-            <span style={S.navBtnHint(false)}>Live round hub</span>
-          </button>
-          <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Leaderboard</span>
-            <span style={S.navBtnHint(false)}>Ranking board</span>
-          </button>
-          {renderExtraNavButtons()}
-          <button style={S.navBtn(true)}>
-            <span style={S.navBtnLabel(true)}>Profile</span>
-            <span style={S.navBtnHint(true)}>Dashboard overview</span>
-          </button>
-          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-            <div style={{ width:34, height:34, borderRadius:"50%", background:`linear-gradient(135deg, ${profileAvatarGradient[0]}, ${profileAvatarGradient[1]})`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, color:"#081018", boxShadow:"0 0 18px rgba(96,165,250,0.28)" }}>{profileAvatarLabel}</div>
-          </div>
-        </nav>
+        {renderStudentNav("profile")}
 
         <div style={{ maxWidth:1260, margin:"28px auto 40px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
           <div onMouseEnter={liftCard} onMouseLeave={settleCard} style={{ background:"linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.92))", border:"1px solid #1e293b", borderRadius:28, padding:"28px", boxShadow:"0 14px 34px rgba(15, 23, 42, 0.32)", transition:"transform 0.2s ease, boxShadow 0.2s ease" }}>
@@ -10948,27 +10928,7 @@ function CodingPlatform() {
             </div>
           </div>
         )}
-        <nav style={S.nav}>
-          <DevOrbitLogo onClick={()=>setView("home")} />
-          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Problems</span>
-            <span style={S.navBtnHint(false)}>Daily coding practice</span>
-          </button>
-          <button onClick={openContest} style={S.navBtn(true)}>
-            <span style={S.navBtnLabel(true)}>Contest</span>
-            <span style={S.navBtnHint(true)}>Timed challenge rounds</span>
-          </button>
-          <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Leaderboard</span>
-            <span style={S.navBtnHint(false)}>See the top performers</span>
-          </button>
-          {renderExtraNavButtons()}
-          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-            <span style={{ color:"#7c6af7", fontSize:13 }}>🏆 {solved.size} solved</span>
-            {currentAchievement && <AchievementBadge tier={currentUser.badgeTier} compact />}
-            <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
-          </div>
-        </nav>
+        {renderStudentNav("contest")}
 
         <div style={{ maxWidth:1180, margin:"32px auto 40px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
 
@@ -11264,25 +11224,7 @@ function CodingPlatform() {
     return (
       <div style={{ ...S.app, minHeight:"100vh" }}>
         <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-        <nav style={S.nav}>
-          <DevOrbitLogo onClick={()=>setView("home")} />
-          <button onClick={()=>setView("list")} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Problems</span>
-            <span style={S.navBtnHint(false)}>Daily coding practice</span>
-          </button>
-          <button onClick={openContest} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Contest</span>
-            <span style={S.navBtnHint(false)}>Back to contest hub</span>
-          </button>
-          <button onClick={()=>openLeaderboard("This Contest")} style={S.navBtn(false)}>
-            <span style={S.navBtnLabel(false)}>Leaderboard</span>
-            <span style={S.navBtnHint(false)}>Compare scores</span>
-          </button>
-          {renderExtraNavButtons()}
-          <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-            <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
-          </div>
-        </nav>
+        {renderStudentNav("contest")}
 
         <div style={{ maxWidth:1100, margin:"34px auto 44px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
           <div style={{ background:"radial-gradient(circle at top left, rgba(79,209,197,0.18), rgba(10,10,15,0.98) 50%)", border:"1px solid #25253b", borderRadius:24, padding:"28px", boxShadow:"0 24px 70px rgba(0,0,0,0.32)" }}>
@@ -11516,26 +11458,7 @@ function CodingPlatform() {
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
           <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-          <nav style={S.nav}>
-            <DevOrbitLogo onClick={()=>setView("home")} />
-            <button onClick={()=>setView("list")} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Problems</span>
-              <span style={S.navBtnHint(false)}>Daily coding practice</span>
-            </button>
-            <button onClick={openContest} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Contest</span>
-              <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
-            </button>
-            <button onClick={()=>openLeaderboard("All")} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Leaderboard</span>
-              <span style={S.navBtnHint(false)}>See the top performers</span>
-            </button>
-            {renderExtraNavButtons("challenge")}
-            <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-              {renderStreakPill()}
-              <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
-            </div>
-          </nav>
+          {renderStudentNav("challenge")}
 
           <div style={{ maxWidth:1180, margin:isPhone ? "20px auto 40px" : "32px auto 48px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box", display:"grid", gap:20 }}>
             {challengeError && !challenge && (
@@ -11737,30 +11660,7 @@ function CodingPlatform() {
         {renderLiveTestPopupModal()}
         <div style={{ ...S.app, opacity: shieldActive ? 0 : 1, pointerEvents: shieldActive ? "none" : "auto", transition: "opacity 0.12s ease", userSelect: shieldActive ? "none" : "auto" }}>
           <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-          <nav style={S.nav}>
-            <DevOrbitLogo onClick={()=>setView("home")} />
-            <button onClick={()=>setView("list")} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Problems</span>
-              <span style={S.navBtnHint(false)}>Daily coding practice</span>
-            </button>
-            <button onClick={openContest} style={S.navBtn(false)}>
-              <span style={S.navBtnLabel(false)}>Contest</span>
-              <span style={S.navBtnHint(false)}>Timed challenge rounds</span>
-            </button>
-            <button onClick={()=>openLeaderboard("All")} style={S.navBtn(true)}>
-              <span style={S.navBtnLabel(true)}>Leaderboard</span>
-              <span style={S.navBtnHint(true)}>See the top performers</span>
-            </button>
-            {renderExtraNavButtons()}
-            <div style={{ marginLeft:"auto", display:"flex", gap:12, alignItems:"center" }}>
-              <div style={{ padding:"7px 12px", borderRadius:999, border:"1px solid #273246", background:"#111b22", color:"#7ce7ff", fontSize:11.5, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:"'Space Grotesk',sans-serif", display:"flex", alignItems:"center" }}>
-                <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", background:leaderboardUpdating ? "#4fd1c5" : "#2f8f86", marginRight:8, boxShadow:"0 0 12px #4fd1c566", transition:"background 0.6s ease" }} />
-                Live
-              </div>
-              {renderStreakPill()}
-              <div onClick={openProfile} style={{ width:32, height:32, borderRadius:"50%", background:"linear-gradient(135deg,#7c6af7,#4fd1c5)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, cursor:"pointer" }}>{userBadge}</div>
-            </div>
-          </nav>
+          {renderStudentNav("leaderboard", false, (<span style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12.5, color:leaderboardUpdating ? "#4cb782" : "#8e8e8e" }}><span style={{ width:7, height:7, borderRadius:"50%", background:leaderboardUpdating ? "#4cb782" : "#2f6f52" }} />Live</span>))}
 
           <div style={{ maxWidth:1180, margin:isPhone ? "20px auto 40px" : "32px auto 48px", padding:`0 ${pageGutter}px`, width:"100%", boxSizing:"border-box" }}>
             <div
