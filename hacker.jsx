@@ -1876,7 +1876,7 @@ function CodingPlatform() {
   });
   const [goalEditing, setGoalEditing]         = useState(false);
   const [aiHireStep, setAiHireStep]           = useState("setup");
-  const [aiHireForm, setAiHireForm]           = useState({ jdText: "", notes: "", questionCount: 5, image: "", imageName: "" });
+  const [aiHireForm, setAiHireForm]           = useState({ jdText: "", notes: "", image: "", imageName: "" });
   const [aiHirePlan, setAiHirePlan]           = useState(null);
   const [aiHireTurns, setAiHireTurns]         = useState([]);
   const [aiHireAdvanced, setAiHireAdvanced]   = useState({});
@@ -1894,6 +1894,10 @@ function CodingPlatform() {
   const [aiHireBusy, setAiHireBusy]           = useState("");
   const [aiHireError, setAiHireError]         = useState("");
   const [aiHireStatus, setAiHireStatus]       = useState(null);
+  const [aiHireInterviewId, setAiHireInterviewId] = useState("");
+  const [aiHireHistory, setAiHireHistory]     = useState(null);
+  const [aiHireFromHistory, setAiHireFromHistory] = useState(false);
+  const [aiHireHistoryLoading, setAiHireHistoryLoading] = useState("");
   const [aiHireCamOn, setAiHireCamOn]         = useState(false);
   const [aiHireCamLost, setAiHireCamLost]     = useState(false);
   const [aiHireWarnings, setAiHireWarnings]   = useState(0);
@@ -3804,6 +3808,43 @@ function CodingPlatform() {
     setView("aihire");
   };
 
+  const loadAiHireHistory = async () => {
+    try {
+      const data = await performApiRequest("/api/ai-hire/history");
+      setAiHireHistory(Array.isArray(data.interviews) ? data.interviews : []);
+      setAiHireStatus((prev) => (prev ? { ...prev, interviewsLeft: data.interviewsLeft, monthlyLimit: data.monthlyLimit, resetsOn: data.resetsOn } : prev));
+    } catch (_) {
+      setAiHireHistory((prev) => prev || []);
+    }
+  };
+
+  // Opens a finished interview from the history in the report view.
+  const openAiHireHistoryItem = async (id) => {
+    setAiHireHistoryLoading(id);
+    setAiHireError("");
+    try {
+      const { interview } = await performApiRequest(`/api/ai-hire/history/${id}`);
+      const turns = (interview.questions || []).map((_, index) => {
+        const saved = (interview.answers || []).find((row) => row.index === index);
+        return saved
+          ? { answer: saved.answer, status: saved.evaluation ? "done" : "failed", evaluation: saved.evaluation, error: "", timedOut: saved.timedOut }
+          : null;
+      });
+      while (turns.length && !turns[turns.length - 1]) turns.pop();
+      setAiHirePlan({ role: interview.role, company: interview.company, seniority: interview.seniority, summary: interview.summary, keySkills: interview.keySkills, questions: interview.questions || [] });
+      setAiHireTurns(turns.map((turn) => turn || { answer: "", status: "failed", evaluation: null, error: "Not answered" }));
+      setAiHireReport(interview.report ? { ...interview.report, integrity: interview.integrity } : null);
+      setAiHireInterviewId(interview.id);
+      setAiHireFromHistory(true);
+      setAiHireStep("report");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (error) {
+      setAiHireError(error.message || "Could not open this interview.");
+    } finally {
+      setAiHireHistoryLoading("");
+    }
+  };
+
   const loadAiHireStatus = async () => {
     try {
       setAiHireStatus(await performApiRequest("/api/ai-hire/status"));
@@ -3813,8 +3854,15 @@ function CodingPlatform() {
   };
 
   useEffect(() => {
-    if (view === "aihire" && authToken) loadAiHireStatus();
+    if (view === "aihire" && authToken) {
+      loadAiHireStatus();
+      loadAiHireHistory();
+    }
   }, [view, authToken]);
+
+  useEffect(() => {
+    if (view === "aihire" && authToken && aiHireStep === "report" && !aiHireFromHistory) loadAiHireHistory();
+  }, [aiHireStep]);
 
   // Shrink a photo to at most 1600px and re-encode as JPEG so uploads stay small.
   const readAiHireImage = (file) => new Promise((resolve, reject) => {
@@ -4109,7 +4157,9 @@ function CodingPlatform() {
     if (!(await startAiHireCamera())) return;
     setAiHireBusy("plan");
     try {
-      const data = await aiHireCall("/api/ai-hire/start", { jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim(), questionCount: aiHireForm.questionCount });
+      const data = await aiHireCall("/api/ai-hire/start", { jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim() });
+      setAiHireInterviewId(data.interviewId || "");
+      setAiHireFromHistory(false);
       aiHireSpokenRef.current = "";
       aiHireRunIdRef.current += 1;
       aiHireEvalPromisesRef.current = {};
@@ -4147,7 +4197,7 @@ function CodingPlatform() {
   const runAiHireEvaluation = (index, question, answer, timedOut = false) => {
     const runId = aiHireRunIdRef.current;
     const context = aiHireContext();
-    const promise = aiHireCall("/api/ai-hire/evaluate", { context, question, answer, timedOut })
+    const promise = aiHireCall("/api/ai-hire/evaluate", { context, question, answer, timedOut, interviewId: aiHireInterviewId, index })
       .then((data) => {
         if (runId !== aiHireRunIdRef.current) return null;
         aiHireEvalResultsRef.current[index] = { answer, evaluation: data.evaluation };
@@ -4268,7 +4318,7 @@ function CodingPlatform() {
         }));
       if (!items.length) throw new Error("No answers to review yet.");
       const integrity = { tabSwitches: aiHireWarnings, pasteBlocked: aiHirePasteBlocked, endedEarly: Boolean(endedEarly), totalQuestions: aiHirePlan.questions.length };
-      const data = await aiHireCall("/api/ai-hire/report", { context: aiHireContext(), items, integrity });
+      const data = await aiHireCall("/api/ai-hire/report", { context: aiHireContext(), items, integrity, interviewId: aiHireInterviewId });
       setAiHireReport({ ...data.report, integrity });
       setAiHireStep("report");
       stopAiHireCamera();
@@ -4292,6 +4342,8 @@ function CodingPlatform() {
     setAiHireFeedbackIndex(null);
     aiHireTimeUpRef.current = -1;
     setAiHireTimer({ index: -1, startsAt: 0, endsAt: 0, limit: 0 });
+    setAiHireInterviewId("");
+    setAiHireFromHistory(false);
     setAiHireStep("setup");
     setAiHirePlan(null);
     setAiHireTurns([]);
@@ -12416,16 +12468,9 @@ function CodingPlatform() {
             <label style={label} htmlFor="aihire-notes">About you (optional)</label>
             <textarea id="aihire-notes" value={aiHireForm.notes} onChange={(e) => setAiHireForm((prev) => ({ ...prev, notes: e.target.value }))} placeholder="Your skills, projects, internships, or paste your resume. The AI uses this to ask about your own work." style={{ ...input, minHeight:110 }} />
           </div>
-          <div>
-            <span style={label}>Number of questions</span>
-            <div style={{ display:"inline-flex", gap:4, padding:4, background:"#1c1c1c", border:`1px solid ${C.border}`, borderRadius:9 }}>
-              {[5, 10].map((count) => (
-                <button key={count} onClick={() => setAiHireForm((prev) => ({ ...prev, questionCount:count }))}
-                  style={{ background:aiHireForm.questionCount === count ? "#2e2e2e" : "transparent", border:"none", borderRadius:6, padding:"8px 18px", color:aiHireForm.questionCount === count ? C.text : C.muted, fontFamily:"inherit", fontSize:14, fontWeight:aiHireForm.questionCount === count ? 600 : 400, cursor:"pointer" }}>
-                  {count} questions
-                </button>
-              ))}
-            </div>
+          <div style={{ display:"flex", gap:12, alignItems:"flex-start", padding:"12px 14px", borderRadius:8, background:"rgba(232,135,58,0.07)", border:"1px solid rgba(232,135,58,0.25)", fontSize:13.5, color:"#d9d9d9", lineHeight:1.55 }}>
+            <AiVoiceOrb size={34} />
+            <div>Meera reads the job and decides how many questions to ask, between 5 and 10, based on the role and its level. A fresher role gets fewer questions; a senior or full stack role gets more.</div>
           </div>
           <div style={{ display:"grid", gap:6, padding:"12px 14px", borderRadius:8, background:"#141414", border:`1px solid ${C.border}`, fontSize:13.5, color:"#c9c9c9", lineHeight:1.55 }}>
             <div style={{ color:C.text, fontWeight:600 }}>Interview rules</div>
@@ -12437,11 +12482,15 @@ function CodingPlatform() {
           </div>
           {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
           <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
-            <button onClick={startAiHireInterview} disabled={Boolean(aiHireBusy) || aiHireStatus?.configured === false} style={primary(Boolean(aiHireBusy) || aiHireStatus?.configured === false)}>
+            <button onClick={startAiHireInterview} disabled={Boolean(aiHireBusy) || aiHireStatus?.configured === false || aiHireStatus?.interviewsLeft === 0} style={primary(Boolean(aiHireBusy) || aiHireStatus?.configured === false || aiHireStatus?.interviewsLeft === 0)}>
               {aiHireBusy === "plan" && spinner}
               {aiHireBusy === "plan" ? "Preparing..." : "Start interview"}
             </button>
-            {aiHireStatus && aiHireStatus.configured !== false && <span style={{ fontSize:13, color:C.muted }}>{aiHireStatus.interviewsLeft} of {aiHireStatus.dailyLimit} interviews left today</span>}
+            {aiHireStatus && aiHireStatus.configured !== false && (
+              aiHireStatus.interviewsLeft > 0
+                ? <span style={{ fontSize:13, color:C.muted }}><strong style={{ color:C.text }}>{aiHireStatus.interviewsLeft}</strong> of {aiHireStatus.monthlyLimit} interviews left this month</span>
+                : <span style={{ fontSize:13, color:C.amber }}>You have used all {aiHireStatus.monthlyLimit} interviews this month. New ones from {aiHireStatus.resetsOn}.</span>
+            )}
             {aiHireStatus?.configured === false && <span style={{ fontSize:13, color:C.amber }}>AI Hire is not switched on yet. Ask your admin.</span>}
           </div>
         </div>
@@ -12458,6 +12507,44 @@ function CodingPlatform() {
               <div><div style={{ color:C.text, fontWeight:600 }}>{title}</div><div style={{ color:C.muted, fontSize:13.5 }}>{text}</div></div>
             </div>
           ))}
+
+          <div style={{ marginTop:14, display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:10 }}>
+            <span style={{ fontSize:13, fontWeight:600, letterSpacing:"0.12em", textTransform:"uppercase", color:C.muted }}>Your past interviews</span>
+            {aiHireStatus?.monthlyLimit ? <span style={{ fontSize:12, color:C.dim, fontFamily:mono }}>{aiHireStatus.monthlyLimit - (aiHireStatus.interviewsLeft ?? 0)}/{aiHireStatus.monthlyLimit} this month</span> : null}
+          </div>
+          {aiHireHistory === null ? (
+            <div style={{ fontSize:13, color:C.muted }}>Loading...</div>
+          ) : aiHireHistory.length === 0 ? (
+            <div style={{ fontSize:13, color:C.muted, padding:"12px 14px", borderRadius:10, border:`1px dashed ${C.border}` }}>No interviews yet. Your finished interviews and reports will be saved here.</div>
+          ) : (
+            <div style={{ display:"grid", gap:8 }}>
+              {aiHireHistory.map((item) => {
+                const done = item.status === "completed";
+                const date = item.createdAt ? new Date(item.createdAt).toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" }) : "";
+                return (
+                  <button key={item.id} type="button" disabled={!done || Boolean(aiHireHistoryLoading)} onClick={() => openAiHireHistoryItem(item.id)}
+                    title={done ? "Open this report" : "This interview was not finished"}
+                    style={{ display:"flex", alignItems:"center", gap:12, width:"100%", textAlign:"left", padding:"11px 12px", borderRadius:10, border:`1px solid ${C.border}`, background:"#161616", cursor:done ? "pointer" : "default", fontFamily:"inherit", opacity:aiHireHistoryLoading && aiHireHistoryLoading !== item.id ? 0.6 : 1 }}
+                    onMouseEnter={(e) => { if (done) e.currentTarget.style.borderColor = "#444"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; }}>
+                    <span style={{ width:42, height:42, flexShrink:0, borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:mono, fontSize:15, fontWeight:500, background:"#1c1c1c", border:`1px solid ${done ? scoreColor(item.overallScore || 0, 100) : "#333"}`, color:done ? scoreColor(item.overallScore || 0, 100) : C.dim }}>
+                      {aiHireHistoryLoading === item.id ? <span style={{ width:14, height:14, border:"2px solid #3a3a3a", borderTopColor:C.accent, borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} /> : done ? item.overallScore : "–"}
+                    </span>
+                    <span style={{ flex:1, minWidth:0 }}>
+                      <span style={{ display:"block", fontSize:13.5, fontWeight:600, color:C.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.role || "Interview"}</span>
+                      <span style={{ display:"block", fontSize:12, color:C.muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                        {[item.company, date].filter(Boolean).join(" · ")}
+                      </span>
+                      <span style={{ display:"block", fontSize:12, color:done ? "#c9c9c9" : C.amber, marginTop:2 }}>
+                        {done ? `${item.recommendation || "Report ready"} · ${item.questionCount} questions` : `Not finished · ${item.questionCount} questions`}
+                      </span>
+                    </span>
+                    {done && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </aside>
       </div>
     );
@@ -12841,7 +12928,8 @@ function CodingPlatform() {
           })}
         </div>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-          <button onClick={() => resetAiHire(true)} style={primary(false)}>Start a new interview</button>
+          {aiHireFromHistory && <button onClick={() => resetAiHire(true)} style={secondary}>Back to AI Hire</button>}
+          <button onClick={() => resetAiHire(true)} style={primary(false)}>{aiHireFromHistory ? "Start a new interview" : "Start a new interview"}</button>
           <button onClick={() => window.print()} style={secondary}>Print / save as PDF</button>
         </div>
       </div>
@@ -12887,7 +12975,7 @@ function CodingPlatform() {
               <div style={{ color:C.muted, fontSize:15, marginTop:6 }}>
                 {aiHireStep === "setup" && "Practise a real interview for any job. The AI reads the job description and interviews you."}
                 {aiHireStep === "interview" && `Answer ${total} questions. You get feedback after each one.`}
-                {aiHireStep === "report" && "Your interview report."}
+                {aiHireStep === "report" && (aiHireFromHistory ? "A saved interview from your history." : "Your interview report. It is saved in your history.")}
               </div>
             </div>
             )}
