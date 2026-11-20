@@ -893,3 +893,108 @@ exports.studentAssignments = async (req, res) => {
     return sendError(res, error, 'Could not load your assigned interviews.');
   }
 };
+
+// ── Emailing students about an assigned interview ──
+const { sendBulk, isMailConfigured } = require('../lib/mailer');
+const { renderAnnouncementEmail } = require('../lib/emailTemplate');
+const ASSIGNMENT_EMAIL_BATCH = Number(process.env.ANNOUNCEMENT_MAX_RECIPIENTS || 100);
+
+function siteLink(req) {
+  const configured = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  return configured || `${req.protocol}://${req.get('host')}`;
+}
+
+function istDateTime(value) {
+  return value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+}
+
+// Students who can take the assignment, have not taken it, and have not been emailed about it yet.
+async function assignmentEmailTargets(assignment) {
+  const students = (await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, name: true, email: true, department: true } }))
+    .filter((student) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(student.email || '').trim()))
+    .filter((student) => !assignment.department || sameDepartment(student.department, assignment.department));
+  const attempted = new Set((await prisma.aiHireInterview.findMany({ where: { assignmentId: String(assignment.id) }, select: { userId: true } })).map((row) => String(row.userId)));
+  const emailed = new Set();
+  (await prisma.emailLog.findMany({ where: { assignmentId: String(assignment.id) } })).forEach((log) => (log.userIds || []).forEach((id) => emailed.add(String(id))));
+  const pending = students.filter((student) => !attempted.has(String(student.id)) && !emailed.has(String(student.id)));
+  return { eligible: students.length, attempted: attempted.size, emailed: emailed.size, pending };
+}
+
+function assignmentEmailText(assignment) {
+  const lines = [
+    `You have been given an AI mock interview on DevOrbit: ${assignment.title}.`,
+    '',
+    'Meera, our AI interviewer, will ask you questions based on a real job description, one at a time. You can answer by speaking or typing, and you get feedback after every answer and a full report at the end.',
+    '',
+    assignment.startsAt ? `Opens: ${istDateTime(assignment.startsAt)}` : 'Opens: now',
+    assignment.endsAt ? `Closes: ${istDateTime(assignment.endsAt)}` : '',
+    'Attempts: 1',
+    '',
+    'How to take it:',
+    '- Log in to DevOrbit and open AI Hire',
+    '- Find it under Assigned interviews and press Start interview',
+    '- Keep your camera and microphone on, and stay on the page',
+    '',
+    'All the best!',
+  ];
+  return lines.filter((line, index) => line !== '' || lines[index - 1] !== '').join('\n');
+}
+
+// GET /api/admin/ai-hire/assignments/:id/email: who is left to email.
+exports.adminAssignmentEmailStatus = async (req, res) => {
+  try {
+    const assignment = await prisma.aiHireAssignment.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
+    if (!assignment) return res.status(404).json({ error: 'Interview not found.' });
+    const targets = await assignmentEmailTargets(assignment);
+    return res.json({
+      configured: isMailConfigured(),
+      eligible: targets.eligible,
+      attempted: targets.attempted,
+      emailed: targets.emailed,
+      pending: targets.pending.length,
+      batch: ASSIGNMENT_EMAIL_BATCH,
+      subject: `AI mock interview: ${assignment.title}`,
+      message: assignmentEmailText(assignment),
+    });
+  } catch (error) {
+    return sendError(res, error, 'Could not load the email status.');
+  }
+};
+
+// POST /api/admin/ai-hire/assignments/:id/email  { subject?, message? }
+// Sends to the next batch (up to 100) of students who have not been emailed and have not taken it.
+exports.adminAssignmentEmail = async (req, res) => {
+  try {
+    if (!isMailConfigured()) return res.status(503).json({ error: 'Email is not set up on the server (RESEND_API_KEY / MAIL_FROM).' });
+    const assignment = await prisma.aiHireAssignment.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
+    if (!assignment) return res.status(404).json({ error: 'Interview not found.' });
+    const subject = clip(req.body?.subject, 150) || `AI mock interview: ${assignment.title}`;
+    const message = String(req.body?.message || '').replace(/\r\n/g, '\n').trim().slice(0, 5000) || assignmentEmailText(assignment);
+    const targets = await assignmentEmailTargets(assignment);
+    const batch = targets.pending.slice(0, ASSIGNMENT_EMAIL_BATCH);
+    if (!batch.length) return res.status(400).json({ error: 'Every student for this interview has already been emailed or has taken it.' });
+
+    const link = siteLink(req);
+    const messages = batch.map((student) => ({
+      to: String(student.email).trim().toLowerCase(),
+      ...renderAnnouncementEmail({
+        subject,
+        message,
+        name: String(student.name || '').trim().split(/\s+/)[0] || 'there',
+        link,
+        linkLabel: 'Open AI Hire',
+        logoUrl: `${link}/scholarlogic-logo.png`,
+      }),
+    }));
+    const result = await sendBulk(messages);
+    if (result.sent) {
+      await prisma.emailLog.create({
+        data: { subject, assignmentId: String(assignment.id), userIds: batch.map((student) => String(student.id)), sent: result.sent, sentAt: new Date(), sentBy: req.user.email || '' },
+      });
+    }
+    if (!result.sent) return res.status(502).json({ error: result.errors[0] || 'Could not send the emails.' });
+    return res.json({ sent: result.sent, failed: result.failed, remaining: Math.max(0, targets.pending.length - batch.length) });
+  } catch (error) {
+    return sendError(res, error, 'Could not send the emails.');
+  }
+};

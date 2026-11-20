@@ -1979,7 +1979,8 @@ function CodingPlatform() {
   const [adminAiHireFilters, setAdminAiHireFilters] = useState({ month: "", status: "", q: "", assignmentId: "", assignmentTitle: "" });
   const [adminAiHireDetail, setAdminAiHireDetail] = useState(null);
   const [adminAiHireAssignments, setAdminAiHireAssignments] = useState(null);
-  const [adminAiHireAssignForm, setAdminAiHireAssignForm] = useState({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", saving: false, message: null });
+  const [adminAiHireAssignForm, setAdminAiHireAssignForm] = useState({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", emailNow: true, saving: false, message: null });
+  const [adminAiHireEmail, setAdminAiHireEmail] = useState(null);
   const [adminFeedbackLoading, setAdminFeedbackLoading] = useState(false);
   const [adminFeedbackError, setAdminFeedbackError] = useState("");
   const [adminFeedbackNewCount, setAdminFeedbackNewCount] = useState(0);
@@ -6658,7 +6659,7 @@ function CodingPlatform() {
     if (form.saving) return;
     setAdminAiHireAssignForm((prev) => ({ ...prev, saving: true, message: null }));
     try {
-      await performApiRequest("/api/admin/ai-hire/assignments", {
+      const created = await performApiRequest("/api/admin/ai-hire/assignments", {
         method: "POST",
         body: JSON.stringify({
           title: form.title.trim(),
@@ -6668,10 +6669,45 @@ function CodingPlatform() {
           endsAt: form.endsAt ? new Date(form.endsAt).toISOString() : null,
         }),
       });
-      setAdminAiHireAssignForm({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", saving: false, message: { type: "success", text: "Interview assigned. Students see it on their AI Hire page." } });
+      let text = "Interview assigned. Students see it on their AI Hire page.";
+      if (form.emailNow && created?.assignment?.id) {
+        try {
+          const mail = await performApiRequest(`/api/admin/ai-hire/assignments/${created.assignment.id}/email`, { method: "POST", body: JSON.stringify({}) });
+          text = `Interview assigned and emailed to ${mail.sent} student${mail.sent === 1 ? "" : "s"}.${mail.remaining ? ` ${mail.remaining} more still to email: use "Email students" on it again (up to 100 a day).` : ""}`;
+        } catch (mailError) {
+          text = `Interview assigned, but the email was not sent: ${mailError.message || "email failed"}. You can use "Email students" on it later.`;
+        }
+      }
+      setAdminAiHireAssignForm({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", emailNow: true, saving: false, message: { type: "success", text } });
       loadAdminAiHireAssignments();
     } catch (error) {
       setAdminAiHireAssignForm((prev) => ({ ...prev, saving: false, message: { type: "error", text: error.message || "Could not assign the interview." } }));
+    }
+  };
+
+  const openAdminAiHireEmail = async (assignment) => {
+    setAdminAiHireEmail({ assignment, status: null, subject: "", message: "", sending: false, result: null, error: "" });
+    try {
+      const status = await performApiRequest(`/api/admin/ai-hire/assignments/${assignment.id}/email`);
+      setAdminAiHireEmail((prev) => prev && { ...prev, status, subject: status.subject, message: status.message });
+    } catch (error) {
+      setAdminAiHireEmail((prev) => prev && { ...prev, error: error.message || "Could not load the email status." });
+    }
+  };
+
+  const sendAdminAiHireEmail = async () => {
+    const current = adminAiHireEmail;
+    if (!current || current.sending) return;
+    setAdminAiHireEmail({ ...current, sending: true, error: "", result: null });
+    try {
+      const result = await performApiRequest(`/api/admin/ai-hire/assignments/${current.assignment.id}/email`, {
+        method: "POST",
+        body: JSON.stringify({ subject: current.subject, message: current.message }),
+      });
+      const status = await performApiRequest(`/api/admin/ai-hire/assignments/${current.assignment.id}/email`).catch(() => current.status);
+      setAdminAiHireEmail((prev) => prev && { ...prev, sending: false, result, status });
+    } catch (error) {
+      setAdminAiHireEmail((prev) => prev && { ...prev, sending: false, error: error.message || "Could not send the emails." });
     }
   };
 
@@ -6753,8 +6789,13 @@ function CodingPlatform() {
                 <input type="datetime-local" value={assignForm.endsAt} onChange={(e) => setAssign({ endsAt: e.target.value })} style={S.adminInput} />
               </label>
             </div>
+            <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:14, color:ADMIN_THEME.text, cursor:"pointer" }}>
+              <input type="checkbox" checked={assignForm.emailNow} onChange={(e) => setAssign({ emailNow: e.target.checked })} style={{ width:16, height:16 }} />
+              Email the students now
+              <span style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary }}>(up to 100 at a time; send the rest later with "Email students")</span>
+            </label>
             <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-              <button onClick={createAdminAiHireAssignment} disabled={assignForm.saving} style={{ ...S.adminButton("run"), opacity:assignForm.saving ? 0.6 : 1 }}>{assignForm.saving ? "Assigning..." : "Assign interview"}</button>
+              <button onClick={createAdminAiHireAssignment} disabled={assignForm.saving} style={{ ...S.adminButton("run"), opacity:assignForm.saving ? 0.6 : 1 }}>{assignForm.saving ? (assignForm.emailNow ? "Assigning and emailing..." : "Assigning...") : assignForm.emailNow ? "Assign and email" : "Assign interview"}</button>
               <button onClick={() => setAssign({ open: false })} style={S.adminButton("default")}>Cancel</button>
             </div>
           </div>
@@ -6780,6 +6821,7 @@ function CodingPlatform() {
                     {item.averageScore != null && <> · avg <strong style={{ color:scoreTone(item.averageScore) }}>{item.averageScore}</strong></>}
                   </div>
                   <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={() => openAdminAiHireEmail(item)} style={{ ...S.adminButton("default"), padding:"7px 12px", fontSize:13 }}>Email students</button>
                     <button onClick={() => setFilter({ assignmentId: item.id, assignmentTitle: item.title, status: "" })} style={{ ...S.adminButton("default"), padding:"7px 12px", fontSize:13 }}>View results</button>
                     <button onClick={() => toggleAdminAiHireAssignment(item)} style={{ ...S.adminButton("default"), padding:"7px 12px", fontSize:13, color:item.state === "closed" ? ADMIN_THEME.text : ADMIN_THEME.error }}>{item.state === "closed" ? "Reopen" : "Close"}</button>
                   </div>
@@ -6790,8 +6832,53 @@ function CodingPlatform() {
         )}
       </div>
     );
+    const mail = adminAiHireEmail;
+    const mailPopup = mail && (
+      <div role="dialog" aria-modal="true" aria-label="Email students" onClick={() => !mail.sending && setAdminAiHireEmail(null)}
+        style={{ position:"fixed", inset:0, zIndex:1600, background:"rgba(28,25,23,0.45)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width:"min(620px, 100%)", maxHeight:"92vh", overflowY:"auto", background:"#FFFFFF", borderRadius:12, border:`1px solid ${ADMIN_THEME.border}`, boxShadow:"0 20px 50px rgba(0,0,0,0.18)", padding:isPhone ? 18 : 24, display:"grid", gap:14 }}>
+          <div>
+            <div style={S.adminSectionTitle}>Email students</div>
+            <div style={{ fontSize:18, fontWeight:600, color:ADMIN_THEME.text }}>{mail.assignment.title}</div>
+          </div>
+          {!mail.status && !mail.error && <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14 }}>Loading...</div>}
+          {mail.status && (
+            <>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(4, minmax(0,1fr))", gap:8 }}>
+                {[["Students", mail.status.eligible], ["Already emailed", mail.status.emailed], ["Already took it", mail.status.attempted], ["Still to email", mail.status.pending]].map(([label, value]) => (
+                  <div key={label} style={{ padding:"10px 12px", borderRadius:8, background:"#FAFAF9", border:`1px solid ${ADMIN_THEME.divider}` }}>
+                    <div style={{ fontSize:11.5, color:ADMIN_THEME.textSecondary }}>{label}</div>
+                    <div style={{ fontSize:20, fontWeight:600, color:ADMIN_THEME.text }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+              {!mail.status.configured && <div style={S.adminAlert("error")}>Email is not set up on the server (RESEND_API_KEY / MAIL_FROM).</div>}
+              <label>
+                <span style={S.adminFieldLabel}>Subject</span>
+                <input value={mail.subject} maxLength={150} onChange={(e) => setAdminAiHireEmail({ ...mail, subject: e.target.value })} style={S.adminInput} />
+              </label>
+              <label>
+                <span style={S.adminFieldLabel}>Message (each email starts with "Hi &lt;name&gt;," and has an Open AI Hire button)</span>
+                <textarea value={mail.message} onChange={(e) => setAdminAiHireEmail({ ...mail, message: e.target.value })} style={{ ...S.adminTextarea, minHeight:200 }} />
+              </label>
+            </>
+          )}
+          {mail.result && <div style={S.adminAlert("success")}>Sent to {mail.result.sent} student{mail.result.sent === 1 ? "" : "s"}.{mail.result.failed ? ` ${mail.result.failed} failed.` : ""}{mail.result.remaining ? ` ${mail.result.remaining} still to email; send the next batch tomorrow.` : " Everyone has been emailed."}</div>}
+          {mail.error && <div style={S.adminAlert("error")}>{mail.error}</div>}
+          <div style={{ display:"flex", gap:10, justifyContent:"flex-end", flexWrap:"wrap" }}>
+            <button onClick={() => setAdminAiHireEmail(null)} disabled={mail.sending} style={S.adminButton("default")}>Close</button>
+            {mail.status && mail.status.pending > 0 && (
+              <button onClick={sendAdminAiHireEmail} disabled={mail.sending || !mail.status.configured} style={{ ...S.adminButton("run"), opacity:mail.sending || !mail.status.configured ? 0.6 : 1 }}>
+                {mail.sending ? "Sending..." : `Send to next ${Math.min(mail.status.batch, mail.status.pending)} student${Math.min(mail.status.batch, mail.status.pending) === 1 ? "" : "s"}`}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
     return (
       <div style={{ display:"grid", gap:20 }}>
+        {mailPopup}
         {assignCard}
         <div style={{ ...S.adminCard, display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, flexWrap:"wrap" }}>
           <div>
