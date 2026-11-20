@@ -1979,7 +1979,7 @@ function CodingPlatform() {
   const [adminAiHireFilters, setAdminAiHireFilters] = useState({ month: "", status: "", q: "", assignmentId: "", assignmentTitle: "" });
   const [adminAiHireDetail, setAdminAiHireDetail] = useState(null);
   const [adminAiHireAssignments, setAdminAiHireAssignments] = useState(null);
-  const [adminAiHireAssignForm, setAdminAiHireAssignForm] = useState({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", emailNow: true, saving: false, message: null });
+  const [adminAiHireAssignForm, setAdminAiHireAssignForm] = useState({ open: false, title: "", jdText: "", department: "", audience: "all", userIds: [], pickSearch: "", pickDepartment: "", startsAt: "", endsAt: "", emailNow: true, saving: false, message: null });
   const [adminAiHireEmail, setAdminAiHireEmail] = useState(null);
   const [adminFeedbackLoading, setAdminFeedbackLoading] = useState(false);
   const [adminFeedbackError, setAdminFeedbackError] = useState("");
@@ -6657,6 +6657,10 @@ function CodingPlatform() {
   const createAdminAiHireAssignment = async () => {
     const form = adminAiHireAssignForm;
     if (form.saving) return;
+    if (form.audience === "selected" && !form.userIds.length) {
+      setAdminAiHireAssignForm((prev) => ({ ...prev, message: { type: "error", text: "Select at least one student." } }));
+      return;
+    }
     setAdminAiHireAssignForm((prev) => ({ ...prev, saving: true, message: null }));
     try {
       const created = await performApiRequest("/api/admin/ai-hire/assignments", {
@@ -6664,7 +6668,9 @@ function CodingPlatform() {
         body: JSON.stringify({
           title: form.title.trim(),
           jdText: form.jdText.trim(),
-          department: form.department,
+          audience: form.audience,
+          department: form.audience === "department" ? form.department : "",
+          userIds: form.audience === "selected" ? form.userIds : [],
           startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : null,
           endsAt: form.endsAt ? new Date(form.endsAt).toISOString() : null,
         }),
@@ -6678,7 +6684,7 @@ function CodingPlatform() {
           text = `Interview assigned, but the email was not sent: ${mailError.message || "email failed"}. You can use "Email students" on it later.`;
         }
       }
-      setAdminAiHireAssignForm({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", emailNow: true, saving: false, message: { type: "success", text } });
+      setAdminAiHireAssignForm({ open: false, title: "", jdText: "", department: "", audience: "all", userIds: [], pickSearch: "", pickDepartment: "", startsAt: "", endsAt: "", emailNow: true, saving: false, message: { type: "success", text } });
       loadAdminAiHireAssignments();
     } catch (error) {
       setAdminAiHireAssignForm((prev) => ({ ...prev, saving: false, message: { type: "error", text: error.message || "Could not assign the interview." } }));
@@ -6775,9 +6781,18 @@ function CodingPlatform() {
             <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "repeat(3, minmax(0,1fr))", gap:12 }}>
               <label>
                 <span style={S.adminFieldLabel}>Students</span>
-                <select value={assignForm.department} onChange={(e) => setAssign({ department: e.target.value })} style={S.adminInput}>
+                <select
+                  value={assignForm.audience === "selected" ? "__selected" : assignForm.audience === "department" ? `dept:${assignForm.department}` : ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === "__selected") setAssign({ audience: "selected", department: "" });
+                    else if (value.startsWith("dept:")) setAssign({ audience: "department", department: value.slice(5) });
+                    else setAssign({ audience: "all", department: "" });
+                  }}
+                  style={S.adminInput}>
                   <option value="">All students</option>
-                  {departments.map((department) => <option key={department} value={department}>{department} only</option>)}
+                  {departments.map((department) => <option key={department} value={`dept:${department}`}>{department} only</option>)}
+                  <option value="__selected">Selected students</option>
                 </select>
               </label>
               <label>
@@ -6789,9 +6804,56 @@ function CodingPlatform() {
                 <input type="datetime-local" value={assignForm.endsAt} onChange={(e) => setAssign({ endsAt: e.target.value })} style={S.adminInput} />
               </label>
             </div>
+            {assignForm.audience === "selected" && (() => {
+              const chosen = new Set(assignForm.userIds.map(String));
+              const search = assignForm.pickSearch.trim().toLowerCase();
+              const pool = registeredStudents.filter((student) => {
+                if (assignForm.pickDepartment && student.department !== assignForm.pickDepartment) return false;
+                if (!search) return true;
+                return [student.name, student.email, student.usn].some((value) => String(value || "").toLowerCase().includes(search));
+              });
+              const pickDepartments = [...new Set(registeredStudents.map((student) => student.department).filter(Boolean))].sort();
+              const toggle = (id) => setAssign({ userIds: chosen.has(String(id)) ? assignForm.userIds.filter((item) => String(item) !== String(id)) : [...assignForm.userIds, String(id)] });
+              const shown = pool.slice(0, 300);
+              return (
+                <div style={{ display:"grid", gap:8 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13.5, fontWeight:600, color:ADMIN_THEME.text }}>{chosen.size} student{chosen.size === 1 ? "" : "s"} selected</span>
+                    <span style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary }}>Only these students will see and take this interview.</span>
+                    <span style={{ marginLeft:"auto", display:"flex", gap:8 }}>
+                      <button type="button" onClick={() => setAssign({ userIds: [...new Set([...assignForm.userIds, ...pool.map((student) => String(student.id))])] })} disabled={!pool.length} style={{ ...S.adminButton("default"), padding:"6px 10px", fontSize:12.5 }}>Select all shown ({pool.length})</button>
+                      <button type="button" onClick={() => setAssign({ userIds: [] })} disabled={!chosen.size} style={{ ...S.adminButton("default"), padding:"6px 10px", fontSize:12.5 }}>Clear</button>
+                    </span>
+                  </div>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                    <input value={assignForm.pickSearch} onChange={(e) => setAssign({ pickSearch: e.target.value })} placeholder="Search name, email or USN" aria-label="Search students" style={{ ...S.adminInput, flex:"1 1 220px", width:"auto" }} />
+                    <select value={assignForm.pickDepartment} onChange={(e) => setAssign({ pickDepartment: e.target.value })} aria-label="Department" style={{ ...S.adminInput, width:isPhone ? "100%" : 200 }}>
+                      <option value="">All departments</option>
+                      {pickDepartments.map((department) => <option key={department} value={department}>{department}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ maxHeight:280, overflowY:"auto", background:"#FFFFFF", border:`1px solid ${ADMIN_THEME.border}`, borderRadius:6 }}>
+                    {shown.length ? shown.map((student) => {
+                      const checked = chosen.has(String(student.id));
+                      return (
+                        <label key={student.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderTop:`1px solid ${ADMIN_THEME.divider}`, cursor:"pointer", background:checked ? ADMIN_THEME.primaryLight : "transparent", fontSize:13.5 }}>
+                          <input type="checkbox" checked={checked} onChange={() => toggle(student.id)} />
+                          <span style={{ flex:"1 1 160px", minWidth:0, fontWeight:500, color:ADMIN_THEME.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{student.name}</span>
+                          {!isPhone && <span style={{ flex:"1 1 220px", minWidth:0, color:ADMIN_THEME.textSecondary, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{student.email}</span>}
+                          <span style={{ color:ADMIN_THEME.textSecondary, fontSize:12.5, minWidth:70, textAlign:"right" }}>{student.usn && student.usn !== "--" ? student.usn : student.department}</span>
+                        </label>
+                      );
+                    }) : (
+                      <div style={{ padding:14, color:ADMIN_THEME.textMuted, fontSize:13 }}>{registeredStudents.length ? "No students match." : "Loading students..."}</div>
+                    )}
+                    {pool.length > shown.length && <div style={{ padding:"8px 12px", fontSize:12.5, color:ADMIN_THEME.textSecondary, borderTop:`1px solid ${ADMIN_THEME.divider}` }}>Showing the first {shown.length} of {pool.length}. Search or pick a department to find others, or use "Select all shown".</div>}
+                  </div>
+                </div>
+              );
+            })()}
             <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:14, color:ADMIN_THEME.text, cursor:"pointer" }}>
               <input type="checkbox" checked={assignForm.emailNow} onChange={(e) => setAssign({ emailNow: e.target.checked })} style={{ width:16, height:16 }} />
-              Email the students now
+              {assignForm.audience === "selected" ? `Email the ${assignForm.userIds.length} selected student${assignForm.userIds.length === 1 ? "" : "s"} now` : "Email the students now"}
               <span style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary }}>(up to 100 at a time; send the rest later with "Email students")</span>
             </label>
             <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
@@ -6812,7 +6874,7 @@ function CodingPlatform() {
                       <span style={{ ...tone, fontSize:11.5, fontWeight:500, padding:"2px 7px", borderRadius:4 }}>{tone.label}</span>
                     </div>
                     <div style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary, marginTop:3 }}>
-                      {item.department ? `${item.department} students` : "All students"}
+                      {item.selectedCount ? `${item.selectedCount} selected student${item.selectedCount === 1 ? "" : "s"}` : item.department ? `${item.department} students` : "All students"}
                       {item.startsAt ? ` · opens ${formatDate(item.startsAt)}` : ""}{item.endsAt ? ` · closes ${formatDate(item.endsAt)}` : ""}
                     </div>
                   </div>

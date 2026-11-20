@@ -70,7 +70,9 @@ function assignmentState(assignment, now = Date.now()) {
   if (assignment.endsAt && now >= new Date(assignment.endsAt).getTime()) return 'closed';
   return 'open';
 }
+// An assignment goes to chosen students (userIds), one department, or everyone.
 function canTakeAssignment(assignment, user) {
+  if (Array.isArray(assignment.userIds) && assignment.userIds.length) return assignment.userIds.map(String).includes(String(user?.id));
   return !assignment.department || sameDepartment(assignment.department, user?.department);
 }
 async function interviewsLeft(userId) {
@@ -793,6 +795,7 @@ function presentAssignment(assignment) {
     title: assignment.title,
     jdText: assignment.jdText,
     department: assignment.department || '',
+    selectedCount: Array.isArray(assignment.userIds) ? assignment.userIds.length : 0,
     startsAt: assignment.startsAt || null,
     endsAt: assignment.endsAt || null,
     state: assignmentState(assignment),
@@ -803,7 +806,9 @@ function presentAssignment(assignment) {
 function readAssignmentInput(body = {}) {
   const title = clip(body.title, 120);
   const jdText = clip(body.jdText, MAX_TEXT.jd);
-  const department = clip(body.department, 80);
+  const userIds = Array.isArray(body.userIds) ? [...new Set(body.userIds.map((id) => String(id).trim()).filter((id) => /^[0-9a-f]{24}$/i.test(id)))].slice(0, 5000) : [];
+  const department = userIds.length ? '' : clip(body.department, 80);
+  if (body.audience === 'selected' && !userIds.length) return { error: 'Select at least one student.' };
   const startsAt = body.startsAt ? new Date(body.startsAt) : null;
   const endsAt = body.endsAt ? new Date(body.endsAt) : null;
   if (!title) return { error: 'Give the interview a title.' };
@@ -811,7 +816,7 @@ function readAssignmentInput(body = {}) {
   if (startsAt && Number.isNaN(startsAt.getTime())) return { error: 'The opening time is not valid.' };
   if (endsAt && Number.isNaN(endsAt.getTime())) return { error: 'The closing time is not valid.' };
   if (startsAt && endsAt && endsAt <= startsAt) return { error: 'The closing time must be after the opening time.' };
-  return { data: { title, jdText, department, startsAt, endsAt } };
+  return { data: { title, jdText, department, userIds, startsAt, endsAt } };
 }
 
 // POST /api/admin/ai-hire/assignments  { title, jdText, department, startsAt, endsAt }
@@ -835,7 +840,7 @@ exports.adminListAssignments = async (req, res) => {
     const attempts = ids.length
       ? await prisma.aiHireInterview.findMany({ where: { assignmentId: { in: ids } }, select: { assignmentId: true, status: true, overallScore: true } })
       : [];
-    const students = await prisma.user.findMany({ where: { role: 'USER' }, select: { department: true } });
+    const students = await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, department: true } });
     return res.json({
       assignments: assignments.map((assignment) => {
         const mine = attempts.filter((attempt) => String(attempt.assignmentId) === String(assignment.id));
@@ -843,7 +848,7 @@ exports.adminListAssignments = async (req, res) => {
         const scores = completed.map((attempt) => Number(attempt.overallScore)).filter(Number.isFinite);
         return {
           ...presentAssignment(assignment),
-          eligible: students.filter((student) => !assignment.department || sameDepartment(student.department, assignment.department)).length,
+          eligible: students.filter((student) => canTakeAssignment(assignment, student)).length,
           started: mine.length,
           completed: completed.length,
           averageScore: scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : null,
@@ -912,7 +917,7 @@ function istDateTime(value) {
 async function assignmentEmailTargets(assignment) {
   const students = (await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, name: true, email: true, department: true } }))
     .filter((student) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(student.email || '').trim()))
-    .filter((student) => !assignment.department || sameDepartment(student.department, assignment.department));
+    .filter((student) => canTakeAssignment(assignment, student));
   const attempted = new Set((await prisma.aiHireInterview.findMany({ where: { assignmentId: String(assignment.id) }, select: { userId: true } })).map((row) => String(row.userId)));
   const emailed = new Set();
   (await prisma.emailLog.findMany({ where: { assignmentId: String(assignment.id) } })).forEach((log) => (log.userIds || []).forEach((id) => emailed.add(String(id))));
