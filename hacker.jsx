@@ -1357,7 +1357,7 @@ function streakColor(count) {
   return STREAK_COLORS[4];
 }
 
-// "Asha", the AI interviewer: an illustrated avatar whose mouth moves while she is speaking.
+// "Meera", the AI interviewer: an illustrated avatar whose mouth moves while she is speaking.
 function AiInterviewerAvatar({ speaking = false, size = 120 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 120 120" role="img" aria-label={speaking ? "AI interviewer speaking" : "AI interviewer"} style={{ display: "block" }}>
@@ -1421,7 +1421,7 @@ const AI_HIRE_LOADING_COPY = {
   },
 };
 
-// Asha, the AI interviewer, shown as a voice orb: sound bars move while she speaks.
+// Meera, the AI interviewer, shown as a voice orb: sound bars move while she speaks.
 function AiVoiceOrb({ speaking = false, size = 132 }) {
   const bars = [0.45, 0.75, 1, 0.75, 0.45];
   return (
@@ -3903,7 +3903,7 @@ function CodingPlatform() {
   }, []);
 
   // The interviewer's voice: the browser's text-to-speech, preferring an English female voice.
-  // Asha speaks with an Indian English voice: an Indian female voice first (Microsoft Heera / Neerja on
+  // Meera speaks with an Indian English voice: an Indian female voice first (Microsoft Heera / Neerja on
   // Windows and Edge, Google's Indian English voice on Android), then any Indian English voice, then
   // other English voices.
   const pickAiHireVoice = (voices) => {
@@ -3961,7 +3961,7 @@ function CodingPlatform() {
     if (aiHireSpokenRef.current === key) return;
     aiHireSpokenRef.current = key;
     if (aiHireVoiceOn) {
-      const intro = answered === 0 ? `Hello, I am Asha, and I will be your interviewer for the ${aiHirePlan.role} role today. Let's begin. ` : "";
+      const intro = answered === 0 ? `Hello, I am Meera, and I will be your interviewer for the ${aiHirePlan.role} role today. Let's begin. ` : "";
       speakAiHire(`${intro}Question ${answered + 1}. ${question.question}`);
     }
   }, [view, aiHireStep, aiHirePlan, aiHireTurns.length, aiHireVoiceOn]);
@@ -4189,7 +4189,7 @@ function CodingPlatform() {
     runAiHireEvaluation(index, question, answer, timedOut);
   };
 
-  // When the last question is answered: Asha says goodbye and the camera and microphone turn off.
+  // When the last question is answered: Meera says goodbye and the camera and microphone turn off.
   useEffect(() => {
     if (view !== "aihire" || aiHireStep !== "interview" || !aiHirePlan) return;
     if (aiHireTurns.length < aiHirePlan.questions.length) return;
@@ -4215,7 +4215,7 @@ function CodingPlatform() {
     finishAiHireInterview(false);
   };
 
-  // Per-question timer. It starts once Asha has had time to read the question aloud; when it runs
+  // Per-question timer. It starts once Meera has had time to read the question aloud; when it runs
   // out, whatever is in the answer box is submitted automatically.
   useEffect(() => {
     if (view !== "aihire" || aiHireStep !== "interview" || !aiHirePlan) return;
@@ -12529,7 +12529,7 @@ function CodingPlatform() {
               </div>
               <div style={{ fontSize:13, color:C.muted, marginTop:14, minHeight:20 }}>
                 {pendingCount
-                  ? <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><span style={{ width:12, height:12, border:"2px solid #3a3a3a", borderTopColor:C.accent, borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} />Asha is still checking {pendingCount} answer{pendingCount === 1 ? "" : "s"}...</span>
+                  ? <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><span style={{ width:12, height:12, border:"2px solid #3a3a3a", borderTopColor:C.accent, borderRadius:"50%", display:"inline-block", animation:"dvSpin 0.8s linear infinite" }} />Meera is still checking {pendingCount} answer{pendingCount === 1 ? "" : "s"}...</span>
                   : "All your answers are checked."}
               </div>
 
@@ -12625,7 +12625,7 @@ function CodingPlatform() {
                 <div style={{ ...tile, border:`1px solid ${aiHireSpeaking ? "rgba(232,135,58,0.7)" : C.border}`, display:"flex", alignItems:"center", justifyContent:"center", transition:"border-color 0.25s" }}>
                   <AiVoiceOrb speaking={aiHireSpeaking} size={isPhone ? 76 : 132} />
                   <div style={{ ...tileLabel, left:isPhone ? 8 : 12, bottom:isPhone ? 8 : 12, padding:isPhone ? "3px 7px" : "5px 10px" }}>
-                    <strong style={{ color:C.text, fontWeight:600 }}>Asha</strong>
+                    <strong style={{ color:C.text, fontWeight:600 }}>Meera</strong>
                     {!isPhone && <span>AI interviewer</span>}
                     {aiHireSpeaking && <span style={{ color:C.accent }}>speaking</span>}
                   </div>
