@@ -640,3 +640,113 @@ exports.historyItem = async (req, res) => {
     return sendError(res, error, 'Could not load this interview.');
   }
 };
+
+// ── Admin: every student's AI mock interviews ──
+
+// GET /api/admin/ai-hire/interviews?month=YYYY-MM|all&status=completed|in_progress&q=text
+exports.adminList = async (req, res) => {
+  try {
+    const month = String(req.query.month || monthKey());
+    const status = String(req.query.status || '');
+    const query = String(req.query.q || '').trim().toLowerCase();
+    const where = {};
+    if (month !== 'all') where.month = month;
+    if (status === 'completed' || status === 'in_progress') where.status = status;
+    const records = await prisma.aiHireInterview.findMany({ where, orderBy: { createdAt: 'desc' } });
+
+    const userIds = [...new Set(records.map((record) => String(record.userId)))];
+    const users = userIds.length
+      ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true, usn: true, department: true } })
+      : [];
+    const usersById = new Map(users.map((user) => [String(user.id), user]));
+    // How many answers each interview has saved so far (also for unfinished ones).
+    const interviewIds = records.map((record) => String(record.id));
+    const savedAnswers = interviewIds.length
+      ? await prisma.aiHireAnswer.findMany({ where: { interviewId: { in: interviewIds } }, select: { interviewId: true } })
+      : [];
+    const answeredById = new Map();
+    savedAnswers.forEach((row) => answeredById.set(String(row.interviewId), (answeredById.get(String(row.interviewId)) || 0) + 1));
+
+    let rows = records.map((record) => {
+      const user = usersById.get(String(record.userId)) || {};
+      return {
+        id: String(record.id),
+        userId: String(record.userId),
+        name: user.name || String(user.email || '').split('@')[0] || 'Student',
+        email: user.email || '',
+        usn: user.usn || '',
+        department: user.department || '',
+        role: record.role || '',
+        company: record.company || '',
+        seniority: record.seniority || '',
+        status: record.status,
+        questionCount: Array.isArray(record.questions) ? record.questions.length : 0,
+        answeredCount: answeredById.get(String(record.id)) || record.answeredCount || 0,
+        overallScore: record.status === 'completed' ? record.overallScore : null,
+        recommendation: record.recommendation || '',
+        warnings: record.integrity?.tabSwitches || 0,
+        endedEarly: record.integrity?.endedEarly === true,
+        month: record.month,
+        createdAt: record.createdAt,
+      };
+    });
+    if (query) {
+      rows = rows.filter((row) => [row.name, row.email, row.usn, row.department, row.role, row.company].some((value) => String(value || '').toLowerCase().includes(query)));
+    }
+
+    const completed = rows.filter((row) => row.status === 'completed');
+    const scores = completed.map((row) => Number(row.overallScore)).filter(Number.isFinite);
+    // Months that have interviews, for the month filter.
+    const allMonths = await prisma.aiHireInterview.findMany({ select: { month: true } });
+    const months = [...new Set([monthKey(), ...allMonths.map((row) => row.month).filter(Boolean)])].sort().reverse();
+
+    return res.json({
+      interviews: rows,
+      stats: {
+        total: rows.length,
+        completed: completed.length,
+        notFinished: rows.length - completed.length,
+        averageScore: scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : null,
+        students: new Set(rows.map((row) => row.userId)).size,
+        flagged: rows.filter((row) => row.warnings > 0).length,
+      },
+      months,
+      currentMonth: monthKey(),
+      monthlyLimit: MONTHLY_INTERVIEWS,
+    });
+  } catch (error) {
+    return sendError(res, error, 'Could not load AI interviews.');
+  }
+};
+
+// GET /api/admin/ai-hire/interviews/:id: one interview with the student, answers, feedback and report.
+exports.adminItem = async (req, res) => {
+  try {
+    const record = await prisma.aiHireInterview.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
+    if (!record) return res.status(404).json({ error: 'Interview not found.' });
+    const [user, answers] = await Promise.all([
+      prisma.user.findUnique({ where: { id: String(record.userId) }, select: { id: true, name: true, email: true, usn: true, department: true } }).catch(() => null),
+      prisma.aiHireAnswer.findMany({ where: { interviewId: String(record.id) }, orderBy: { index: 'asc' } }),
+    ]);
+    return res.json({
+      interview: {
+        id: String(record.id),
+        student: user ? { name: user.name || '', email: user.email || '', usn: user.usn || '', department: user.department || '' } : null,
+        role: record.role,
+        company: record.company,
+        seniority: record.seniority,
+        summary: record.summary,
+        keySkills: record.keySkills || [],
+        questions: record.questions || [],
+        status: record.status,
+        report: record.report || null,
+        integrity: record.integrity || null,
+        createdAt: record.createdAt,
+        completedAt: record.completedAt || null,
+        answers: answers.map((row) => ({ index: row.index, answer: row.answer, timedOut: row.timedOut === true, evaluation: row.evaluation || null })),
+      },
+    });
+  } catch (error) {
+    return sendError(res, error, 'Could not load this interview.');
+  }
+};

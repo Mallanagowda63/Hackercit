@@ -1636,6 +1636,7 @@ function CodingPlatform() {
     { id: "leaderboard", label: "Leaderboard" },
     { id: "challenge", label: "Monthly challenge" },
     { id: "feedback", label: "Feedback" },
+    { id: "aihire", label: "AI interviews" },
     { id: "students", label: "Students" },
     { id: "profile", label: "Profile" },
   ];
@@ -1970,6 +1971,11 @@ function CodingPlatform() {
   const [adminEmailResult, setAdminEmailResult] = useState(null);
   const [adminEmailSending, setAdminEmailSending] = useState(null);
   const [adminFeedback, setAdminFeedback] = useState(null);
+  const [adminAiHire, setAdminAiHire] = useState(null);
+  const [adminAiHireLoading, setAdminAiHireLoading] = useState(false);
+  const [adminAiHireError, setAdminAiHireError] = useState("");
+  const [adminAiHireFilters, setAdminAiHireFilters] = useState({ month: "", status: "", q: "" });
+  const [adminAiHireDetail, setAdminAiHireDetail] = useState(null);
   const [adminFeedbackLoading, setAdminFeedbackLoading] = useState(false);
   const [adminFeedbackError, setAdminFeedbackError] = useState("");
   const [adminFeedbackNewCount, setAdminFeedbackNewCount] = useState(0);
@@ -6590,6 +6596,229 @@ function CodingPlatform() {
           <div style={{ color:"#c9cbe2", fontSize:13, marginTop:4 }}>Top 3 win a DevOrbit hoodie 🧥 + gifts 🎁 · {challenge.problems.length} problems · {challenge.participantCount} participating</div>
         </div>
         <span style={{ ...S.btn("submit"), padding:"10px 18px" }}>View challenge →</span>
+      </div>
+    );
+  };
+
+  // ── Admin: AI mock interviews ──
+  const loadAdminAiHire = async (filters = adminAiHireFilters) => {
+    setAdminAiHireLoading(true);
+    setAdminAiHireError("");
+    try {
+      const params = new URLSearchParams({ month: filters.month || "", status: filters.status || "", q: filters.q || "" });
+      const data = await performApiRequest(`/api/admin/ai-hire/interviews?${params.toString()}`);
+      setAdminAiHire(data);
+      if (!filters.month && data.currentMonth) setAdminAiHireFilters((prev) => ({ ...prev, month: data.currentMonth }));
+    } catch (error) {
+      setAdminAiHireError(error.message || "Could not load AI interviews.");
+    } finally {
+      setAdminAiHireLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (view !== "admin" || adminTab !== "aihire" || !authToken) return undefined;
+    const timer = setTimeout(() => loadAdminAiHire(adminAiHireFilters), adminAiHireFilters.q ? 350 : 0);
+    return () => clearTimeout(timer);
+  }, [view, adminTab, authToken, adminAiHireFilters.month, adminAiHireFilters.status, adminAiHireFilters.q]);
+
+  const openAdminAiHireDetail = async (id) => {
+    setAdminAiHireDetail({ loading: true, id });
+    try {
+      const data = await performApiRequest(`/api/admin/ai-hire/interviews/${id}`);
+      setAdminAiHireDetail(data.interview);
+    } catch (error) {
+      setAdminAiHireDetail({ error: error.message || "Could not load this interview.", id });
+    }
+  };
+
+  const renderAdminAiHire = () => {
+    const data = adminAiHire;
+    const rows = data?.interviews || [];
+    const stats = data?.stats;
+    const monthLabel = (key) => {
+      if (!key || key === "all") return "All time";
+      const [year, month] = key.split("-").map(Number);
+      return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
+    };
+    const scoreTone = (score) => (score >= 70 ? ADMIN_THEME.success : score >= 45 ? ADMIN_THEME.warning : ADMIN_THEME.error);
+    const recTone = (rec) => (/strong hire|^hire/i.test(rec) ? { color:"#15803D", background:"#ECFDF3" } : /lean hire/i.test(rec) ? { color:"#A15C07", background:"#FEF6E7" } : rec ? { color:"#B42318", background:"#FEF3F2" } : { color:ADMIN_THEME.textSecondary, background:"#F5F5F4" });
+    const formatDate = (value) => (value ? new Date(value).toLocaleString("en-IN", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "--");
+    const setFilter = (changes) => setAdminAiHireFilters((prev) => ({ ...prev, ...changes }));
+
+    const detail = adminAiHireDetail;
+    return (
+      <div style={{ display:"grid", gap:20 }}>
+        <div style={{ ...S.adminCard, display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, flexWrap:"wrap" }}>
+          <div>
+            <div style={S.adminSectionTitle}>AI mock interviews</div>
+            <div style={{ fontSize:22, fontWeight:600, color:ADMIN_THEME.text }}>{monthLabel(adminAiHireFilters.month || data?.currentMonth)}</div>
+            <div style={{ fontSize:13.5, color:ADMIN_THEME.textSecondary, marginTop:4 }}>
+              Every interview students take in AI Hire, with their answers, scores and reports. Each student can start {data?.monthlyLimit ?? 5} interviews a month.
+            </div>
+          </div>
+          <button onClick={() => loadAdminAiHire(adminAiHireFilters)} disabled={adminAiHireLoading} style={{ ...S.adminButton("default"), opacity:adminAiHireLoading ? 0.6 : 1 }}>
+            {adminAiHireLoading ? "Loading..." : "Refresh"}
+          </button>
+        </div>
+
+        <div style={{ ...S.adminCard, padding:0, display:"grid", gridTemplateColumns:`repeat(${isPhone ? 2 : 6}, minmax(0,1fr))`, overflow:"hidden" }}>
+          {[
+            ["Interviews", stats?.total ?? "--"],
+            ["Completed", stats?.completed ?? "--"],
+            ["Not finished", stats?.notFinished ?? "--"],
+            ["Average score", stats?.averageScore ?? "--"],
+            ["Students", stats?.students ?? "--"],
+            ["With warnings", stats?.flagged ?? "--"],
+          ].map(([label, value], index) => (
+            <div key={label} style={{ padding:isPhone ? "14px 16px" : "18px 20px", borderLeft:(isPhone ? index % 2 : index) ? `1px solid ${ADMIN_THEME.divider}` : "none", borderTop:isPhone && index >= 2 ? `1px solid ${ADMIN_THEME.divider}` : "none" }}>
+              <div style={{ fontSize:12, color:ADMIN_THEME.textSecondary }}>{label}</div>
+              <div style={{ fontSize:24, fontWeight:600, color:label === "With warnings" && Number(value) > 0 ? ADMIN_THEME.error : ADMIN_THEME.text, marginTop:6 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
+          <input value={adminAiHireFilters.q} onChange={(e) => setFilter({ q: e.target.value })} placeholder="Search student, email, USN or role" aria-label="Search AI interviews" style={{ ...S.adminInput, flex:"1 1 260px", width:"auto" }} />
+          <select value={adminAiHireFilters.month || data?.currentMonth || ""} onChange={(e) => setFilter({ month: e.target.value })} aria-label="Month" style={{ ...S.adminInput, width:isPhone ? "100%" : 190 }}>
+            {(data?.months || []).map((key) => <option key={key} value={key}>{monthLabel(key)}</option>)}
+            <option value="all">All time</option>
+          </select>
+          <select value={adminAiHireFilters.status} onChange={(e) => setFilter({ status: e.target.value })} aria-label="Status" style={{ ...S.adminInput, width:isPhone ? "100%" : 170 }}>
+            <option value="">All statuses</option>
+            <option value="completed">Completed</option>
+            <option value="in_progress">Not finished</option>
+          </select>
+        </div>
+
+        {adminAiHireError && <div style={S.adminAlert("error")}>{adminAiHireError}</div>}
+
+        <div style={S.adminTableWrap}>
+          <table style={{ width:"100%", borderCollapse:"collapse", minWidth:860 }}>
+            <thead>
+              <tr>
+                {["Student", "Role", "Started", "Questions", "Score", "Result", "Warnings", ""].map((heading, index) => (
+                  <th key={index} style={S.adminTableHead}>{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length ? rows.map((row) => (
+                <tr key={row.id} style={{ cursor:"pointer" }} onClick={() => openAdminAiHireDetail(row.id)}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = ADMIN_THEME.hoverBackground; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                  <td style={S.adminTableCell}>
+                    <div style={{ fontWeight:600 }}>{row.name}</div>
+                    <div style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary }}>{[row.usn, row.department].filter(Boolean).join(" · ") || row.email}</div>
+                  </td>
+                  <td style={S.adminTableCell}>
+                    <div style={{ fontWeight:500 }}>{row.role || "--"}</div>
+                    <div style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary }}>{[row.company, row.seniority].filter(Boolean).join(" · ")}</div>
+                  </td>
+                  <td style={{ ...S.adminTableCell, whiteSpace:"nowrap", color:ADMIN_THEME.textSecondary, fontSize:13 }}>{formatDate(row.createdAt)}</td>
+                  <td style={{ ...S.adminTableCell, fontSize:13 }}>{row.status === "completed" ? row.questionCount : `${row.answeredCount}/${row.questionCount}`}</td>
+                  <td style={{ ...S.adminTableCell, fontWeight:600, color:row.overallScore == null ? ADMIN_THEME.textMuted : scoreTone(row.overallScore) }}>{row.overallScore == null ? "--" : `${row.overallScore}/100`}</td>
+                  <td style={S.adminTableCell}>
+                    {row.status === "completed"
+                      ? <span style={{ ...recTone(row.recommendation), fontSize:12, fontWeight:500, padding:"3px 8px", borderRadius:4, whiteSpace:"nowrap" }}>{row.recommendation || "Completed"}</span>
+                      : <span style={{ fontSize:12, color:ADMIN_THEME.warning }}>Not finished</span>}
+                  </td>
+                  <td style={{ ...S.adminTableCell, color:row.warnings ? ADMIN_THEME.error : ADMIN_THEME.textMuted, fontSize:13 }}>
+                    {row.endedEarly ? "Ended early" : row.warnings ? `${row.warnings} tab switch${row.warnings === 1 ? "" : "es"}` : "None"}
+                  </td>
+                  <td style={{ ...S.adminTableCell, textAlign:"right" }}><span style={{ color:ADMIN_THEME.primary, fontSize:13 }}>View</span></td>
+                </tr>
+              )) : (
+                <tr><td colSpan="8" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted, padding:"28px 16px" }}>
+                  {adminAiHireLoading ? "Loading AI interviews..." : "No AI interviews match these filters yet."}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {detail && (
+          <div role="dialog" aria-modal="true" aria-label="AI interview details" onClick={() => setAdminAiHireDetail(null)}
+            style={{ position:"fixed", inset:0, zIndex:1500, background:"rgba(28,25,23,0.45)", display:"flex", justifyContent:"flex-end" }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ width:"min(760px, 100%)", height:"100%", overflowY:"auto", background:ADMIN_THEME.background, borderLeft:`1px solid ${ADMIN_THEME.border}`, boxShadow:"-12px 0 40px rgba(0,0,0,0.12)", padding:isPhone ? 16 : 28, boxSizing:"border-box", display:"grid", gap:16, alignContent:"start" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"flex-start" }}>
+                <div>
+                  <div style={S.adminSectionTitle}>AI mock interview</div>
+                  <div style={{ fontSize:20, fontWeight:600, color:ADMIN_THEME.text }}>{detail.role || (detail.loading ? "Loading..." : "Interview")}</div>
+                  {detail.company !== undefined && <div style={{ fontSize:13.5, color:ADMIN_THEME.textSecondary }}>{[detail.company, detail.seniority, formatDate(detail.createdAt)].filter(Boolean).join(" · ")}</div>}
+                </div>
+                <button onClick={() => setAdminAiHireDetail(null)} style={S.adminButton("default")}>Close</button>
+              </div>
+
+              {detail.loading && <div style={{ color:ADMIN_THEME.textSecondary }}>Loading interview...</div>}
+              {detail.error && <div style={S.adminAlert("error")}>{detail.error}</div>}
+
+              {detail.questions && (
+                <>
+                  <div style={{ ...S.adminCard, display:"grid", gridTemplateColumns:isPhone ? "1fr" : "1fr 1fr", gap:12 }}>
+                    <div>
+                      <div style={{ fontSize:12, color:ADMIN_THEME.textSecondary }}>Student</div>
+                      <div style={{ fontWeight:600 }}>{detail.student?.name || "--"}</div>
+                      <div style={{ fontSize:13, color:ADMIN_THEME.textSecondary }}>{[detail.student?.usn, detail.student?.department, detail.student?.email].filter(Boolean).join(" · ")}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize:12, color:ADMIN_THEME.textSecondary }}>Integrity</div>
+                      <div style={{ fontWeight:500, color:detail.integrity?.tabSwitches || detail.integrity?.endedEarly ? ADMIN_THEME.error : detail.integrity || detail.status === "completed" ? ADMIN_THEME.success : ADMIN_THEME.warning }}>
+                        {detail.integrity
+                          ? detail.integrity.endedEarly ? `Ended early after ${detail.integrity.tabSwitches} tab switches` : detail.integrity.tabSwitches ? `Left the page ${detail.integrity.tabSwitches} time(s)` : "No warnings"
+                          : detail.status === "completed" ? "No warnings" : "Interview not finished"}
+                      </div>
+                      {detail.integrity?.pasteBlocked ? <div style={{ fontSize:13, color:ADMIN_THEME.textSecondary }}>Tried to paste {detail.integrity.pasteBlocked} time(s)</div> : null}
+                    </div>
+                  </div>
+
+                  {detail.report ? (
+                    <div style={{ ...S.adminCard, display:"grid", gap:12 }}>
+                      <div style={{ display:"flex", alignItems:"baseline", gap:14, flexWrap:"wrap" }}>
+                        <span style={{ fontSize:32, fontWeight:600, color:scoreTone(detail.report.overallScore) }}>{detail.report.overallScore}<span style={{ fontSize:14, color:ADMIN_THEME.textSecondary }}>/100</span></span>
+                        <span style={{ ...recTone(detail.report.recommendation), fontSize:13, fontWeight:500, padding:"3px 10px", borderRadius:4 }}>{detail.report.recommendation}</span>
+                      </div>
+                      <div style={{ fontSize:14, lineHeight:1.6, color:ADMIN_THEME.text }}>{detail.report.summary}</div>
+                      <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "repeat(3, minmax(0,1fr))", gap:12 }}>
+                        {[["Strengths", detail.report.strengths, ADMIN_THEME.success], ["Focus areas", detail.report.focusAreas, ADMIN_THEME.warning], ["Next steps", detail.report.nextSteps, ADMIN_THEME.primary]].map(([title, items, color]) => (
+                          <div key={title}>
+                            <div style={{ fontSize:12.5, fontWeight:600, color, marginBottom:6 }}>{title}</div>
+                            <ul style={{ margin:0, paddingLeft:16, display:"grid", gap:4, fontSize:13, color:ADMIN_THEME.text }}>
+                              {(items || []).map((item, index) => <li key={index}>{item}</li>)}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={S.adminAlert("warning")}>The student did not finish this interview, so there is no final report. Answers given so far are below.</div>
+                  )}
+
+                  <div style={{ display:"grid", gap:10 }}>
+                    {detail.questions.map((question, index) => {
+                      const answer = (detail.answers || []).find((row) => row.index === index);
+                      const evaluation = answer?.evaluation;
+                      return (
+                        <div key={index} style={{ ...S.adminCard, display:"grid", gap:8 }}>
+                          <div style={{ display:"flex", gap:10, alignItems:"baseline", flexWrap:"wrap" }}>
+                            <span style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary }}>Q{index + 1} · {question.category} · {question.difficulty}</span>
+                            {answer?.timedOut && <span style={{ fontSize:11.5, color:ADMIN_THEME.error, border:`1px solid ${ADMIN_THEME.error}`, borderRadius:4, padding:"1px 6px" }}>Time ran out</span>}
+                            <span style={{ marginLeft:"auto", fontWeight:600, color:evaluation ? scoreTone(evaluation.score * 10) : ADMIN_THEME.textMuted }}>{evaluation ? `${evaluation.score}/10 · ${evaluation.verdict}` : answer ? "Not checked" : "Not answered"}</span>
+                          </div>
+                          <div style={{ fontSize:14, fontWeight:600, color:ADMIN_THEME.text }}>{question.question}</div>
+                          <div style={{ fontSize:13.5, color:answer?.answer ? ADMIN_THEME.text : ADMIN_THEME.textMuted, background:"#FAFAF9", border:`1px solid ${ADMIN_THEME.divider}`, borderRadius:6, padding:"8px 10px", whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>
+                            {answer?.answer || (answer ? "Skipped" : "Not answered")}
+                          </div>
+                          {evaluation?.feedback && <div style={{ fontSize:13, color:ADMIN_THEME.textSecondary, lineHeight:1.55 }}>{evaluation.feedback}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -11623,6 +11852,7 @@ function CodingPlatform() {
           {adminTab === "leaderboard" && renderAdminLeaderboard()}
           {adminTab === "challenge" && renderAdminChallenges()}
           {adminTab === "feedback" && renderAdminFeedback()}
+          {adminTab === "aihire" && renderAdminAiHire()}
           {adminTab === "students" && renderStudentList()}
           {adminTab === "monitor" && renderLiveMonitor()}
           {adminTab === "profile" && renderAdminProfile()}
