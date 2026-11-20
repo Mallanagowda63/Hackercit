@@ -6778,31 +6778,33 @@ function CodingPlatform() {
               <span style={S.adminFieldLabel}>Job description</span>
               <textarea value={assignForm.jdText} onChange={(e) => setAssign({ jdText: e.target.value })} placeholder="Paste the full job description. Meera plans 5-10 questions from it for every student." style={{ ...S.adminTextarea, minHeight:160 }} />
             </label>
-            <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "repeat(3, minmax(0,1fr))", gap:12 }}>
-              <label>
-                <span style={S.adminFieldLabel}>Students</span>
-                <select
-                  value={assignForm.audience === "selected" ? "__selected" : assignForm.audience === "department" ? `dept:${assignForm.department}` : ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    if (value === "__selected") setAssign({ audience: "selected", department: "" });
-                    else if (value.startsWith("dept:")) setAssign({ audience: "department", department: value.slice(5) });
-                    else setAssign({ audience: "all", department: "" });
-                  }}
-                  style={S.adminInput}>
-                  <option value="">All students</option>
-                  {departments.map((department) => <option key={department} value={`dept:${department}`}>{department} only</option>)}
-                  <option value="__selected">Selected students</option>
+            <div>
+              <span style={S.adminFieldLabel}>Who gets this interview?</span>
+              <div role="radiogroup" aria-label="Who gets this interview" style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "repeat(3, minmax(0,1fr))", gap:8 }}>
+                {[
+                  ["all", "All students", "Every registered student"],
+                  ["department", "One department", "For example only CSE"],
+                  ["selected", "Choose students", "Tick the students you want"],
+                ].map(([value, title, hint]) => {
+                  const active = assignForm.audience === value;
+                  return (
+                    <button key={value} type="button" role="radio" aria-checked={active}
+                      onClick={() => setAssign({ audience: value, department: value === "department" ? (assignForm.department || departments[0] || "") : "" })}
+                      style={{ display:"flex", alignItems:"flex-start", gap:10, textAlign:"left", padding:"12px 14px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", background:active ? ADMIN_THEME.primaryLight : "#FFFFFF", border:`1.5px solid ${active ? ADMIN_THEME.primary : ADMIN_THEME.border}` }}>
+                      <span aria-hidden="true" style={{ width:16, height:16, marginTop:2, flexShrink:0, borderRadius:"50%", border:`2px solid ${active ? ADMIN_THEME.primary : "#A8A29E"}`, boxShadow:active ? `inset 0 0 0 3px #FFFFFF` : "none", background:active ? ADMIN_THEME.primary : "#FFFFFF" }} />
+                      <span>
+                        <span style={{ display:"block", fontSize:14, fontWeight:600, color:ADMIN_THEME.text }}>{title}</span>
+                        <span style={{ display:"block", fontSize:12.5, color:ADMIN_THEME.textSecondary, marginTop:2 }}>{hint}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {assignForm.audience === "department" && (
+                <select value={assignForm.department} onChange={(e) => setAssign({ department: e.target.value })} aria-label="Department" style={{ ...S.adminInput, marginTop:10, width:isPhone ? "100%" : 320 }}>
+                  {departments.map((department) => <option key={department} value={department}>{department}</option>)}
                 </select>
-              </label>
-              <label>
-                <span style={S.adminFieldLabel}>Opens (optional)</span>
-                <input type="datetime-local" value={assignForm.startsAt} onChange={(e) => setAssign({ startsAt: e.target.value })} style={S.adminInput} />
-              </label>
-              <label>
-                <span style={S.adminFieldLabel}>Closes (optional)</span>
-                <input type="datetime-local" value={assignForm.endsAt} onChange={(e) => setAssign({ endsAt: e.target.value })} style={S.adminInput} />
-              </label>
+              )}
             </div>
             {assignForm.audience === "selected" && (() => {
               const chosen = new Set(assignForm.userIds.map(String));
@@ -6851,6 +6853,16 @@ function CodingPlatform() {
                 </div>
               );
             })()}
+            <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "repeat(2, minmax(0,1fr))", gap:12 }}>
+              <label>
+                <span style={S.adminFieldLabel}>Opens (optional)</span>
+                <input type="datetime-local" value={assignForm.startsAt} onChange={(e) => setAssign({ startsAt: e.target.value })} style={S.adminInput} />
+              </label>
+              <label>
+                <span style={S.adminFieldLabel}>Closes (optional)</span>
+                <input type="datetime-local" value={assignForm.endsAt} onChange={(e) => setAssign({ endsAt: e.target.value })} style={S.adminInput} />
+              </label>
+            </div>
             <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:14, color:ADMIN_THEME.text, cursor:"pointer" }}>
               <input type="checkbox" checked={assignForm.emailNow} onChange={(e) => setAssign({ emailNow: e.target.checked })} style={{ width:16, height:16 }} />
               {assignForm.audience === "selected" ? `Email the ${assignForm.userIds.length} selected student${assignForm.userIds.length === 1 ? "" : "s"} now` : "Email the students now"}
