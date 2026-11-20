@@ -614,7 +614,7 @@ exports.report = async (req, res) => {
         });
         // Thank-you email with the result; never let a mail problem affect the report.
         if (!interview.thankYouSentAt) {
-          sendInterviewThankYou({ user: reportUser, interview, report, link: reportLink, questionCount: items.length })
+          sendInterviewThankYou({ user: reportUser, interview, link: reportLink })
             .then((sent) => sent && prisma.aiHireInterview.update({ where: { id: interviewId }, data: { thankYouSentAt: new Date() } }))
             .catch((mailError) => console.error('[ai-hire] thank-you email', mailError.message));
         }
@@ -1011,33 +1011,26 @@ exports.adminAssignmentEmail = async (req, res) => {
   }
 };
 
-// Sent once when a student finishes an interview: thanks, the result and a link to the full report.
-async function sendInterviewThankYou({ user, interview, report, link, questionCount }) {
+// Sent once when a student finishes an interview: a short thank-you only. The score and report are
+// deliberately not included; students see them on the site.
+async function sendInterviewThankYou({ user, interview, link }) {
   const email = String(user?.email || '').trim();
   if (!isMailConfigured() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return false;
   const role = interview.role || 'the role';
   const subject = `Thank you for your AI mock interview: ${role}`;
-  const lines = [
-    `Thank you for completing your AI mock interview${interview.assignmentTitle ? ` "${interview.assignmentTitle}"` : ''} for the ${role} role${interview.company ? ` at ${interview.company}` : ''}. Well done for practising!`,
+  const message = [
+    `Thank you for completing your AI mock interview${interview.assignmentTitle ? ` "${interview.assignmentTitle}"` : ''} for the ${role} role${interview.company ? ` at ${interview.company}` : ''}.`,
     '',
-    `Overall score: ${report.overallScore}/100`,
-    `Result: ${report.recommendation}`,
-    `Questions answered: ${questionCount}`,
+    'Well done for taking the time to practise. Every interview makes you more confident for the real one.',
     '',
-    report.summary || '',
-  ];
-  if (Array.isArray(report.strengths) && report.strengths.length) {
-    lines.push('', 'What you did well:', ...report.strengths.slice(0, 3).map((item) => `- ${item}`));
-  }
-  if (Array.isArray(report.focusAreas) && report.focusAreas.length) {
-    lines.push('', 'What to work on next:', ...report.focusAreas.slice(0, 3).map((item) => `- ${item}`));
-  }
-  lines.push('', 'Your full report, with feedback on every answer, is saved in AI Hire under Your past interviews.', '', 'Keep practising, you are getting better every time!');
-  const message = lines.join('\n').replace(/\n{3,}/g, '\n\n');
+    'You can see how you did on DevOrbit: open AI Hire and look under Your past interviews.',
+    '',
+    'Keep practising, and all the best!',
+  ].join('\n');
   const firstName = String(user?.name || '').trim().split(/\s+/)[0] || 'there';
   await sendEmail({
     to: email,
-    ...renderAnnouncementEmail({ subject, message, name: firstName, link, linkLabel: 'See my report', eyebrow: 'Interview complete', icon: '&#127881;' }),
+    ...renderAnnouncementEmail({ subject, message, name: firstName, link, linkLabel: 'Open AI Hire', eyebrow: 'Interview complete', icon: '&#127881;' }),
   });
   return true;
 }
