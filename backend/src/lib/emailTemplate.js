@@ -28,15 +28,11 @@ function messageToHtml(message) {
     .join('');
 }
 
-function renderAnnouncementEmail({ subject, message, name, link, linkLabel = 'Open DevOrbit', logoUrl }) {
+function renderAnnouncementEmail({ subject, message, name, link, linkLabel = 'Open DevOrbit', eyebrow = 'Announcement', icon = '&#127942;' }) {
   const greeting = `Hi ${name},`;
   const preheader = String(message).split('\n').find((line) => line.trim()) || subject;
   const text = `${greeting}\n\n${message}\n\n${link ? `${linkLabel}: ${link}\n\n` : ''}- Team DevOrbit`;
   const font = "'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
-
-  const logo = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" width="132" alt="ScholarLogic" style="display:block;width:132px;max-width:132px;height:auto;border:0">`
-    : `<span style="font-family:${font};font-size:20px;font-weight:800;color:#1e1b4b">ScholarLogic</span>`;
 
   const button = link
     ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 6px">
@@ -58,16 +54,9 @@ function renderAnnouncementEmail({ subject, message, name, link, linkLabel = 'Op
 <tr><td align="center" style="padding:24px 12px">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:580px;font-family:${font}">
 
-    <tr><td bgcolor="#ffffff" style="background:#ffffff;border-radius:16px 16px 0 0;padding:18px 28px;border-bottom:1px solid #eceef5">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td align="left" valign="middle">${logo}</td>
-        <td align="right" valign="middle" style="font-family:${font};font-size:12px;font-weight:700;letter-spacing:0.08em;color:#6d28d9;text-transform:uppercase">DevOrbit</td>
-      </tr></table>
-    </td></tr>
-
-    <tr><td bgcolor="#4338ca" style="background:#4338ca;background-image:linear-gradient(135deg,#312e81 0%,#4f46e5 55%,#7c3aed 100%);padding:34px 28px 30px">
-      <div style="font-size:34px;line-height:1;margin-bottom:12px">&#127942;</div>
-      <div style="font-family:${font};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#c7d2fe;margin-bottom:8px">Announcement</div>
+    <tr><td bgcolor="#4338ca" style="background:#4338ca;background-image:linear-gradient(135deg,#312e81 0%,#4f46e5 55%,#7c3aed 100%);padding:34px 28px 30px;border-radius:16px 16px 0 0">
+      <div style="font-size:34px;line-height:1;margin-bottom:12px">${icon}</div>
+      <div style="font-family:${font};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#c7d2fe;margin-bottom:8px">${escapeHtml(eyebrow)}</div>
       <div style="font-family:${font};font-size:24px;line-height:1.3;font-weight:800;color:#ffffff">${escapeHtml(subject)}</div>
     </td></tr>
 

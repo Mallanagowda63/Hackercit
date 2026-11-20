@@ -25,8 +25,7 @@ function firstName(user) {
 }
 
 function buildEmail({ subject, message, link, linkLabel, name }) {
-  const logoUrl = link ? `${link}/scholarlogic-logo.png` : '';
-  return renderAnnouncementEmail({ subject, message, name, link, linkLabel, logoUrl });
+  return renderAnnouncementEmail({ subject, message, name, link, linkLabel });
 }
 
 function readInput(body = {}) {
