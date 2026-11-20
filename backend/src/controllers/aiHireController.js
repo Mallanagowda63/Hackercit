@@ -56,8 +56,22 @@ function nextMonthLabel() {
   return first.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', timeZone: 'UTC' });
 }
 async function interviewsUsedThisMonth(userId) {
-  const records = await prisma.aiHireInterview.findMany({ where: { userId: String(userId), month: monthKey() }, select: { id: true } });
-  return records.length;
+  const records = await prisma.aiHireInterview.findMany({ where: { userId: String(userId), month: monthKey() }, select: { id: true, assignmentId: true } });
+  return records.filter((record) => !record.assignmentId).length;
+}
+
+// ── Interviews assigned by the admin ──
+function sameDepartment(a, b) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+}
+function assignmentState(assignment, now = Date.now()) {
+  if (assignment.closed) return 'closed';
+  if (assignment.startsAt && now < new Date(assignment.startsAt).getTime()) return 'upcoming';
+  if (assignment.endsAt && now >= new Date(assignment.endsAt).getTime()) return 'closed';
+  return 'open';
+}
+function canTakeAssignment(assignment, user) {
+  return !assignment.department || sameDepartment(assignment.department, user?.department);
 }
 async function interviewsLeft(userId) {
   return Math.max(0, MONTHLY_INTERVIEWS - await interviewsUsedThisMonth(userId));
@@ -408,13 +422,24 @@ exports.status = async (req, res) => {
 // POST /api/ai-hire/start  { jdText, jdImage, notes }
 exports.start = async (req, res) => {
   try {
-    const jdText = clip(req.body?.jdText, MAX_TEXT.jd);
+    const assignmentId = clip(req.body?.assignmentId, 64);
+    let assignment = null;
+    if (assignmentId) {
+      assignment = await prisma.aiHireAssignment.findUnique({ where: { id: assignmentId } }).catch(() => null);
+      if (!assignment || !canTakeAssignment(assignment, req.user)) return res.status(404).json({ error: 'This interview is not assigned to you.' });
+      const state = assignmentState(assignment);
+      if (state === 'upcoming') return res.status(400).json({ error: `This interview opens on ${new Date(assignment.startsAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}.` });
+      if (state === 'closed') return res.status(400).json({ error: 'This interview is closed.' });
+      const previous = await prisma.aiHireInterview.findFirst({ where: { userId: String(req.user.id), assignmentId } });
+      if (previous) return res.status(409).json({ error: 'You have already taken this interview. Each assigned interview has one attempt.' });
+    }
+    const jdText = assignment ? clip(assignment.jdText, MAX_TEXT.jd) : clip(req.body?.jdText, MAX_TEXT.jd);
     const notes = clip(req.body?.notes, MAX_TEXT.notes);
-    const image = readImage(req.body?.jdImage);
+    const image = assignment ? { block: null } : readImage(req.body?.jdImage);
     if (image.error) return res.status(400).json({ error: image.error });
     if (!jdText && !image.block) return res.status(400).json({ error: 'Paste the job description or upload a photo of it.' });
     if (jdText && jdText.length < 40 && !image.block) return res.status(400).json({ error: 'The job description is too short. Paste the full text.' });
-    if (await interviewsLeft(req.user.id) <= 0) {
+    if (!assignment && await interviewsLeft(req.user.id) <= 0) {
       return res.status(429).json({ error: `You have used all ${MONTHLY_INTERVIEWS} AI interviews for this month. You can start new ones from ${nextMonthLabel()}.` });
     }
 
@@ -431,8 +456,11 @@ exports.start = async (req, res) => {
       if (!plan.isJobDescription || !Array.isArray(plan.questions) || plan.questions.length < 3) {
         throw aiError('This does not look like a job description. Paste or upload a real job posting.', 422);
       }
-      // Re-check the limit: the student might have started another interview meanwhile.
-      if (await interviewsLeft(userId) <= 0) {
+      // Re-check: the student might have started another interview meanwhile.
+      if (assignment && await prisma.aiHireInterview.findFirst({ where: { userId, assignmentId } })) {
+        throw aiError('You have already taken this interview. Each assigned interview has one attempt.', 409);
+      }
+      if (!assignment && await interviewsLeft(userId) <= 0) {
         throw aiError(`You have used all ${MONTHLY_INTERVIEWS} AI interviews for this month. You can start new ones from ${nextMonthLabel()}.`, 429);
       }
       const questions = plan.questions.slice(0, MAX_QUESTIONS).map((question) => ({ ...question, timeLimitSeconds: answerTimeLimit(question) }));
@@ -443,6 +471,8 @@ exports.start = async (req, res) => {
           userId,
           month: monthKey(now),
           status: 'in_progress',
+          assignmentId: assignment ? String(assignment.id) : '',
+          assignmentTitle: assignment ? assignment.title : '',
           role: clip(plan.role, 200),
           company: clip(plan.company, 200),
           seniority: clip(plan.seniority, 100),
@@ -650,7 +680,9 @@ exports.adminList = async (req, res) => {
     const status = String(req.query.status || '');
     const query = String(req.query.q || '').trim().toLowerCase();
     const where = {};
-    if (month !== 'all') where.month = month;
+    const assignmentFilter = String(req.query.assignmentId || '');
+    if (assignmentFilter) where.assignmentId = assignmentFilter;
+    else if (month !== 'all') where.month = month;
     if (status === 'completed' || status === 'in_progress') where.status = status;
     const records = await prisma.aiHireInterview.findMany({ where, orderBy: { createdAt: 'desc' } });
 
@@ -687,6 +719,8 @@ exports.adminList = async (req, res) => {
         warnings: record.integrity?.tabSwitches || 0,
         endedEarly: record.integrity?.endedEarly === true,
         month: record.month,
+        assignmentId: record.assignmentId || '',
+        assignmentTitle: record.assignmentTitle || '',
         createdAt: record.createdAt,
       };
     });
@@ -748,5 +782,114 @@ exports.adminItem = async (req, res) => {
     });
   } catch (error) {
     return sendError(res, error, 'Could not load this interview.');
+  }
+};
+
+// ── Assigned AI interviews ──
+
+function presentAssignment(assignment) {
+  return {
+    id: String(assignment.id),
+    title: assignment.title,
+    jdText: assignment.jdText,
+    department: assignment.department || '',
+    startsAt: assignment.startsAt || null,
+    endsAt: assignment.endsAt || null,
+    state: assignmentState(assignment),
+    createdAt: assignment.createdAt,
+  };
+}
+
+function readAssignmentInput(body = {}) {
+  const title = clip(body.title, 120);
+  const jdText = clip(body.jdText, MAX_TEXT.jd);
+  const department = clip(body.department, 80);
+  const startsAt = body.startsAt ? new Date(body.startsAt) : null;
+  const endsAt = body.endsAt ? new Date(body.endsAt) : null;
+  if (!title) return { error: 'Give the interview a title.' };
+  if (jdText.length < 40) return { error: 'Paste the full job description (at least a few lines).' };
+  if (startsAt && Number.isNaN(startsAt.getTime())) return { error: 'The opening time is not valid.' };
+  if (endsAt && Number.isNaN(endsAt.getTime())) return { error: 'The closing time is not valid.' };
+  if (startsAt && endsAt && endsAt <= startsAt) return { error: 'The closing time must be after the opening time.' };
+  return { data: { title, jdText, department, startsAt, endsAt } };
+}
+
+// POST /api/admin/ai-hire/assignments  { title, jdText, department, startsAt, endsAt }
+exports.adminCreateAssignment = async (req, res) => {
+  try {
+    const { data, error } = readAssignmentInput(req.body);
+    if (error) return res.status(400).json({ error });
+    const now = new Date();
+    const assignment = await prisma.aiHireAssignment.create({ data: { ...data, closed: false, createdById: String(req.user.id), createdAt: now, updatedAt: now } });
+    return res.status(201).json({ assignment: presentAssignment(assignment) });
+  } catch (error) {
+    return sendError(res, error, 'Could not create the interview.');
+  }
+};
+
+// GET /api/admin/ai-hire/assignments: every assignment with how many students took it.
+exports.adminListAssignments = async (req, res) => {
+  try {
+    const assignments = await prisma.aiHireAssignment.findMany({ orderBy: { createdAt: 'desc' } });
+    const ids = assignments.map((assignment) => String(assignment.id));
+    const attempts = ids.length
+      ? await prisma.aiHireInterview.findMany({ where: { assignmentId: { in: ids } }, select: { assignmentId: true, status: true, overallScore: true } })
+      : [];
+    const students = await prisma.user.findMany({ where: { role: 'USER' }, select: { department: true } });
+    return res.json({
+      assignments: assignments.map((assignment) => {
+        const mine = attempts.filter((attempt) => String(attempt.assignmentId) === String(assignment.id));
+        const completed = mine.filter((attempt) => attempt.status === 'completed');
+        const scores = completed.map((attempt) => Number(attempt.overallScore)).filter(Number.isFinite);
+        return {
+          ...presentAssignment(assignment),
+          eligible: students.filter((student) => !assignment.department || sameDepartment(student.department, assignment.department)).length,
+          started: mine.length,
+          completed: completed.length,
+          averageScore: scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : null,
+        };
+      }),
+      departments: [...new Set(students.map((student) => String(student.department || '').trim()).filter(Boolean))].sort(),
+    });
+  } catch (error) {
+    return sendError(res, error, 'Could not load assigned interviews.');
+  }
+};
+
+// POST /api/admin/ai-hire/assignments/:id/close  { closed: true|false }
+exports.adminCloseAssignment = async (req, res) => {
+  try {
+    const assignment = await prisma.aiHireAssignment.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
+    if (!assignment) return res.status(404).json({ error: 'Interview not found.' });
+    const updated = await prisma.aiHireAssignment.update({ where: { id: String(assignment.id) }, data: { closed: req.body?.closed !== false, updatedAt: new Date() } });
+    return res.json({ assignment: presentAssignment(updated) });
+  } catch (error) {
+    return sendError(res, error, 'Could not update the interview.');
+  }
+};
+
+// GET /api/ai-hire/assignments: interviews assigned to this student, with their own attempt.
+exports.studentAssignments = async (req, res) => {
+  try {
+    const assignments = (await prisma.aiHireAssignment.findMany({ orderBy: { createdAt: 'desc' } }))
+      .filter((assignment) => canTakeAssignment(assignment, req.user));
+    const ids = assignments.map((assignment) => String(assignment.id));
+    const mine = ids.length
+      ? await prisma.aiHireInterview.findMany({ where: { userId: String(req.user.id), assignmentId: { in: ids } } })
+      : [];
+    const rows = assignments.map((assignment) => {
+      const attempt = mine.find((item) => String(item.assignmentId) === String(assignment.id));
+      return {
+        id: String(assignment.id),
+        title: assignment.title,
+        startsAt: assignment.startsAt || null,
+        endsAt: assignment.endsAt || null,
+        state: assignmentState(assignment),
+        attempt: attempt ? { interviewId: String(attempt.id), status: attempt.status, overallScore: attempt.status === 'completed' ? attempt.overallScore : null } : null,
+      };
+    }).filter((row) => row.state !== 'closed' || row.attempt);
+    return res.json({ assignments: rows });
+  } catch (error) {
+    return sendError(res, error, 'Could not load your assigned interviews.');
   }
 };

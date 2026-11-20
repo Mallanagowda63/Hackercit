@@ -1899,6 +1899,8 @@ function CodingPlatform() {
   const [aiHireHistory, setAiHireHistory]     = useState(null);
   const [aiHireFromHistory, setAiHireFromHistory] = useState(false);
   const [aiHireHistoryLoading, setAiHireHistoryLoading] = useState("");
+  const [aiHireAssignments, setAiHireAssignments] = useState([]);
+  const [aiHireAssignment, setAiHireAssignment] = useState(null);
   const [aiHireCamOn, setAiHireCamOn]         = useState(false);
   const [aiHireCamLost, setAiHireCamLost]     = useState(false);
   const [aiHireWarnings, setAiHireWarnings]   = useState(0);
@@ -1974,8 +1976,10 @@ function CodingPlatform() {
   const [adminAiHire, setAdminAiHire] = useState(null);
   const [adminAiHireLoading, setAdminAiHireLoading] = useState(false);
   const [adminAiHireError, setAdminAiHireError] = useState("");
-  const [adminAiHireFilters, setAdminAiHireFilters] = useState({ month: "", status: "", q: "" });
+  const [adminAiHireFilters, setAdminAiHireFilters] = useState({ month: "", status: "", q: "", assignmentId: "", assignmentTitle: "" });
   const [adminAiHireDetail, setAdminAiHireDetail] = useState(null);
+  const [adminAiHireAssignments, setAdminAiHireAssignments] = useState(null);
+  const [adminAiHireAssignForm, setAdminAiHireAssignForm] = useState({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", saving: false, message: null });
   const [adminFeedbackLoading, setAdminFeedbackLoading] = useState(false);
   const [adminFeedbackError, setAdminFeedbackError] = useState("");
   const [adminFeedbackNewCount, setAdminFeedbackNewCount] = useState(0);
@@ -3851,6 +3855,15 @@ function CodingPlatform() {
     }
   };
 
+  const loadAiHireAssignments = async () => {
+    try {
+      const data = await performApiRequest("/api/ai-hire/assignments");
+      setAiHireAssignments(Array.isArray(data.assignments) ? data.assignments : []);
+    } catch (_) {
+      setAiHireAssignments([]);
+    }
+  };
+
   const loadAiHireStatus = async () => {
     try {
       setAiHireStatus(await performApiRequest("/api/ai-hire/status"));
@@ -3863,11 +3876,12 @@ function CodingPlatform() {
     if (view === "aihire" && authToken) {
       loadAiHireStatus();
       loadAiHireHistory();
+      loadAiHireAssignments();
     }
   }, [view, authToken]);
 
   useEffect(() => {
-    if (view === "aihire" && authToken && aiHireStep === "report" && !aiHireFromHistory) loadAiHireHistory();
+    if (view === "aihire" && authToken && aiHireStep === "report" && !aiHireFromHistory) { loadAiHireHistory(); loadAiHireAssignments(); }
   }, [aiHireStep]);
 
   // Shrink a photo to at most 1600px and re-encode as JPEG so uploads stay small.
@@ -4156,14 +4170,17 @@ function CodingPlatform() {
     throw new Error("The AI is taking too long right now. Please try again in a few minutes.");
   };
 
-  const startAiHireInterview = async () => {
+  const startAiHireInterview = async (assignment = null) => {
     const jdText = aiHireForm.jdText.trim();
-    if (!jdText && !aiHireForm.image) { setAiHireError("Paste the job description or upload a photo of it."); return; }
+    if (!assignment && !jdText && !aiHireForm.image) { setAiHireError("Paste the job description or upload a photo of it."); return; }
+    setAiHireAssignment(assignment);
     setAiHireError("");
     if (!(await startAiHireCamera())) return;
     setAiHireBusy("plan");
     try {
-      const data = await aiHireCall("/api/ai-hire/start", { jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim() });
+      const data = await aiHireCall("/api/ai-hire/start", assignment
+        ? { assignmentId: assignment.id, notes: aiHireForm.notes.trim() }
+        : { jdText, jdImage: aiHireForm.image || "", notes: aiHireForm.notes.trim() });
       setAiHireInterviewId(data.interviewId || "");
       setAiHireFromHistory(false);
       aiHireSpokenRef.current = "";
@@ -4350,6 +4367,7 @@ function CodingPlatform() {
     setAiHireTimer({ index: -1, startsAt: 0, endsAt: 0, limit: 0 });
     setAiHireInterviewId("");
     setAiHireFromHistory(false);
+    setAiHireAssignment(null);
     setAiHireStep("setup");
     setAiHirePlan(null);
     setAiHireTurns([]);
@@ -6605,7 +6623,7 @@ function CodingPlatform() {
     setAdminAiHireLoading(true);
     setAdminAiHireError("");
     try {
-      const params = new URLSearchParams({ month: filters.month || "", status: filters.status || "", q: filters.q || "" });
+      const params = new URLSearchParams({ month: filters.month || "", status: filters.status || "", q: filters.q || "", assignmentId: filters.assignmentId || "" });
       const data = await performApiRequest(`/api/admin/ai-hire/interviews?${params.toString()}`);
       setAdminAiHire(data);
       if (!filters.month && data.currentMonth) setAdminAiHireFilters((prev) => ({ ...prev, month: data.currentMonth }));
@@ -6620,7 +6638,53 @@ function CodingPlatform() {
     if (view !== "admin" || adminTab !== "aihire" || !authToken) return undefined;
     const timer = setTimeout(() => loadAdminAiHire(adminAiHireFilters), adminAiHireFilters.q ? 350 : 0);
     return () => clearTimeout(timer);
-  }, [view, adminTab, authToken, adminAiHireFilters.month, adminAiHireFilters.status, adminAiHireFilters.q]);
+  }, [view, adminTab, authToken, adminAiHireFilters.month, adminAiHireFilters.status, adminAiHireFilters.q, adminAiHireFilters.assignmentId]);
+
+  const loadAdminAiHireAssignments = async () => {
+    try {
+      const data = await performApiRequest("/api/admin/ai-hire/assignments");
+      setAdminAiHireAssignments(data);
+    } catch (_) {
+      setAdminAiHireAssignments((prev) => prev || { assignments: [], departments: [] });
+    }
+  };
+
+  useEffect(() => {
+    if (view === "admin" && adminTab === "aihire" && authToken) loadAdminAiHireAssignments();
+  }, [view, adminTab, authToken]);
+
+  const createAdminAiHireAssignment = async () => {
+    const form = adminAiHireAssignForm;
+    if (form.saving) return;
+    setAdminAiHireAssignForm((prev) => ({ ...prev, saving: true, message: null }));
+    try {
+      await performApiRequest("/api/admin/ai-hire/assignments", {
+        method: "POST",
+        body: JSON.stringify({
+          title: form.title.trim(),
+          jdText: form.jdText.trim(),
+          department: form.department,
+          startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : null,
+          endsAt: form.endsAt ? new Date(form.endsAt).toISOString() : null,
+        }),
+      });
+      setAdminAiHireAssignForm({ open: false, title: "", jdText: "", department: "", startsAt: "", endsAt: "", saving: false, message: { type: "success", text: "Interview assigned. Students see it on their AI Hire page." } });
+      loadAdminAiHireAssignments();
+    } catch (error) {
+      setAdminAiHireAssignForm((prev) => ({ ...prev, saving: false, message: { type: "error", text: error.message || "Could not assign the interview." } }));
+    }
+  };
+
+  const toggleAdminAiHireAssignment = async (assignment) => {
+    const closing = assignment.state !== "closed";
+    if (closing && !window.confirm(`Close "${assignment.title}"? Students who have not started it can no longer take it.`)) return;
+    try {
+      await performApiRequest(`/api/admin/ai-hire/assignments/${assignment.id}/close`, { method: "POST", body: JSON.stringify({ closed: closing }) });
+      loadAdminAiHireAssignments();
+    } catch (error) {
+      setAdminAiHireAssignForm((prev) => ({ ...prev, message: { type: "error", text: error.message || "Could not update the interview." } }));
+    }
+  };
 
   const openAdminAiHireDetail = async (id) => {
     setAdminAiHireDetail({ loading: true, id });
@@ -6647,8 +6711,88 @@ function CodingPlatform() {
     const setFilter = (changes) => setAdminAiHireFilters((prev) => ({ ...prev, ...changes }));
 
     const detail = adminAiHireDetail;
+    const assignForm = adminAiHireAssignForm;
+    const setAssign = (changes) => setAdminAiHireAssignForm((prev) => ({ ...prev, ...changes }));
+    const assignments = adminAiHireAssignments?.assignments || [];
+    const departments = adminAiHireAssignments?.departments || [];
+    const stateTone = { open:{ color:"#15803D", background:"#ECFDF3", label:"Open" }, upcoming:{ color:"#A15C07", background:"#FEF6E7", label:"Opens later" }, closed:{ color:"#57534E", background:"#F0EFED", label:"Closed" } };
+    const assignCard = (
+      <div style={{ ...S.adminCard, display:"grid", gap:16 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
+          <div>
+            <div style={{ fontSize:16, fontWeight:600, color:ADMIN_THEME.text }}>Assigned interviews</div>
+            <div style={{ fontSize:13.5, color:ADMIN_THEME.textSecondary, marginTop:4 }}>Give students an AI mock interview for a job you choose. They see it on their AI Hire page; one attempt each, and it does not use their 5 monthly interviews.</div>
+          </div>
+          {!assignForm.open && <button onClick={() => setAssign({ open: true, message: null })} style={S.adminButton("run")}>Assign an interview</button>}
+        </div>
+        {assignForm.message && <div style={S.adminAlert(assignForm.message.type === "error" ? "error" : "success")}>{assignForm.message.text}</div>}
+        {assignForm.open && (
+          <div style={{ display:"grid", gap:12, padding:16, borderRadius:8, background:"#FAFAF9", border:`1px solid ${ADMIN_THEME.divider}` }}>
+            <label>
+              <span style={S.adminFieldLabel}>Title students see</span>
+              <input value={assignForm.title} maxLength={120} onChange={(e) => setAssign({ title: e.target.value })} placeholder="e.g. Full Stack Developer mock interview (CSE final year)" style={S.adminInput} />
+            </label>
+            <label>
+              <span style={S.adminFieldLabel}>Job description</span>
+              <textarea value={assignForm.jdText} onChange={(e) => setAssign({ jdText: e.target.value })} placeholder="Paste the full job description. Meera plans 5-10 questions from it for every student." style={{ ...S.adminTextarea, minHeight:160 }} />
+            </label>
+            <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "repeat(3, minmax(0,1fr))", gap:12 }}>
+              <label>
+                <span style={S.adminFieldLabel}>Students</span>
+                <select value={assignForm.department} onChange={(e) => setAssign({ department: e.target.value })} style={S.adminInput}>
+                  <option value="">All students</option>
+                  {departments.map((department) => <option key={department} value={department}>{department} only</option>)}
+                </select>
+              </label>
+              <label>
+                <span style={S.adminFieldLabel}>Opens (optional)</span>
+                <input type="datetime-local" value={assignForm.startsAt} onChange={(e) => setAssign({ startsAt: e.target.value })} style={S.adminInput} />
+              </label>
+              <label>
+                <span style={S.adminFieldLabel}>Closes (optional)</span>
+                <input type="datetime-local" value={assignForm.endsAt} onChange={(e) => setAssign({ endsAt: e.target.value })} style={S.adminInput} />
+              </label>
+            </div>
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+              <button onClick={createAdminAiHireAssignment} disabled={assignForm.saving} style={{ ...S.adminButton("run"), opacity:assignForm.saving ? 0.6 : 1 }}>{assignForm.saving ? "Assigning..." : "Assign interview"}</button>
+              <button onClick={() => setAssign({ open: false })} style={S.adminButton("default")}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {assignments.length > 0 && (
+          <div style={{ display:"grid", gap:8 }}>
+            {assignments.map((item) => {
+              const tone = stateTone[item.state] || stateTone.open;
+              return (
+                <div key={item.id} style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap", padding:"12px 14px", borderRadius:8, border:`1px solid ${ADMIN_THEME.divider}` }}>
+                  <div style={{ flex:"1 1 260px", minWidth:0 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                      <span style={{ fontWeight:600, color:ADMIN_THEME.text }}>{item.title}</span>
+                      <span style={{ ...tone, fontSize:11.5, fontWeight:500, padding:"2px 7px", borderRadius:4 }}>{tone.label}</span>
+                    </div>
+                    <div style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary, marginTop:3 }}>
+                      {item.department ? `${item.department} students` : "All students"}
+                      {item.startsAt ? ` · opens ${formatDate(item.startsAt)}` : ""}{item.endsAt ? ` · closes ${formatDate(item.endsAt)}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ fontSize:13, color:ADMIN_THEME.textSecondary, whiteSpace:"nowrap" }}>
+                    <strong style={{ color:ADMIN_THEME.text }}>{item.completed}</strong> done · {item.started - item.completed} in progress · {Math.max(0, item.eligible - item.started)} not started
+                    {item.averageScore != null && <> · avg <strong style={{ color:scoreTone(item.averageScore) }}>{item.averageScore}</strong></>}
+                  </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={() => setFilter({ assignmentId: item.id, assignmentTitle: item.title, status: "" })} style={{ ...S.adminButton("default"), padding:"7px 12px", fontSize:13 }}>View results</button>
+                    <button onClick={() => toggleAdminAiHireAssignment(item)} style={{ ...S.adminButton("default"), padding:"7px 12px", fontSize:13, color:item.state === "closed" ? ADMIN_THEME.text : ADMIN_THEME.error }}>{item.state === "closed" ? "Reopen" : "Close"}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
     return (
       <div style={{ display:"grid", gap:20 }}>
+        {assignCard}
         <div style={{ ...S.adminCard, display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, flexWrap:"wrap" }}>
           <div>
             <div style={S.adminSectionTitle}>AI mock interviews</div>
@@ -6691,6 +6835,12 @@ function CodingPlatform() {
           </select>
         </div>
 
+        {adminAiHireFilters.assignmentId && (
+          <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderRadius:8, background:ADMIN_THEME.primaryLight, color:ADMIN_THEME.primary, fontSize:13.5 }}>
+            <span style={{ flex:1 }}>Showing results for <strong>{adminAiHireFilters.assignmentTitle}</strong></span>
+            <button onClick={() => setFilter({ assignmentId: "", assignmentTitle: "" })} style={{ background:"none", border:"none", color:"inherit", cursor:"pointer", fontFamily:"inherit", textDecoration:"underline" }}>Show all interviews</button>
+          </div>
+        )}
         {adminAiHireError && <div style={S.adminAlert("error")}>{adminAiHireError}</div>}
 
         <div style={S.adminTableWrap}>
@@ -6713,6 +6863,7 @@ function CodingPlatform() {
                   </td>
                   <td style={S.adminTableCell}>
                     <div style={{ fontWeight:500 }}>{row.role || "--"}</div>
+                    {row.assignmentTitle && <div style={{ fontSize:11.5, color:ADMIN_THEME.primary, marginTop:2 }}>Assigned: {row.assignmentTitle}</div>}
                     <div style={{ fontSize:12.5, color:ADMIN_THEME.textSecondary }}>{[row.company, row.seniority].filter(Boolean).join(" · ")}</div>
                   </td>
                   <td style={{ ...S.adminTableCell, whiteSpace:"nowrap", color:ADMIN_THEME.textSecondary, fontSize:13 }}>{formatDate(row.createdAt)}</td>
@@ -12659,7 +12810,47 @@ function CodingPlatform() {
       </ul>
     );
 
+    const fmtWhen = (value) => (value ? new Date(value).toLocaleString("en-IN", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "");
+    const assignedBlock = aiHireAssignments.length > 0 && (
+      <div style={{ marginBottom:24 }}>
+        <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:12 }}>
+          <span style={{ fontSize:13, fontWeight:600, letterSpacing:"0.12em", textTransform:"uppercase", color:C.muted }}>Assigned interviews</span>
+          <span style={{ fontSize:12.5, color:C.dim }}>Given by your college · one attempt each · does not use your monthly interviews</span>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:isPhone ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap:12 }}>
+          {aiHireAssignments.map((item) => {
+            const attempt = item.attempt;
+            const done = attempt?.status === "completed";
+            const open = item.state === "open" && !attempt;
+            return (
+              <div key={item.id} style={{ ...card, padding:"18px 18px 16px", borderRadius:14, border:`1px solid ${open ? "rgba(232,135,58,0.55)" : C.border}`, background:open ? "linear-gradient(160deg, rgba(232,135,58,0.10), #181818 60%)" : C.card, display:"grid", gap:10 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  <span style={{ fontSize:11.5, fontWeight:600, padding:"2px 8px", borderRadius:999, border:`1px solid ${done ? C.green : open ? C.accent : "#3a3a3a"}`, color:done ? C.green : open ? C.accent : C.muted }}>
+                    {done ? "Completed" : attempt ? "Started" : item.state === "upcoming" ? "Opens soon" : item.state === "closed" ? "Closed" : "Open now"}
+                  </span>
+                  {done && attempt.overallScore != null && <span style={{ marginLeft:"auto", fontFamily:mono, color:scoreColor(attempt.overallScore, 100) }}>{attempt.overallScore}/100</span>}
+                </div>
+                <div style={{ fontSize:16, fontWeight:600, color:C.text, lineHeight:1.35 }}>{item.title}</div>
+                <div style={{ fontSize:12.5, color:C.muted }}>
+                  {item.state === "upcoming" && item.startsAt ? `Opens ${fmtWhen(item.startsAt)}` : item.endsAt ? `Closes ${fmtWhen(item.endsAt)}` : "No closing date"}
+                </div>
+                {done ? (
+                  <button onClick={() => openAiHireHistoryItem(attempt.interviewId)} style={{ ...secondary, justifySelf:"start", fontSize:13.5, padding:"8px 14px" }}>View my report</button>
+                ) : attempt ? (
+                  <div style={{ fontSize:13, color:C.amber }}>You started this interview but did not finish it.</div>
+                ) : open ? (
+                  <button onClick={() => startAiHireInterview(item)} disabled={Boolean(aiHireBusy) || aiHireStatus?.configured === false} style={{ ...primary(Boolean(aiHireBusy)), justifySelf:"start", fontSize:14, padding:"9px 16px" }}>Start interview</button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+
     const setupView = (
+      <>
+      {assignedBlock}
       <div style={{ display:"grid", gridTemplateColumns:isCompact ? "minmax(0,1fr)" : "minmax(0,1fr) 300px", gap:28, alignItems:"start" }}>
         <div style={{ ...card, display:"grid", gap:18 }}>
           <div>
@@ -12712,7 +12903,7 @@ function CodingPlatform() {
           </div>
           {aiHireError && <div role="alert" style={{ color:"#ff8a8a", fontSize:14 }}>{aiHireError}</div>}
           <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
-            <button onClick={startAiHireInterview} disabled={Boolean(aiHireBusy) || aiHireStatus?.configured === false || aiHireStatus?.interviewsLeft === 0} style={primary(Boolean(aiHireBusy) || aiHireStatus?.configured === false || aiHireStatus?.interviewsLeft === 0)}>
+            <button onClick={() => startAiHireInterview()} disabled={Boolean(aiHireBusy) || aiHireStatus?.configured === false || aiHireStatus?.interviewsLeft === 0} style={primary(Boolean(aiHireBusy) || aiHireStatus?.configured === false || aiHireStatus?.interviewsLeft === 0)}>
               {aiHireBusy === "plan" && spinner}
               {aiHireBusy === "plan" ? "Preparing..." : "Start interview"}
             </button>
@@ -12777,6 +12968,7 @@ function CodingPlatform() {
           )}
         </aside>
       </div>
+      </>
     );
 
     const interviewView = plan && (() => {
@@ -13196,7 +13388,7 @@ function CodingPlatform() {
             {aiHireStep === "interview" ? (
               <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:22, paddingBottom:18, borderBottom:"1px solid #1f1f1f" }}>
                 <h1 style={{ margin:0, fontSize:isPhone ? 20 : 22, fontWeight:700, color:C.text }}>AI Hire</h1>
-                <span style={{ fontSize:13.5, color:C.muted }}>{total} questions · feedback after each answer</span>
+                <span style={{ fontSize:13.5, color:C.muted }}>{aiHireAssignment ? `${aiHireAssignment.title} · ` : ""}{total} questions · feedback after each answer</span>
                 <button onClick={() => resetAiHire(false)} style={{ ...secondary, marginLeft:"auto", fontSize:13.5, padding:"8px 14px" }}>End and start over</button>
               </div>
             ) : (
