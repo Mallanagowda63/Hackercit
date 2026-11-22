@@ -1330,19 +1330,211 @@ const PLAYGROUND_STARTER_CODE = Object.freeze({
   java: "// DevOrbit IDE: the class must be named Main. Press Run (Ctrl+Enter).\nimport java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        String name = scanner.hasNextLine() ? scanner.nextLine().trim() : \"\";\n        if (name.isEmpty()) {\n            name = \"World\";\n        }\n        System.out.println(\"Hello, \" + name + \"!\");\n    }\n}\n",
 });
 
+// Files in the IDE workspace: a flat list of { id, type: "file" | "folder", name, parentId, code }.
+// A file's language comes from its extension.
+const PLAYGROUND_EXTENSIONS = Object.freeze({ python: "py", javascript: "js", java: "java" });
+const PLAYGROUND_DEFAULT_NAMES = Object.freeze({ python: "main.py", javascript: "main.js", java: "Main.java" });
+
+function playgroundLangFromName(name) {
+  const ext = String(name || "").split(".").pop().toLowerCase();
+  return Object.keys(PLAYGROUND_EXTENSIONS).find((lang) => PLAYGROUND_EXTENSIONS[lang] === ext) || null;
+}
+
+function playgroundNewId() {
+  return `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function makePlaygroundFile(lang, code, name = PLAYGROUND_DEFAULT_NAMES[lang], parentId = null) {
+  return { id: playgroundNewId(), type: "file", name, parentId, code: typeof code === "string" ? code : PLAYGROUND_STARTER_CODE[lang] };
+}
+
 function loadPlaygroundDraft() {
-  const fallback = { lang: "python", codes: {}, stdin: "" };
+  const starter = makePlaygroundFile("python");
+  const fallback = { files: [starter], activeId: starter.id, stdin: "" };
   try {
     const parsed = JSON.parse(window.localStorage?.getItem(PLAYGROUND_STORAGE_KEY) || "null");
     if (!parsed || typeof parsed !== "object") return fallback;
-    return {
-      lang: PLAYGROUND_LANGUAGES.some((item) => item.id === parsed.lang) ? parsed.lang : "python",
-      codes: parsed.codes && typeof parsed.codes === "object" ? parsed.codes : {},
-      stdin: typeof parsed.stdin === "string" ? parsed.stdin : "",
-    };
+    const stdin = typeof parsed.stdin === "string" ? parsed.stdin : "";
+    let files = Array.isArray(parsed.files)
+      ? parsed.files.filter((item) => item && typeof item.id === "string" && typeof item.name === "string" && (item.type === "file" || item.type === "folder"))
+      : null;
+    let activeId = typeof parsed.activeId === "string" ? parsed.activeId : null;
+    if (!files) {
+      // Older drafts kept one buffer per language; turn each into a file.
+      const codes = parsed.codes && typeof parsed.codes === "object" ? parsed.codes : {};
+      const lang = PLAYGROUND_LANGUAGES.some((item) => item.id === parsed.lang) ? parsed.lang : "python";
+      files = PLAYGROUND_LANGUAGES
+        .filter((item) => item.id === lang || typeof codes[item.id] === "string")
+        .map((item) => makePlaygroundFile(item.id, codes[item.id]));
+      activeId = files.find((item) => playgroundLangFromName(item.name) === lang)?.id || null;
+    }
+    if (!files.some((item) => item.type === "file")) files = [...files, starter];
+    if (!files.some((item) => item.id === activeId && item.type === "file")) activeId = files.find((item) => item.type === "file").id;
+    return { files, activeId, stdin };
   } catch {
     return fallback;
   }
+}
+
+function PlaygroundExplorer({ files, activeId, onOpen, onCreate, onRename, onDelete, defaultExt }) {
+  const [expanded, setExpanded] = useState(() => new Set(files.filter((item) => item.type === "folder").map((item) => item.id)));
+  const [selectedFolder, setSelectedFolder] = useState(null);
+  const [editing, setEditing] = useState(null); // { mode: "new", type, parentId } | { mode: "rename", id }
+  const [draftName, setDraftName] = useState("");
+  const [error, setError] = useState("");
+  const [hoverId, setHoverId] = useState(null);
+  const settledRef = useRef(true); // true once the current name edit was committed or cancelled
+  const mono = "'IBM Plex Mono','JetBrains Mono',monospace";
+
+  const childrenOf = (parentId) => files
+    .filter((item) => (item.parentId || null) === parentId)
+    .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "folder" ? -1 : 1));
+
+  const startNew = (type) => {
+    const parentId = selectedFolder && files.some((item) => item.id === selectedFolder) ? selectedFolder : null;
+    if (parentId) setExpanded((prev) => new Set(prev).add(parentId));
+    settledRef.current = false;
+    setEditing({ mode: "new", type, parentId });
+    setDraftName("");
+    setError("");
+  };
+
+  const startRename = (item) => {
+    settledRef.current = false;
+    setEditing({ mode: "rename", id: item.id });
+    setDraftName(item.name);
+    setError("");
+  };
+
+  const cancel = () => { settledRef.current = true; setEditing(null); setError(""); };
+
+  const commit = () => {
+    if (!editing || settledRef.current) return;
+    let name = draftName.trim();
+    if (!name) { cancel(); return; }
+    if (/[\\/]/.test(name)) { setError("Names cannot contain / or \\"); return; }
+    const isFile = editing.mode === "new" ? editing.type === "file" : files.find((item) => item.id === editing.id)?.type === "file";
+    if (isFile && !name.includes(".")) name = `${name}.${defaultExt}`;
+    if (isFile && !playgroundLangFromName(name)) { setError("Use .py, .js or .java"); return; }
+    const parentId = editing.mode === "new" ? editing.parentId : (files.find((item) => item.id === editing.id)?.parentId || null);
+    const clash = files.some((item) => (item.parentId || null) === parentId && item.name.toLowerCase() === name.toLowerCase() && item.id !== editing.id);
+    if (clash) { setError(`"${name}" already exists here`); return; }
+    if (editing.mode === "new") {
+      const id = onCreate(editing.type, name, parentId);
+      if (editing.type === "folder" && id) { setExpanded((prev) => new Set(prev).add(id)); setSelectedFolder(id); }
+    } else {
+      onRename(editing.id, name);
+    }
+    cancel();
+  };
+
+  const nameInput = (depth) => (
+    <div style={{ padding:`2px 8px 2px ${10 + depth * 14}px` }}>
+      <input
+        autoFocus
+        value={draftName}
+        onChange={(e) => { setDraftName(e.target.value); setError(""); }}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } else if (e.key === "Escape") { e.preventDefault(); cancel(); } }}
+        onBlur={() => { if (!error) commit(); }}
+        placeholder={editing?.mode === "new" && editing.type === "folder" ? "folder name" : `name.${defaultExt}`}
+        spellCheck={false}
+        style={{ width:"100%", boxSizing:"border-box", background:"#1b1b1b", border:`1px solid ${error ? "#e5575f" : "#e8873a"}`, borderRadius:4, color:"#ececec", fontFamily:mono, fontSize:12.5, padding:"3px 6px", outline:"none" }}
+      />
+      {error && <div style={{ color:"#ff8a8a", fontSize:11.5, marginTop:3 }}>{error}</div>}
+    </div>
+  );
+
+  const iconBtn = { background:"none", border:"none", color:"#8e8e8e", cursor:"pointer", padding:3, borderRadius:4, display:"inline-flex", alignItems:"center" };
+  const fileColor = (name) => ({ python:"#5b9bd5", javascript:"#e9c84a", java:"#e5795f" }[playgroundLangFromName(name)] || "#8e8e8e");
+
+  const renderNodes = (parentId, depth) => {
+    const nodes = childrenOf(parentId);
+    const showNew = editing?.mode === "new" && editing.parentId === parentId;
+    return (
+      <>
+        {showNew && editing.type === "folder" && nameInput(depth)}
+        {nodes.map((item) => {
+          if (editing?.mode === "rename" && editing.id === item.id) return <div key={item.id}>{nameInput(depth)}</div>;
+          const isFolder = item.type === "folder";
+          const isOpen = expanded.has(item.id);
+          const isActive = !isFolder && item.id === activeId;
+          const isSelectedFolder = isFolder && item.id === selectedFolder;
+          return (
+            <div key={item.id}>
+              <div
+                onClick={() => {
+                  if (isFolder) {
+                    setExpanded((prev) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; });
+                    setSelectedFolder(item.id);
+                  } else {
+                    setSelectedFolder(item.parentId || null);
+                    onOpen(item.id);
+                  }
+                }}
+                onDoubleClick={() => startRename(item)}
+                onMouseEnter={() => setHoverId(item.id)}
+                onMouseLeave={() => setHoverId(null)}
+                title={item.name}
+                style={{ display:"flex", alignItems:"center", gap:6, padding:`4px 6px 4px ${10 + depth * 14}px`, cursor:"pointer", fontSize:13, color:isActive ? "#f2f2f2" : "#c9c9c9", background:isActive ? "#262626" : isSelectedFolder ? "#1e1e1e" : hoverId === item.id ? "#1c1c1c" : "transparent", borderLeft:`2px solid ${isActive ? "#e8873a" : "transparent"}`, userSelect:"none" }}
+              >
+                {isFolder ? (
+                  <>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8e8e8e" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ transform:isOpen ? "rotate(90deg)" : "none", transition:"transform 0.12s", flexShrink:0 }} aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill={isOpen ? "none" : "#c9a24a"} stroke="#c9a24a" strokeWidth="2" strokeLinejoin="round" style={{ flexShrink:0 }} aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" /></svg>
+                  </>
+                ) : (
+                  <span style={{ width:10, flexShrink:0 }} />
+                )}
+                {!isFolder && <span style={{ fontFamily:mono, fontSize:9.5, fontWeight:700, color:fileColor(item.name), width:14, textAlign:"center", flexShrink:0 }}>{{ python:"PY", javascript:"JS", java:"J" }[playgroundLangFromName(item.name)] || "•"}</span>}
+                <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.name}</span>
+                {hoverId === item.id && (
+                  <span style={{ display:"inline-flex", gap:1, flexShrink:0 }} onClick={(e) => e.stopPropagation()}>
+                    <button style={iconBtn} title="Rename" aria-label={`Rename ${item.name}`} onClick={() => startRename(item)}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /></svg>
+                    </button>
+                    <button style={iconBtn} title="Delete" aria-label={`Delete ${item.name}`}
+                      onClick={() => {
+                        const msg = isFolder ? `Delete the folder "${item.name}" and everything inside it?` : `Delete "${item.name}"?`;
+                        if (window.confirm(msg)) { onDelete(item.id); if (selectedFolder === item.id) setSelectedFolder(null); }
+                      }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+                    </button>
+                  </span>
+                )}
+              </div>
+              {isFolder && isOpen && renderNodes(item.id, depth + 1)}
+            </div>
+          );
+        })}
+        {showNew && editing.type === "file" && nameInput(depth)}
+      </>
+    );
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", minHeight:0, height:"100%", background:"#151515", fontFamily:"'IBM Plex Sans','Outfit',sans-serif" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:2, padding:"8px 6px 8px 12px", borderBottom:"1px solid #222" }}>
+        <span style={{ fontSize:11, fontWeight:600, letterSpacing:"0.12em", color:"#8e8e8e", flex:1 }}>EXPLORER</span>
+        <button style={iconBtn} title="New file" aria-label="New file" onClick={() => startNew("file")}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#f2f2f2"; }} onMouseLeave={(e) => { e.currentTarget.style.color = "#8e8e8e"; }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z" /><path d="M14 3v5h5M12 11v6M9 14h6" /></svg>
+        </button>
+        <button style={iconBtn} title="New folder" aria-label="New folder" onClick={() => startNew("folder")}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#f2f2f2"; }} onMouseLeave={(e) => { e.currentTarget.style.color = "#8e8e8e"; }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" /><path d="M12 11v6M9 14h6" /></svg>
+        </button>
+      </div>
+      <div
+        style={{ flex:1, minHeight:0, overflowY:"auto", padding:"4px 0" }}
+        onClick={(e) => { if (e.target === e.currentTarget) setSelectedFolder(null); }}
+      >
+        {renderNodes(null, 0)}
+      </div>
+      <div style={{ fontSize:11, color:"#5c5c5c", padding:"8px 12px", borderTop:"1px solid #222", lineHeight:1.5 }}>
+        Double-click to rename. The open file is what runs.
+      </div>
+    </div>
+  );
 }
 
 // ── DAILY STREAK CALENDAR ────────────────────────────────────────────────────
@@ -1953,6 +2145,7 @@ function CodingPlatform() {
   const [playgroundDraft, setPlaygroundDraft] = useState(loadPlaygroundDraft);
   const [playgroundRunning, setPlaygroundRunning] = useState(false);
   const [playgroundResult, setPlaygroundResult] = useState(null);
+  const [playgroundExplorerOpen, setPlaygroundExplorerOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 900);
   const playgroundTextareaRef = useRef(null);
   const [adminChallenges, setAdminChallenges] = useState([]);
   const [adminChallengesLoading, setAdminChallengesLoading] = useState(false);
@@ -3489,14 +3682,14 @@ function CodingPlatform() {
   };
 
   // ── Practice IDE ──
-  const playgroundLang = playgroundDraft.lang;
-  const playgroundCode = typeof playgroundDraft.codes[playgroundLang] === "string"
-    ? playgroundDraft.codes[playgroundLang]
-    : PLAYGROUND_STARTER_CODE[playgroundLang];
+  const playgroundActiveFile = playgroundDraft.files.find((item) => item.id === playgroundDraft.activeId && item.type === "file")
+    || playgroundDraft.files.find((item) => item.type === "file");
+  const playgroundLang = playgroundLangFromName(playgroundActiveFile?.name) || "python";
+  const playgroundCode = typeof playgroundActiveFile?.code === "string" ? playgroundActiveFile.code : "";
 
-  const updatePlaygroundDraft = (changes) => {
+  const savePlaygroundDraft = (update) => {
     setPlaygroundDraft((prev) => {
-      const next = { ...prev, ...changes };
+      const next = update(prev);
       try {
         window.localStorage?.setItem(PLAYGROUND_STORAGE_KEY, JSON.stringify(next));
       } catch {
@@ -3506,17 +3699,57 @@ function CodingPlatform() {
     });
   };
 
-  const setPlaygroundCode = (nextCode) => {
-    setPlaygroundDraft((prev) => {
-      const next = { ...prev, codes: { ...prev.codes, [prev.lang]: nextCode } };
-      try {
-        window.localStorage?.setItem(PLAYGROUND_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Storage can be full or blocked; the draft still lives for this visit.
-      }
-      return next;
-    });
+  const updatePlaygroundDraft = (changes) => savePlaygroundDraft((prev) => ({ ...prev, ...changes }));
+
+  const setPlaygroundCode = (nextCode) => savePlaygroundDraft((prev) => ({
+    ...prev,
+    files: prev.files.map((item) => (item.id === prev.activeId ? { ...item, code: nextCode } : item)),
+  }));
+
+  // Changing the language renames the open file's extension.
+  const setPlaygroundLanguage = (lang) => savePlaygroundDraft((prev) => ({
+    ...prev,
+    files: prev.files.map((item) => {
+      if (item.id !== prev.activeId) return item;
+      const base = item.name.includes(".") ? item.name.slice(0, item.name.lastIndexOf(".")) : item.name;
+      const wasStarter = !item.code.trim() || Object.values(PLAYGROUND_STARTER_CODE).includes(item.code);
+      return { ...item, name: `${lang === "java" ? "Main" : base}.${PLAYGROUND_EXTENSIONS[lang]}`, code: wasStarter ? PLAYGROUND_STARTER_CODE[lang] : item.code };
+    }),
+  }));
+
+  const openPlaygroundFile = (id) => {
+    if (id === playgroundDraft.activeId) return;
+    updatePlaygroundDraft({ activeId: id });
+    setPlaygroundResult(null);
   };
+
+  const createPlaygroundEntry = (type, name, parentId) => {
+    const lang = playgroundLangFromName(name);
+    const entry = type === "folder"
+      ? { id: playgroundNewId(), type: "folder", name, parentId }
+      : makePlaygroundFile(lang, PLAYGROUND_STARTER_CODE[lang], name, parentId);
+    savePlaygroundDraft((prev) => ({ ...prev, files: [...prev.files, entry], activeId: type === "file" ? entry.id : prev.activeId }));
+    if (type === "file") setPlaygroundResult(null);
+    return entry.id;
+  };
+
+  const renamePlaygroundEntry = (id, name) => savePlaygroundDraft((prev) => ({
+    ...prev,
+    files: prev.files.map((item) => (item.id === id ? { ...item, name } : item)),
+  }));
+
+  const deletePlaygroundEntry = (id) => savePlaygroundDraft((prev) => {
+    const doomed = new Set([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      prev.files.forEach((item) => { if (item.parentId && doomed.has(item.parentId) && !doomed.has(item.id)) { doomed.add(item.id); grew = true; } });
+    }
+    let files = prev.files.filter((item) => !doomed.has(item.id));
+    if (!files.some((item) => item.type === "file")) files = [...files, makePlaygroundFile("python")];
+    const activeId = files.some((item) => item.id === prev.activeId) ? prev.activeId : files.find((item) => item.type === "file").id;
+    return { ...prev, files, activeId };
+  });
 
   const runPlayground = async () => {
     if (playgroundRunning) return;
@@ -12844,10 +13077,15 @@ function CodingPlatform() {
             {/* Editor */}
             <div style={{ display:"flex", flexDirection:"column", minHeight: isCompact ? 480 : 0, borderRight: isCompact ? "none" : "1px solid #222", borderBottom: isCompact ? "1px solid #222" : "none" }}>
               <div style={{ ...paneHeader, height:"auto", minHeight:52, flexWrap:"wrap", padding:`8px ${isPhone ? 12 : 16}px` }}>
+                <button className="dv-ide-btn" onClick={() => setPlaygroundExplorerOpen((open) => !open)} title={playgroundExplorerOpen ? "Hide files" : "Show files"} aria-label={playgroundExplorerOpen ? "Hide files" : "Show files"} aria-pressed={playgroundExplorerOpen}
+                  style={{ ...toolButton, padding:"5px 7px", display:"inline-flex", alignItems:"center", color:playgroundExplorerOpen ? "#e8873a" : "#d4d4d4" }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H5.5A1.5 1.5 0 0 0 4 4.5v15A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-15A1.5 1.5 0 0 0 18.5 3H8zM9 3v18" /></svg>
+                </button>
                 <span style={{ color:"#f2f2f2", fontWeight:700, fontSize:14.5, marginRight:4 }}>DevOrbit IDE</span>
+                {playgroundActiveFile && <span style={{ fontFamily:mono, fontSize:12.5, color:"#8e8e8e" }}>{playgroundActiveFile.name}</span>}
                 <select
                   value={playgroundLang}
-                  onChange={(e) => { updatePlaygroundDraft({ lang: e.target.value }); setPlaygroundResult(null); }}
+                  onChange={(e) => { setPlaygroundLanguage(e.target.value); setPlaygroundResult(null); }}
                   aria-label="Language"
                   style={{ background:"#181818", border:"1px solid #333", color:"#ececec", padding:"6px 10px", borderRadius:6, fontSize:13.5, fontFamily:"inherit", cursor:"pointer", outline:"none", minWidth:isPhone ? 0 : 150 }}
                 >
@@ -12864,7 +13102,7 @@ function CodingPlatform() {
                 <div style={{ marginLeft:"auto", display:"flex", gap:8, alignItems:"center" }}>
                   <button className="dv-ide-btn" onClick={() => setPlaygroundCode(formatCode(playgroundCode, playgroundLang))} title="Format code (Ctrl+Shift+F)" style={toolButton}>Format</button>
                   <button className="dv-ide-btn"
-                    onClick={() => { if (window.confirm("Reset the editor to the starter code? Your code for this language will be replaced.")) { setPlaygroundCode(PLAYGROUND_STARTER_CODE[playgroundLang]); setPlaygroundResult(null); } }}
+                    onClick={() => { if (window.confirm(`Reset ${playgroundActiveFile?.name || "this file"} to the starter code? Its code will be replaced.`)) { setPlaygroundCode(PLAYGROUND_STARTER_CODE[playgroundLang]); setPlaygroundResult(null); } }}
                     style={toolButton}
                   >
                     Reset
@@ -12881,9 +13119,23 @@ function CodingPlatform() {
                   </button>
                 </div>
               </div>
-              <div style={{ flex:1, minHeight:0, display:"flex", flexDirection:"column", background:"#141414" }}>
+              <div style={{ flex:1, minHeight:0, display:"flex", flexDirection: isPhone ? "column" : "row", background:"#141414" }}>
+                {playgroundExplorerOpen && (
+                  <div style={{ width: isPhone ? "auto" : 220, height: isPhone ? 200 : "auto", flexShrink:0, borderRight: isPhone ? "none" : "1px solid #222", borderBottom: isPhone ? "1px solid #222" : "none", minHeight:0 }}>
+                    <PlaygroundExplorer
+                      files={playgroundDraft.files}
+                      activeId={playgroundActiveFile?.id}
+                      defaultExt={PLAYGROUND_EXTENSIONS[playgroundLang]}
+                      onOpen={openPlaygroundFile}
+                      onCreate={createPlaygroundEntry}
+                      onRename={renamePlaygroundEntry}
+                      onDelete={deletePlaygroundEntry}
+                    />
+                  </div>
+                )}
+                <div style={{ flex:1, minWidth:0, minHeight:0, display:"flex", flexDirection:"column" }}>
                 <CodeEditor
-                  key={playgroundLang}
+                  key={playgroundActiveFile?.id || playgroundLang}
                   value={playgroundCode}
                   onChange={setPlaygroundCode}
                   language={playgroundLang}
@@ -12900,6 +13152,7 @@ function CodingPlatform() {
                     handleEditorIndentation(e, playgroundCode, setPlaygroundCode, playgroundTextareaRef, playgroundLang);
                   }}
                 />
+                </div>
               </div>
             </div>
 
@@ -12943,7 +13196,7 @@ function CodingPlatform() {
                 )}
               </div>
               <div style={{ color:"#7a7a7a", fontSize:12, padding:`10px ${isPhone ? 12 : 16}px`, borderTop:"1px solid #222", flexShrink:0 }}>
-                Your code and input are saved in this browser. Java code must use <code style={{ fontFamily:mono, color:"#c9c9c9" }}>public class Main</code>.
+                Your files and input are saved in this browser. Run executes the open file. Java code must use <code style={{ fontFamily:mono, color:"#c9c9c9" }}>public class Main</code>.
               </div>
             </div>
           </div>
