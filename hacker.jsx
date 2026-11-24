@@ -1893,7 +1893,6 @@ function MyCollegeCard({ api, S, T, isPhone, compact = false }) {
   return (
     <div style={card}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 999, background: T.primaryLight, color: T.primary }}>College admin</span>
         <span style={{ fontSize: 20, fontWeight: 600, color: T.text }}>{college.name}</span>
         {college.code && <span style={{ fontSize: 12, fontWeight: 600, padding: "1px 7px", borderRadius: 4, border: `1px solid ${T.border}`, color: T.textSecondary }}>{college.code}</span>}
       </div>
@@ -5310,7 +5309,9 @@ function CodingPlatform() {
       }
     }
 
-    if (!IS_ADMIN_ENTRY && !emailPattern.test(email)) {
+    // New student accounts must use Gmail. Logging in works with any email, so admins (for example
+    // a college admin with a college email) can sign in from the main page too.
+    if (authMode === "signup" && !IS_ADMIN_ENTRY && !emailPattern.test(email)) {
       setAuthError("Only @gmail.com email addresses are allowed.");
       return;
     }
@@ -5321,7 +5322,7 @@ function CodingPlatform() {
       const endpoint = authMode === "signup" ? "/api/auth/register" : "/api/auth/login";
       const payload = authMode === "signup"
         ? { email, password, name, usn, department, phone, role: authRole }
-        : { email, password, role: authRole };
+        : (IS_ADMIN_ENTRY ? { email, password, role: authRole } : { email, password });
 
       const response = await fetch(buildBackendApiUrl(endpoint), {
         method: "POST",
@@ -12010,9 +12011,9 @@ function CodingPlatform() {
           <div style={{ maxWidth:1240, margin:"0 auto", padding:`0 ${pageGutter}px`, boxSizing:"border-box" }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, padding:isPhone ? "12px 0 4px" : "14px 0 2px" }}>
               <button onClick={()=>setView("home")} style={{ background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit", fontSize:16, fontWeight:700, color:ADMIN_THEME.text }}>ScholarLogic</button>
-              <span style={{ fontSize:12, fontWeight:600, padding:"2px 8px", borderRadius:999, background:currentUser.superAdmin ? ADMIN_THEME.secondary : ADMIN_THEME.primaryLight, color:currentUser.superAdmin ? "#FFFFFF" : ADMIN_THEME.primary }}>
-                {currentUser.superAdmin ? "Main admin" : "College admin"}
-              </span>
+              {currentUser.superAdmin && (
+                <span style={{ fontSize:12, fontWeight:600, padding:"2px 8px", borderRadius:999, background:ADMIN_THEME.secondary, color:"#FFFFFF" }}>Main admin</span>
+              )}
               {currentUser.superAdmin ? (collegeOptions.length > 0 && (
                 <select
                   value={adminCollegeId}
