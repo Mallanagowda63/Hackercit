@@ -410,13 +410,15 @@ exports.listStudents = async (req, res) => {
 };
 
 
-// DELETE /api/auth/students/:id — main admin only. Permanently deletes a student account and
-// everything recorded for it (practice, tests, results, feedback, AI interviews, notifications).
+// DELETE /api/auth/students/:id — permanently deletes a student account and everything recorded
+// for it (practice, tests, results, feedback, AI interviews, notifications). The main admin can
+// delete any student; a college admin only students of their own college.
 exports.deleteStudent = async (req, res) => {
   try {
-    if (!isSuperAdmin(req.user)) return res.status(403).json({ error: 'Only the main admin can delete student accounts.' });
     const student = await prisma.user.findUnique({ where: { id: String(req.params.id) } });
     if (!student) return res.status(404).json({ error: 'Student not found.' });
+    const ownCollege = Boolean(req.user.collegeId) && String(student.collegeId || '') === String(req.user.collegeId);
+    if (!isSuperAdmin(req.user) && !ownCollege) return res.status(404).json({ error: 'Student not found.' });
     if (effectiveRole(student) !== 'USER') return res.status(400).json({ error: 'Only student accounts can be deleted here.' });
 
     const { idForms } = require('../lib/collegeScope');

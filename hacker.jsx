@@ -1497,6 +1497,92 @@ const SEPARATION_LABELS = {
   aiHireAnswer: "AI interview answers", aiHireAssignment: "AI interview assignments",
 };
 
+// The students of one college, with Remove from college / Delete account (main admin dashboard).
+function CollegeStudentList({ api, college, S, T, onChanged }) {
+  const [open, setOpen] = useState(false);
+  const [students, setStudents] = useState(null);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState("");
+
+  const load = () => api("/api/auth/students", { headers: { "X-College-Id": college.id } })
+    .then((data) => { setStudents(Array.isArray(data.students) ? data.students : []); setError(""); })
+    .catch((err) => setError(err.message || "Could not load the students."));
+
+  useEffect(() => { if (open) load(); }, [open]);
+
+  const label = (student) => `${student.name || student.email}${student.usn ? ` (${student.usn})` : ""}`;
+  const act = async (student, mode) => {
+    if (mode === "remove") {
+      if (!window.confirm(`Remove ${label(student)} from ${college.name}?\n\nTheir DevOrbit account stays; they become a normal student.`)) return;
+    } else {
+      const typed = window.prompt(`Permanently delete ${label(student)}?\n\nThis deletes their account and ALL their data (practice, test scores, feedback, AI interviews). It cannot be undone.\n\nType DELETE to confirm.`);
+      if (typed === null) return;
+      if (typed.trim().toUpperCase() !== "DELETE") { setError("Not deleted. Type DELETE to confirm."); return; }
+    }
+    setBusy(`${mode}-${student.id}`);
+    setError("");
+    try {
+      if (mode === "remove") {
+        await api(`/api/colleges/${college.id}/remove-students`, { method: "POST", body: JSON.stringify({ identifiers: [student.email] }) });
+      } else {
+        await api(`/api/auth/students/${student.id}`, { method: "DELETE" });
+      }
+      setStudents((list) => list.filter((item) => item.id !== student.id));
+      onChanged?.();
+    } catch (err) {
+      setError(err.message || "Something went wrong.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const search = query.trim().toLowerCase();
+  const shown = (students || []).filter((student) => !search
+    || [student.name, student.email, student.usn, student.department].some((value) => String(value || "").toLowerCase().includes(search)));
+  const small = { ...S.adminButton("default"), padding: "5px 10px", fontSize: 12.5 };
+
+  return (
+    <div style={{ marginTop: 18, borderTop: `1px solid ${T.divider}`, paddingTop: 14 }}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 600, color: T.text, display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.12s" }} aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+        Students ({college.studentCount})
+      </button>
+      {open && (
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          {students && students.length > 6 && (
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, email, USN or department" style={{ ...S.adminInput, maxWidth: 360 }} />
+          )}
+          {error && <div role="alert" style={{ ...S.adminAlert("error"), marginBottom: 0 }}>{error}</div>}
+          {!students && !error && <div style={{ color: T.textSecondary, fontSize: 13 }}>Loading students...</div>}
+          {students && !students.length && <div style={{ color: T.textSecondary, fontSize: 13 }}>No students yet. Use "Add students" to share the invite link or upload a class list.</div>}
+          {shown.length > 0 && (
+            <div style={{ border: `1px solid ${T.divider}`, borderRadius: 8, maxHeight: 360, overflowY: "auto" }}>
+              {shown.map((student, index) => (
+                <div key={student.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "9px 12px", borderTop: index ? `1px solid ${T.divider}` : "none" }}>
+                  <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                    <div style={{ fontWeight: 500, color: T.text, fontSize: 14 }}>{student.name || student.email}</div>
+                    <div style={{ color: T.textSecondary, fontSize: 12.5 }}>{[student.email, student.usn, student.department].filter(Boolean).join(" · ")}</div>
+                  </div>
+                  <div style={{ color: T.textSecondary, fontSize: 12.5, flex: "0 0 150px" }}>
+                    {student.lastLoginAt ? `Last login ${collegeWhen(student.lastLoginAt)}` : "Never logged in"}
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button type="button" disabled={Boolean(busy)} onClick={() => act(student, "remove")} style={small}>{busy === `remove-${student.id}` ? "Removing..." : "Remove from college"}</button>
+                    <button type="button" disabled={Boolean(busy)} onClick={() => act(student, "delete")} style={{ ...small, color: T.error }}>{busy === `delete-${student.id}` ? "Deleting..." : "Delete account"}</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {students && search && !shown.length && <div style={{ color: T.textSecondary, fontSize: 13 }}>No student matches "{query}".</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Main admin: confirms every record is tagged with a college and none sits in the wrong one.
 function CollegeSeparationCheck({ api, S, T, isPhone }) {
   const [report, setReport] = useState(null);
@@ -1809,6 +1895,8 @@ function CollegesPanel({ api, S, T, isPhone, onCollegesChanged, onViewCollege })
                 </div>
               </div>
             )}
+
+            <CollegeStudentList key={`students-${college.id}`} api={api} college={college} S={S} T={T} onChanged={() => { load(); onCollegesChanged?.(); }} />
 
             {moving && (
               <div style={{ marginTop: 16 }}>
@@ -9319,7 +9407,7 @@ function CodingPlatform() {
                       Remove from college
                     </button>
                   )}
-                  {currentUser.superAdmin && (
+                  {(currentUser.superAdmin || (currentUser.collegeId && student.collegeId === currentUser.collegeId)) && (
                     <button type="button" title="Permanently delete this student account and all its data."
                       onClick={() => deleteStudentAccount(student)}
                       style={{ ...S.adminButton("default"), padding:"5px 10px", fontSize:12.5, color:ADMIN_THEME.error, marginLeft:6 }}>
