@@ -3518,11 +3518,13 @@ function CodingPlatform() {
       if (streakData) setStreakInfo(streakData);
       if (currentChallengeData) setChallengeData(currentChallengeData);
 
-      // A student only sees the test from the link they opened, never the other live tests.
+      // General students only see the test from the link they opened, never the other live tests.
+      // College students also see their own college's live tests without a link (the server only
+      // ever returns tests of the student's own college).
       const liveAssignments = (Array.isArray(assignmentData.assignments)
         ? assignmentData.assignments.map(mapAssignmentRecord).filter(Boolean)
         : []
-      ).filter((assignment) => STUDENT_TEST_ID && sameValue(assignment.id, STUDENT_TEST_ID));
+      ).filter((assignment) => (STUDENT_TEST_ID && sameValue(assignment.id, STUDENT_TEST_ID)) || Boolean(profileData?.user?.collegeId || currentUser.collegeId));
       const defaultAssignment = liveAssignments[0] || null;
       const availableLiveAssignments = liveAssignments.length
         ? liveAssignments
