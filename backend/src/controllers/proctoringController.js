@@ -1,4 +1,6 @@
+const prisma = require('../prismaClient');
 const proctoringService = require('../lib/proctoringService');
+const { canAccessCollege, scopedAssignmentIds } = require('../lib/collegeScope');
 
 // POST /api/proctoring/events
 exports.recordEvent = async (req, res) => {
@@ -36,6 +38,7 @@ exports.getReports = async (req, res) => {
       status,
       rejectedOnly: rejectedOnly === 'true',
       flaggedOnly: flaggedOnly === 'true',
+      assignmentIds: await scopedAssignmentIds(req),
     });
 
     return res.status(200).json(reportsData);
@@ -56,6 +59,12 @@ exports.reviewAttempt = async (req, res) => {
       return res.status(400).json({ error: 'newStatus is required' });
     }
 
+    const attempt = await prisma.testAttempt.findUnique({ where: { id: attemptId }, select: { id: true, assignmentId: true } });
+    const assignment = attempt ? await prisma.testAssignment.findUnique({ where: { id: attempt.assignmentId }, select: { id: true, collegeId: true } }) : null;
+    if (!assignment || !canAccessCollege(adminUser, assignment.collegeId)) {
+      return res.status(404).json({ error: 'Attempt not found' });
+    }
+
     const result = await proctoringService.reviewProctoringAttempt(attemptId, adminUser, { newStatus, note });
     return res.status(200).json(result);
   } catch (err) {
@@ -67,7 +76,7 @@ exports.reviewAttempt = async (req, res) => {
 // GET /api/reports/proctoring/export
 exports.exportReportsCSV = async (req, res) => {
   try {
-    const reportsData = await proctoringService.getProctoringReports(req.query);
+    const reportsData = await proctoringService.getProctoringReports({ ...req.query, assignmentIds: await scopedAssignmentIds(req) });
     const reports = reportsData.reports || [];
 
     const headers = [

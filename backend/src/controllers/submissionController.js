@@ -2,6 +2,7 @@ const prisma = require('../prismaClient');
 const { executeSubmission } = require('../lib/executionService');
 const { getBadgePresentation, resolveBadgeForSolvedCount, syncUserBadge } = require('../lib/badgeService');
 const { computeStreak, calendarFromCounts } = require('../lib/streakService');
+const { canAccessCollege, scopeCollegeId, collegeKey } = require('../lib/collegeScope');
 const LEVEL_LABELS = {
   0: 'No Submission',
   1: 'Easy',
@@ -500,6 +501,10 @@ exports.listByUser = async (req, res) => {
   if (req.user.id !== userId && req.user.role !== 'ADMIN') {
     return res.status(403).json({ error: 'forbidden' });
   }
+  if (req.user.id !== userId) {
+    const student = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, collegeId: true } });
+    if (!student || !canAccessCollege(req.user, student.collegeId)) return res.status(404).json({ error: 'not found' });
+  }
 
   const list = await prisma.submission.findMany({
     where: { userId },
@@ -513,7 +518,8 @@ exports.listByUser = async (req, res) => {
 // build is shared for a few seconds (and concurrent requests wait on the same build) instead of
 // reloading every user, submission and result from MongoDB per request.
 const LEADERBOARD_CACHE_MS = Number(process.env.LEADERBOARD_CACHE_MS || 15000);
-let leaderboardCache = { payload: null, builtAt: 0, pending: null };
+// One cache entry per college ('all' = every college, for the main admin).
+const leaderboardCaches = new Map();
 
 const LEADERBOARD_FIELDS = {
   user: {
@@ -531,45 +537,52 @@ const LEADERBOARD_FIELDS = {
   },
 };
 
+// Students rank within their own college; admins see the college(s) they manage.
 exports.leaderboard = async (req, res) => {
   try {
-    if (leaderboardCache.payload && Date.now() - leaderboardCache.builtAt < LEADERBOARD_CACHE_MS) {
-      return res.json(leaderboardCache.payload);
+    const collegeId = req.user.role === 'ADMIN' ? scopeCollegeId(req) : collegeKey(req.user.collegeId);
+    const key = collegeId || 'all';
+    const cache = leaderboardCaches.get(key) || { payload: null, builtAt: 0, pending: null };
+    leaderboardCaches.set(key, cache);
+    if (cache.payload && Date.now() - cache.builtAt < LEADERBOARD_CACHE_MS) {
+      return res.json(cache.payload);
     }
 
-    if (!leaderboardCache.pending) {
-      leaderboardCache.pending = buildLeaderboard()
+    if (!cache.pending) {
+      cache.pending = buildLeaderboard(collegeId)
         .then((payload) => {
-          leaderboardCache = { payload, builtAt: Date.now(), pending: null };
+          Object.assign(cache, { payload, builtAt: Date.now(), pending: null });
           return payload;
         })
         .catch((error) => {
-          leaderboardCache.pending = null;
+          cache.pending = null;
           throw error;
         });
     }
 
-    return res.json(await leaderboardCache.pending);
+    return res.json(await cache.pending);
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: 'server error' });
   }
 };
 
-async function buildLeaderboard() {
-    const activeAssignment = await prisma.testAssignment.findFirst({
+async function buildLeaderboard(collegeId = null) {
+    // `collegeId` is a college id, "general", or null for everyone.
+    const inGroup = (value) => collegeId === null || collegeKey(value) === collegeId;
+    const activeAssignment = (await prisma.testAssignment.findMany({
       where: { status: 'LIVE' },
       orderBy: { startsAt: 'desc' },
-    });
+    })).find((assignment) => inGroup(assignment.collegeId)) || null;
 
     // Only the fields the leaderboard uses are read (not code, test results or exam answers).
-    const students = await prisma.user.findMany({
+    const students = (await prisma.user.findMany({
       where: {
         role: { in: ['USER', 'STUDENT', 'user', 'student'] },
       },
       orderBy: [{ lastLoginAt: 'desc' }, { createdAt: 'desc' }],
-      select: LEADERBOARD_FIELDS.user,
-    });
+      select: { ...LEADERBOARD_FIELDS.user, collegeId: true },
+    })).filter((student) => inGroup(student.collegeId));
 
     if (!students.length) {
       return {

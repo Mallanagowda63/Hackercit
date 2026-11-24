@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { sendEmail, isMailConfigured } = require('../lib/mailer');
 const { getBadgePresentation, syncBadgesForUsers, syncUserBadge } = require('../lib/badgeService');
+const { isSuperAdmin, filterByScope } = require('../lib/collegeScope');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
 
@@ -44,6 +45,8 @@ function serializeUser(user) {
     phone: user.phone || '',
     role: toClientRole(effectiveRole(user)),
     dbRole: effectiveRole(user),
+    collegeId: user.collegeId ? String(user.collegeId) : null,
+    superAdmin: isSuperAdmin(user),
     verified: Boolean(user.verified),
     createdAt: user.createdAt,
     lastLoginAt: user.lastLoginAt,
@@ -171,6 +174,7 @@ exports.register = async (req, res) => {
     const mobileNumber = normalizeMobileNumber(phone);
     if (!mobileNumber) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
 
+    // Sign-up is the same for everyone. A partner college adds its students afterwards.
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: 'email in use' });
     if (trimmedUsn) {
@@ -313,8 +317,8 @@ exports.login = async (req, res) => {
     }
 
     const requestedRole = normalizeRole(role);
-    if (requestedRole === 'ADMIN' && (!envAdminEmail || inputEmail !== envAdminEmail)) {
-      return res.status(403).json({ error: 'Only the designated admin email can access as ADMIN' });
+    if (requestedRole === 'ADMIN' && effectiveRole(user) !== 'ADMIN') {
+      return res.status(403).json({ error: 'This account is not an admin account.' });
     }
     if (requestedRole && effectiveRole(user) !== requestedRole) {
       return res.status(403).json({ error: 'selected role does not match this account' });
@@ -380,10 +384,10 @@ exports.resetPassword = async (req, res) => {
 
 exports.listStudents = async (req, res) => {
   try {
-    const students = await prisma.user.findMany({
+    const students = filterByScope(req, await prisma.user.findMany({
       where: { role: 'USER' },
       orderBy: [{ lastLoginAt: 'desc' }, { createdAt: 'desc' }],
-    });
+    }));
     const studentsWithBadges = await syncBadgesForUsers(students);
 
     return res.json({

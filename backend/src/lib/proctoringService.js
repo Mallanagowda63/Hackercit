@@ -141,7 +141,7 @@ function formatStudentUsn(user) {
 }
 
 async function getProctoringReports(filters = {}) {
-  const attempts = await prisma.testAttempt.findMany({
+  const allAttempts = await prisma.testAttempt.findMany({
     include: {
       user: { select: { id: true, name: true, email: true, usn: true, department: true } },
       assignment: { select: { id: true, title: true, durationMinutes: true, status: true } },
@@ -153,6 +153,11 @@ async function getProctoringReports(filters = {}) {
       finishReason: true, interruptions: true, adminDecision: true, proctoringStatus: true, score: true, maxScore: true,
     },
   });
+
+  // A college admin only sees attempts at their own college's tests.
+  const attempts = filters.assignmentIds
+    ? allAttempts.filter((attempt) => filters.assignmentIds.has(String(attempt.assignmentId)))
+    : allAttempts;
 
   const missingUserIds = [...new Set(attempts.filter((a) => !a.user && a.userId).map((a) => a.userId))];
   let resolvedUserMap = new Map();

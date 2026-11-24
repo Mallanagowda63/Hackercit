@@ -459,7 +459,8 @@ class MongoModel {
 
   async create({ data }) {
     const collection = await this.collection();
-    const prepared = sanitizeForStorage(applyDefaults(this.modelName, data || {}));
+    const stamped = await stampCollege(this.modelName, data || {});
+    const prepared = sanitizeForStorage(applyDefaults(this.modelName, stamped));
     const document = {
       _id: new ObjectId(),
       ...prepared,
@@ -537,6 +538,39 @@ class MongoModel {
 
 let prisma = null;
 
+// Every record that belongs to a college carries its collegeId, so one college's data never mixes
+// with another's. Records about a test take the test's college; everything else takes the
+// student's college. Set here, on create, so no code path can forget it.
+const COLLEGE_FROM = {
+  testAttempt: 'assignment',
+  assessmentSubmission: 'assignment',
+  testFeedback: 'assignment',
+  submission: 'user',
+  aiHireInterview: 'user',
+  aiHireAnswer: 'user',
+  notification: 'user',
+};
+
+async function collegeOfAssignment(assignmentId) {
+  if (!/^[0-9a-f]{24}$/i.test(String(assignmentId || ''))) return null;
+  const assignment = await prisma.testAssignment.findUnique({ where: { id: String(assignmentId) }, select: { id: true, collegeId: true } }).catch(() => null);
+  return assignment?.collegeId ? String(assignment.collegeId) : null;
+}
+
+async function collegeOfUser(userId) {
+  if (!/^[0-9a-f]{24}$/i.test(String(userId || ''))) return null;
+  const user = await prisma.user.findUnique({ where: { id: String(userId) }, select: { id: true, collegeId: true } }).catch(() => null);
+  return user?.collegeId ? String(user.collegeId) : null;
+}
+
+async function stampCollege(modelName, data) {
+  const source = COLLEGE_FROM[modelName];
+  if (!source || data.collegeId) return data;
+  const collegeId = (source === 'assignment' ? await collegeOfAssignment(data.assignmentId) : null)
+    || await collegeOfUser(data.userId);
+  return collegeId ? { ...data, collegeId } : data;
+}
+
 function idKey(value) {
   if (value instanceof ObjectId) return value.toHexString();
   return value === null || value === undefined ? '' : String(value);
@@ -598,6 +632,7 @@ prisma = {
   aiHireInterview: new MongoModel('aiHireInterview', 'AiHireInterview'),
   aiHireAnswer: new MongoModel('aiHireAnswer', 'AiHireAnswer'),
   aiHireAssignment: new MongoModel('aiHireAssignment', 'AiHireAssignment'),
+  college: new MongoModel('college', 'College'),
   async $transaction(operations) {
     return Promise.all(operations);
   },

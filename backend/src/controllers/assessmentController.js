@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const prisma = require('../prismaClient');
+const { canAccessCollege } = require('../lib/collegeScope');
 const { inCurrentRun } = require('./testController');
 const { executeSubmission } = require('../lib/executionService');
 
@@ -43,12 +44,13 @@ exports.submitAssessment = async (req, res) => {
 
     let assignment = await prisma.testAssignment.findUnique({ where: { id } });
     if (!assignment && id === 'active') {
-      assignment = await prisma.testAssignment.findFirst({
+      const live = await prisma.testAssignment.findMany({
         where: { status: 'LIVE' },
         orderBy: { startsAt: 'desc' },
       });
+      assignment = live.find((item) => canAccessCollege(req.user, item.collegeId)) || null;
     }
-    if (!assignment) {
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) {
       return res.status(404).json({ error: 'assignment not found' });
     }
 
@@ -392,7 +394,7 @@ exports.saveDraft = async (req, res) => {
     const { final = false } = body;
     const hasAnswers = 'theoryAnswers' in body || 'codingAnswers' in body;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'assignment not found' });
 
     const attempt = await prisma.testAttempt.findFirst({
       where: { assignmentId: assignment.id, userId: req.user.id },
@@ -500,10 +502,11 @@ exports.getAssessmentResult = async (req, res) => {
     const userId = req.user.id;
 
     if (id === 'active') {
-      const activeAssignment = await prisma.testAssignment.findFirst({
+      const live = await prisma.testAssignment.findMany({
         where: { status: 'LIVE' },
         orderBy: { startsAt: 'desc' },
       });
+      const activeAssignment = live.find((item) => canAccessCollege(req.user, item.collegeId));
       if (activeAssignment) {
         id = activeAssignment.id;
       }

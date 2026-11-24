@@ -12,9 +12,10 @@ const clearsProblemCaches = (req, res, next) => {
   next();
 };
 const { requireAuth, requireRole } = require('../middleware/authMiddleware');
+const { requireSuperAdmin: superAdminOnly } = require('../controllers/collegeController');
 
 router.get('/', controller.list);
-router.post('/import', requireAuth, requireRole('ADMIN'), clearsProblemCaches, controller.importMany);
+router.post('/import', requireAuth, requireRole('ADMIN'), superAdminOnly, clearsProblemCaches, controller.importMany);
 router.post('/upload-mcq-pdf', requireAuth, requireRole('SETTER'), controller.uploadMcqPdf);
 router.post('/import-mcq-bulk', requireAuth, requireRole('SETTER'), clearsProblemCaches, controller.importBulkMcqs);
 router.get('/:slug', controller.get);

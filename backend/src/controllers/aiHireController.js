@@ -1,5 +1,6 @@
 const AnthropicModule = require('@anthropic-ai/sdk');
 const prisma = require('../prismaClient');
+const { canAccessCollege, filterByScope, resolveNewRecordCollege, scopedStudentIds, collegeKey } = require('../lib/collegeScope');
 
 const Anthropic = AnthropicModule.default || AnthropicModule;
 
@@ -70,8 +71,10 @@ function assignmentState(assignment, now = Date.now()) {
   if (assignment.endsAt && now >= new Date(assignment.endsAt).getTime()) return 'closed';
   return 'open';
 }
-// An assignment goes to chosen students (userIds), one department, or everyone.
+// An assignment goes to chosen students (userIds), one department, or everyone, always within
+// the assignment's group (its college, or general students when it has none).
 function canTakeAssignment(assignment, user) {
+  if (collegeKey(assignment.collegeId) !== collegeKey(user?.collegeId)) return false;
   if (Array.isArray(assignment.userIds) && assignment.userIds.length) return assignment.userIds.map(String).includes(String(user?.id));
   return !assignment.department || sameDepartment(assignment.department, user?.department);
 }
@@ -694,7 +697,10 @@ exports.adminList = async (req, res) => {
     if (assignmentFilter) where.assignmentId = assignmentFilter;
     else if (month !== 'all') where.month = month;
     if (status === 'completed' || status === 'in_progress') where.status = status;
-    const records = await prisma.aiHireInterview.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const allRecords = await prisma.aiHireInterview.findMany({ where, orderBy: { createdAt: 'desc' } });
+    // A college admin only sees interviews taken by their own students.
+    const scopedIds = await scopedStudentIds(req);
+    const records = scopedIds ? allRecords.filter((record) => scopedIds.has(String(record.userId))) : allRecords;
 
     const userIds = [...new Set(records.map((record) => String(record.userId)))];
     const users = userIds.length
@@ -769,9 +775,10 @@ exports.adminItem = async (req, res) => {
     const record = await prisma.aiHireInterview.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
     if (!record) return res.status(404).json({ error: 'Interview not found.' });
     const [user, answers] = await Promise.all([
-      prisma.user.findUnique({ where: { id: String(record.userId) }, select: { id: true, name: true, email: true, usn: true, department: true } }).catch(() => null),
+      prisma.user.findUnique({ where: { id: String(record.userId) }, select: { id: true, name: true, email: true, usn: true, department: true, collegeId: true } }).catch(() => null),
       prisma.aiHireAnswer.findMany({ where: { interviewId: String(record.id) }, orderBy: { index: 'asc' } }),
     ]);
+    if (!canAccessCollege(req.user, user?.collegeId)) return res.status(404).json({ error: 'Interview not found.' });
     return res.json({
       interview: {
         id: String(record.id),
@@ -832,8 +839,10 @@ exports.adminCreateAssignment = async (req, res) => {
   try {
     const { data, error } = readAssignmentInput(req.body);
     if (error) return res.status(400).json({ error });
+    const { collegeId, error: collegeError } = await resolveNewRecordCollege(req, req.body?.collegeId);
+    if (collegeError) return res.status(400).json({ error: collegeError });
     const now = new Date();
-    const assignment = await prisma.aiHireAssignment.create({ data: { ...data, closed: false, createdById: String(req.user.id), createdAt: now, updatedAt: now } });
+    const assignment = await prisma.aiHireAssignment.create({ data: { ...data, ...(collegeId ? { collegeId } : {}), closed: false, createdById: String(req.user.id), createdAt: now, updatedAt: now } });
     return res.status(201).json({ assignment: presentAssignment(assignment) });
   } catch (error) {
     return sendError(res, error, 'Could not create the interview.');
@@ -843,12 +852,12 @@ exports.adminCreateAssignment = async (req, res) => {
 // GET /api/admin/ai-hire/assignments: every assignment with how many students took it.
 exports.adminListAssignments = async (req, res) => {
   try {
-    const assignments = await prisma.aiHireAssignment.findMany({ orderBy: { createdAt: 'desc' } });
+    const assignments = filterByScope(req, await prisma.aiHireAssignment.findMany({ orderBy: { createdAt: 'desc' } }));
     const ids = assignments.map((assignment) => String(assignment.id));
     const attempts = ids.length
       ? await prisma.aiHireInterview.findMany({ where: { assignmentId: { in: ids } }, select: { assignmentId: true, status: true, overallScore: true } })
       : [];
-    const students = await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, department: true } });
+    const students = filterByScope(req, await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, department: true, collegeId: true } }));
     return res.json({
       assignments: assignments.map((assignment) => {
         const mine = attempts.filter((attempt) => String(attempt.assignmentId) === String(assignment.id));
@@ -873,7 +882,7 @@ exports.adminListAssignments = async (req, res) => {
 exports.adminCloseAssignment = async (req, res) => {
   try {
     const assignment = await prisma.aiHireAssignment.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
-    if (!assignment) return res.status(404).json({ error: 'Interview not found.' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'Interview not found.' });
     const updated = await prisma.aiHireAssignment.update({ where: { id: String(assignment.id) }, data: { closed: req.body?.closed !== false, updatedAt: new Date() } });
     return res.json({ assignment: presentAssignment(updated) });
   } catch (error) {
@@ -923,7 +932,7 @@ function istDateTime(value) {
 
 // Students who can take the assignment, have not taken it, and have not been emailed about it yet.
 async function assignmentEmailTargets(assignment) {
-  const students = (await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, name: true, email: true, department: true } }))
+  const students = (await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, name: true, email: true, department: true, collegeId: true } }))
     .filter((student) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(student.email || '').trim()))
     .filter((student) => canTakeAssignment(assignment, student));
   const attempted = new Set((await prisma.aiHireInterview.findMany({ where: { assignmentId: String(assignment.id) }, select: { userId: true } })).map((row) => String(row.userId)));
@@ -957,7 +966,7 @@ function assignmentEmailText(assignment) {
 exports.adminAssignmentEmailStatus = async (req, res) => {
   try {
     const assignment = await prisma.aiHireAssignment.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
-    if (!assignment) return res.status(404).json({ error: 'Interview not found.' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'Interview not found.' });
     const targets = await assignmentEmailTargets(assignment);
     return res.json({
       configured: isMailConfigured(),
@@ -980,7 +989,7 @@ exports.adminAssignmentEmail = async (req, res) => {
   try {
     if (!isMailConfigured()) return res.status(503).json({ error: 'Email is not set up on the server (RESEND_API_KEY / MAIL_FROM).' });
     const assignment = await prisma.aiHireAssignment.findUnique({ where: { id: String(req.params.id) } }).catch(() => null);
-    if (!assignment) return res.status(404).json({ error: 'Interview not found.' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'Interview not found.' });
     const subject = clip(req.body?.subject, 150) || `AI mock interview: ${assignment.title}`;
     const message = String(req.body?.message || '').replace(/\r\n/g, '\n').trim().slice(0, 5000) || assignmentEmailText(assignment);
     const targets = await assignmentEmailTargets(assignment);
@@ -1001,7 +1010,7 @@ exports.adminAssignmentEmail = async (req, res) => {
     const result = await sendBulk(messages);
     if (result.sent) {
       await prisma.emailLog.create({
-        data: { subject, assignmentId: String(assignment.id), userIds: batch.map((student) => String(student.id)), sent: result.sent, sentAt: new Date(), sentBy: req.user.email || '' },
+        data: { subject, assignmentId: String(assignment.id), collegeId: assignment.collegeId ? String(assignment.collegeId) : null, collegeIds: assignment.collegeId ? [String(assignment.collegeId)] : [], userIds: batch.map((student) => String(student.id)), sent: result.sent, sentAt: new Date(), sentBy: req.user.email || '' },
       });
     }
     if (!result.sent) return res.status(502).json({ error: result.errors[0] || 'Could not send the emails.' });

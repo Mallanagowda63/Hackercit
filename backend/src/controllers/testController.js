@@ -1,6 +1,7 @@
 const prisma = require('../prismaClient');
 const { normalizeDifficulty, serializeProblem, toClientDifficulty } = require('../lib/problemHelpers');
 const { buildAssignmentReport } = require('../lib/testReportService');
+const { canAccessCollege, filterByScope, resolveNewRecordCollege } = require('../lib/collegeScope');
 
 // A test can be started again after it ends. Only attempts/submissions made since the
 // current start count, so students get a fresh attempt each time the admin restarts it.
@@ -18,6 +19,7 @@ function serializeAssignment(assignment, problems = [], attempt = null) {
     dbDifficulty: assignment.difficulty || null,
     durationMinutes: assignment.durationMinutes,
     status: assignment.status,
+    collegeId: assignment.collegeId ? String(assignment.collegeId) : null,
     problemIds: assignment.problemIds || [],
     questionCount: Array.isArray(assignment.problemIds) ? assignment.problemIds.length : 0,
     createdById: assignment.createdById,
@@ -75,18 +77,14 @@ async function getLiveSnapshot() {
 
     const upcoming = await prisma.testAssignment.findMany({
       where: { status: 'SCHEDULED' },
-      select: { id: true, startsAt: true },
+      select: { id: true, startsAt: true, collegeId: true },
     });
-    const nextStartsAt = upcoming
-      .map((assignment) => new Date(assignment.startsAt).getTime())
-      .filter(Number.isFinite)
-      .sort((a, b) => a - b)[0];
 
     return {
       assignments,
       candidateProblems: new Map(assignments.map((assignment) => [assignment.id, problemsFor(assignment, true)])),
       staffProblems: new Map(assignments.map((assignment) => [assignment.id, problemsFor(assignment, false)])),
-      nextStartsAt: nextStartsAt ? new Date(nextStartsAt).toISOString() : null,
+      upcoming,
     };
   })();
 
@@ -219,7 +217,7 @@ exports.list = async (req, res) => {
   try {
     await refreshAssignmentStatuses();
     const isCandidate = req.user?.role !== 'ADMIN' && req.user?.role !== 'SETTER';
-    const assignments = await loadAssignmentsWithProblems({}, { isCandidate });
+    const assignments = filterByScope(req, await loadAssignmentsWithProblems({}, { isCandidate }));
     return res.json({ assignments });
   } catch (err) {
     console.error(err);
@@ -231,7 +229,21 @@ exports.active = async (req, res) => {
   try {
     await refreshAssignmentStatuses();
     const isCandidate = req.user?.role !== 'ADMIN' && req.user?.role !== 'SETTER';
-    const snapshot = await getLiveSnapshot();
+    const fullSnapshot = await getLiveSnapshot();
+    // Students see their own college's tests; admins see the college(s) they manage.
+    const inScope = (assignment) => (req.user?.role === 'ADMIN'
+      ? filterByScope(req, [assignment]).length > 0
+      : canAccessCollege(req.user, assignment.collegeId));
+    const nextStartsAt = fullSnapshot.upcoming
+      .filter(inScope)
+      .map((assignment) => new Date(assignment.startsAt).getTime())
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)[0];
+    const snapshot = {
+      ...fullSnapshot,
+      assignments: fullSnapshot.assignments.filter(inScope),
+      nextStartsAt: nextStartsAt ? new Date(nextStartsAt).toISOString() : null,
+    };
 
     // The student's own attempt per live test (the page only needs its status).
     const attemptByAssignmentId = new Map();
@@ -287,6 +299,9 @@ exports.create = async (req, res) => {
       return res.status(400).json({ error: 'valid duration required' });
     }
 
+    const { collegeId, error: collegeError } = await resolveNewRecordCollege(req, req.body?.collegeId);
+    if (collegeError) return res.status(400).json({ error: collegeError });
+
     const availableProblems = await prisma.problem.findMany({
       where: { id: { in: problemIds } },
       select: { id: true },
@@ -301,6 +316,7 @@ exports.create = async (req, res) => {
         difficulty,
         durationMinutes,
         problemIds,
+        ...(collegeId ? { collegeId } : {}),
         createdById: req.user.id,
       },
     });
@@ -319,7 +335,7 @@ exports.start = async (req, res) => {
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'assignment not found' });
     if (!assignment.problemIds?.length) {
       return res.status(400).json({ error: 'assignment must contain at least one problem' });
     }
@@ -360,7 +376,7 @@ exports.schedule = async (req, res) => {
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'assignment not found' });
     if (!assignment.problemIds?.length) {
       return res.status(400).json({ error: 'assignment must contain at least one problem' });
     }
@@ -426,7 +442,7 @@ exports.unschedule = async (req, res) => {
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'assignment not found' });
     if (assignment.status !== 'SCHEDULED') {
       return res.status(400).json({ error: 'only a scheduled test can be cancelled' });
     }
@@ -455,7 +471,7 @@ exports.info = async (req, res) => {
     await refreshAssignmentStatuses();
 
     const assignment = await prisma.testAssignment.findUnique({ where: { id: req.params.id } });
-    if (!assignment) return res.status(404).json({ error: 'test not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'test not found' });
 
     const latest = await getAttemptOrNull(assignment.id, req.user.id);
     const attempt = inCurrentRun(latest, assignment) ? latest : null;
@@ -485,7 +501,7 @@ exports.remove = async (req, res) => {
   try {
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'test not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'test not found' });
     if (assignment.status === 'LIVE') {
       return res.status(400).json({ error: 'stop the live test before deleting it' });
     }
@@ -524,7 +540,7 @@ exports.stop = async (req, res) => {
 
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'assignment not found' });
     if (assignment.status !== 'LIVE') {
       return res.status(400).json({ error: 'only a live test can be stopped' });
     }
@@ -560,7 +576,7 @@ exports.startAttempt = async (req, res) => {
   try {
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'assignment not found' });
     if (assignment.status !== 'LIVE') {
       return res.status(400).json({ error: 'test assignment is not currently live' });
     }
@@ -648,7 +664,7 @@ exports.report = async (req, res) => {
   try {
     const { id } = req.params;
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'assignment not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'assignment not found' });
     const report = await buildAssignmentReport(assignment);
     return res.json({ report });
   } catch (err) {

@@ -1,4 +1,12 @@
 const prisma = require('../prismaClient');
+const { isSuperAdmin } = require('../lib/collegeScope');
+
+// Questions are shared by every college. A college admin may change or delete only the questions
+// they added; the main admin may change any of them.
+function canEditProblem(user, problem) {
+  return isSuperAdmin(user) || (problem?.createdById && String(problem.createdById) === String(user?.id));
+}
+const NOT_YOUR_QUESTION = 'This question is shared by all colleges. Only the admin who added it (or the main admin) can change or delete it.';
 const { normalizeProblemPayload, serializeProblem } = require('../lib/problemHelpers');
 const { clearProblemCache } = require('./submissionController');
 
@@ -162,7 +170,7 @@ exports.get = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const data = normalizeProblemPayload(req.body);
-    const problem = await createProblemWithAutoNumber(data);
+    const problem = await createProblemWithAutoNumber({ ...data, createdById: String(req.user.id) });
     return res.status(201).json({ problem: serializeProblem(problem, { includeContent: true }) });
   } catch (err) {
     return sendProblemError(res, err);
@@ -188,6 +196,7 @@ exports.update = async (req, res) => {
       existing = await prisma.problem.findUnique({ where: { slug: id } }).catch(() => null);
     }
     if (!existing) return res.status(404).json({ error: 'not found' });
+    if (!canEditProblem(req.user, existing)) return res.status(403).json({ error: NOT_YOUR_QUESTION });
 
     const merged = {
       ...existing,
@@ -222,6 +231,7 @@ exports.remove = async (req, res) => {
       existing = await prisma.problem.findUnique({ where: { slug: id } }).catch(() => null);
     }
     if (!existing) return res.status(404).json({ error: 'not found' });
+    if (!canEditProblem(req.user, existing)) return res.status(403).json({ error: NOT_YOUR_QUESTION });
 
     await prisma.problem.delete({ where: { id: existing.id } });
     clearProblemCache(existing.id);
@@ -466,7 +476,7 @@ exports.importBulkMcqs = async (req, res) => {
         tags: [category],
       };
 
-      const data = normalizeProblemPayload(rawProblem);
+      const data = { ...normalizeProblemPayload(rawProblem), createdById: String(req.user.id) };
       let problem;
 
       try {

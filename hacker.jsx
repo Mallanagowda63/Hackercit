@@ -100,6 +100,8 @@ function normalizeAuthenticatedUser(user = {}, fallback = {}) {
     badgeIds: Array.isArray(user.badgeIds) ? user.badgeIds : [],
     solvedProblemCount: Number(user.solvedProblemCount || 0),
     badgeUpdatedAt: user.badgeUpdatedAt || null,
+    collegeId: user.collegeId || fallback.collegeId || null,
+    superAdmin: user.superAdmin === undefined ? Boolean(fallback.superAdmin) : Boolean(user.superAdmin),
   };
 }
 
@@ -1376,6 +1378,565 @@ function loadPlaygroundDraft() {
   }
 }
 
+// ── COLLEGES (main admin only) ───────────────────────────────────────────────
+// Lists every college with its admins and student count. The main admin adds colleges, gives each
+// one an admin login, and moves already-registered students into the right college.
+const ADMIN_COLLEGE_STORAGE_KEY = "devorbit.adminCollege.v1";
+
+function loadAdminCollegeChoice() {
+  try {
+    return window.localStorage?.getItem(ADMIN_COLLEGE_STORAGE_KEY) || "general";
+  } catch {
+    return "general";
+  }
+}
+
+const EMPTY_COLLEGE_DETAILS = Object.freeze({ name: "", code: "", city: "", address: "", contactName: "", contactEmail: "", contactPhone: "", notes: "" });
+
+function collegeWhen(value) {
+  return value ? new Date(value).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "";
+}
+
+// Small number tiles used on the college dashboards.
+function CollegeStatTiles({ college, T, isPhone }) {
+  const tiles = [
+    ["Students", college.studentCount],
+    ["Active this week", college.activeThisWeek],
+    ["New this month", college.newThisMonth],
+    ["Tests", college.testCount, college.liveTests ? `${college.liveTests} live` : college.scheduledTests ? `${college.scheduledTests} scheduled` : ""],
+    ["Test attempts", college.attempts],
+    ["Average score", college.averageScore === null || college.averageScore === undefined ? "--" : `${college.averageScore}%`],
+    ["AI interviews (month)", college.aiInterviewsThisMonth],
+  ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: isPhone ? "repeat(2, minmax(0,1fr))" : "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
+      {tiles.map(([label, value, hint]) => (
+        <div key={label} style={{ border: `1px solid ${T.divider}`, borderRadius: 8, padding: "10px 12px", background: T.card }}>
+          <div style={{ fontSize: 12, color: T.textSecondary }}>{label}</div>
+          <div style={{ fontSize: 22, fontWeight: 600, color: T.text, marginTop: 2 }}>{value ?? 0}</div>
+          {hint && <div style={{ fontSize: 12, color: T.success, marginTop: 2 }}>{hint}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CollegeDetailsList({ college, T }) {
+  const rows = [
+    ["Code", college.code],
+    ["City", college.city],
+    ["Address", college.address],
+    ["Contact person", college.contactName],
+    ["Contact email", college.contactEmail],
+    ["Contact phone", college.contactPhone],
+    ["Notes", college.notes],
+    ["Added on", collegeWhen(college.createdAt)],
+  ].filter(([, value]) => value);
+  if (!rows.length) return <div style={{ color: T.textSecondary, fontSize: 13 }}>No details yet.</div>;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "max-content minmax(0,1fr)", columnGap: 16, rowGap: 6, fontSize: 13.5 }}>
+      {rows.map(([label, value]) => (
+        <React.Fragment key={label}>
+          <span style={{ color: T.textSecondary }}>{label}</span>
+          <span style={{ color: T.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{value}</span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function CollegeDetailsForm({ value, onChange, S, isPhone }) {
+  const field = (key, label, props = {}) => (
+    <label style={{ display: "block" }}>
+      <span style={S.adminFieldLabel}>{label}</span>
+      <input value={value[key]} onChange={(e) => onChange({ ...value, [key]: e.target.value })} style={S.adminInput} {...props} />
+    </label>
+  );
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isPhone ? "1fr" : "2fr 1fr 1fr", gap: 10 }}>
+        {field("name", "College name *", { maxLength: 120, placeholder: "e.g. ABC Institute of Technology" })}
+        {field("code", "Short code", { maxLength: 20, placeholder: "e.g. ABCIT" })}
+        {field("city", "City", { maxLength: 80, placeholder: "e.g. Bengaluru" })}
+      </div>
+      {field("address", "Address", { maxLength: 300 })}
+      <div style={{ display: "grid", gridTemplateColumns: isPhone ? "1fr" : "1fr 1fr 1fr", gap: 10 }}>
+        {field("contactName", "Contact person (TPO / HOD)", { maxLength: 100 })}
+        {field("contactEmail", "Contact email", { type: "email", maxLength: 150 })}
+        {field("contactPhone", "Contact phone", { type: "tel", maxLength: 20 })}
+      </div>
+      <label style={{ display: "block" }}>
+        <span style={S.adminFieldLabel}>Notes (only you see these)</span>
+        <textarea value={value.notes} onChange={(e) => onChange({ ...value, notes: e.target.value })} rows={2} maxLength={1000} style={{ ...S.adminTextarea, minHeight: 60 }} />
+      </label>
+    </div>
+  );
+}
+
+// ── COLLEGES (main admin only) ───────────────────────────────────────────────
+// A dashboard of every college: details, numbers and admins. The main admin adds colleges, gives
+// each one an admin login, and moves already-registered students into the right college.
+// Downloads one college's data as a JSON backup file.
+async function downloadCollegeBackup(api, college) {
+  const data = await api(`/api/colleges/${college.id}/export`);
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${String(college.code || college.name).replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return data.counts || {};
+}
+
+// Adds students (by email or USN) to a college, or takes them out again (they become general
+// students). Used by the main admin and by a college's own admin.
+function CollegeStudentsForm({ api, college, S, T, isCollegeAdmin = false, onDone, onCancel }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState(null); // { tone, text }
+
+  const identifiers = () => text.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean);
+  const submit = async (mode) => {
+    if (!identifiers().length) return;
+    if (mode === "remove" && !window.confirm(`Take these students out of ${college.name}? They become normal DevOrbit students again.`)) return;
+    setBusy(mode);
+    setMessage(null);
+    try {
+      const result = await api(`/api/colleges/${college.id}/${mode === "add" ? "move-students" : "remove-students"}`, { method: "POST", body: JSON.stringify({ identifiers: identifiers() }) });
+      const parts = mode === "add"
+        ? [`Added ${result.moved} student${result.moved === 1 ? "" : "s"} to ${college.name}.`,
+          result.alreadyThere ? `${result.alreadyThere} already in it.` : "",
+          result.inOtherCollege ? `${result.inOtherCollege} belong to another college (ask the ScholarLogic team).` : ""]
+        : [`Removed ${result.removed} student${result.removed === 1 ? "" : "s"} from ${college.name}.`,
+          result.notInCollege ? `${result.notInCollege} were not in it.` : ""];
+      if (result.notFound?.length) parts.push(`\nNo account found for (${result.notFound.length}): ${result.notFound.slice(0, 20).join(", ")}${result.notFound.length > 20 ? " ..." : ""}`);
+      setMessage({ tone: "success", text: parts.filter(Boolean).join(" ") });
+      setText("");
+      onDone?.(result);
+    } catch (err) {
+      setMessage({ tone: "error", text: err.message || "Something went wrong." });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 10, padding: 14, border: `1px solid ${T.border}`, borderRadius: 8, background: T.background }}>
+      <span style={S.adminFieldLabel}>
+        {isCollegeAdmin
+          ? `Students sign up on DevOrbit as usual. Paste their emails or USNs here to add them to ${college.name}. Only then do they see ${college.name}'s tests.`
+          : `Paste the emails or USNs of students to add to (or take out of) ${college.name}, one per line or separated by commas.`}
+      </span>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder={"student1@gmail.com\n4XX21CS001"} style={S.adminTextarea} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" onClick={() => submit("add")} disabled={!text.trim() || Boolean(busy)} style={S.adminButton("run")}>{busy === "add" ? "Adding..." : `Add to ${college.name}`}</button>
+        <button type="button" onClick={() => submit("remove")} disabled={!text.trim() || Boolean(busy)} style={{ ...S.adminButton("default"), color: T.error }}>{busy === "remove" ? "Removing..." : "Remove from college"}</button>
+        {onCancel && <button type="button" onClick={onCancel} style={S.adminButton("default")}>Close</button>}
+      </div>
+      {message && <div role={message.tone === "error" ? "alert" : "status"} style={{ ...S.adminAlert(message.tone), marginBottom: 0, whiteSpace: "pre-wrap" }}>{message.text}</div>}
+    </div>
+  );
+}
+
+const SEPARATION_LABELS = {
+  students: "Students", tests: "Tests", testAttempt: "Test attempts", assessmentSubmission: "Test results",
+  testFeedback: "Feedback", submission: "Practice submissions", aiHireInterview: "AI interviews",
+  aiHireAnswer: "AI interview answers", aiHireAssignment: "AI interview assignments",
+};
+
+// Main admin: confirms every record is tagged with a college and none sits in the wrong one.
+function CollegeSeparationCheck({ api, S, T, isPhone }) {
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const runCheck = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setReport((await api("/api/colleges/check")).report);
+    } catch (err) {
+      setError(err.message || "Could not run the check.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { runCheck(); }, []);
+
+  const issues = report ? [
+    ...Object.entries(report.mismatched).filter(([, n]) => n > 0).map(([key, n]) => `${n} ${SEPARATION_LABELS[key] || key} tagged with a different college`),
+  ] : [];
+
+  return (
+    <div style={{ ...S.adminCard, padding: isPhone ? "18px 16px" : "22px 24px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: T.text }}>Data separation check</span>
+        {report && (
+          <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 999, background: report.ok ? "rgba(21,128,61,0.1)" : "rgba(180,35,24,0.1)", color: report.ok ? T.success : T.error }}>
+            {report.ok ? "All data separated" : "Needs attention"}
+          </span>
+        )}
+        <button onClick={runCheck} disabled={loading} style={{ ...S.adminButton("default"), padding: "6px 10px", fontSize: 13, marginLeft: "auto" }}>{loading ? "Checking..." : "Check again"}</button>
+      </div>
+      <div style={{ color: T.textSecondary, fontSize: 13, marginTop: 6, lineHeight: 1.6 }}>
+        Every attempt, result, feedback, practice submission and AI interview is stored with its college (or as general), matching its test and student. Each college admin can only read their own college's records.
+      </div>
+      {error && <div role="alert" style={{ ...S.adminAlert("error"), marginTop: 12, marginBottom: 0 }}>{error}</div>}
+      {report && !report.ok && (
+        <ul style={{ margin: "10px 0 0", paddingLeft: 18, color: T.error, fontSize: 13.5, lineHeight: 1.7 }}>
+          {issues.map((issue) => <li key={issue}>{issue}</li>)}
+        </ul>
+      )}
+      {report && report.crossCollegeAttempts > 0 && (
+        <div style={{ color: T.textSecondary, fontSize: 13, marginTop: 8 }}>
+          {report.crossCollegeAttempts} test attempt{report.crossCollegeAttempts === 1 ? " was" : "s were"} made by students who were later moved to another college. Those results stay with the college whose test it was.
+        </div>
+      )}
+      {report && <div style={{ color: T.textSecondary, fontSize: 13, marginTop: 8 }}>{report.collegeStudents} college students · {report.generalStudents} general students</div>}
+      {report && <div style={{ color: T.textMuted, fontSize: 12, marginTop: 8 }}>Last checked {new Date(report.checkedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</div>}
+    </div>
+  );
+}
+
+function CollegesPanel({ api, S, T, isPhone, onCollegesChanged, onViewCollege }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState("");
+  const [addForm, setAddForm] = useState(null); // details object while adding
+  const [editing, setEditing] = useState(null); // { id, ...details }
+  const [adminForm, setAdminForm] = useState(null); // { collegeId, name, email, password }
+  const [moveForm, setMoveForm] = useState(null); // { collegeId, text }
+
+  const card = { ...S.adminCard, padding: isPhone ? "18px 16px" : "22px 24px" };
+  const small = { ...S.adminButton("default"), padding: "6px 10px", fontSize: 13 };
+  const muted = { color: T.textSecondary, fontSize: 13 };
+  const subTitle = { fontSize: 14, fontWeight: 600, color: T.text };
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      setData(await api("/api/colleges/manage"));
+      setError("");
+    } catch (err) {
+      setError(err.message || "Could not load colleges.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const run = async (key, work, successText) => {
+    setBusy(key);
+    setError("");
+    setNotice("");
+    try {
+      const result = await work();
+      if (successText) setNotice(typeof successText === "function" ? successText(result) : successText);
+      await load();
+      onCollegesChanged?.();
+      return result;
+    } catch (err) {
+      setError(err.message || "Something went wrong.");
+      return null;
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const randomPassword = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    const values = new Uint32Array(12);
+    window.crypto.getRandomValues(values);
+    return Array.from(values, (value) => chars[value % chars.length]).join("");
+  };
+
+  const colleges = data?.colleges || [];
+  const totals = data?.totals;
+
+  return (
+    <div style={{ display: "grid", gap: 20, minWidth: 0 }}>
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+          <span style={{ fontSize: 20, fontWeight: 600, color: T.text }}>Partner colleges</span>
+          <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 999, background: T.primaryLight, color: T.primary }}>Main admin</span>
+          {!addForm && (
+            <button onClick={() => setAddForm({ ...EMPTY_COLLEGE_DETAILS })} style={{ ...S.adminButton("run"), marginLeft: "auto" }}>Add college</button>
+          )}
+        </div>
+        <div style={{ ...muted, marginBottom: 16, lineHeight: 1.6 }}>
+          Normal DevOrbit students are not affected and never see colleges. A college's admin adds their students (by email or USN) after they sign up;
+          from then on those students see only that college's tests and leaderboard, and the college admin sees only them.
+          Questions, the IDE and the monthly challenge stay shared.
+        </div>
+        {data?.general && (
+          <>
+            <div style={{ ...subTitle, marginBottom: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              General students (not in any college)
+              <button onClick={() => onViewCollege?.("general")} style={{ ...small, borderColor: T.primary, color: T.primary }}>View general students</button>
+            </div>
+            <CollegeStatTiles college={data.general} T={T} isPhone={isPhone} />
+            <div style={{ ...muted, margin: "14px 0 0" }}>
+              {totals.collegeCount} partner college{totals.collegeCount === 1 ? "" : "s"} · {totals.adminCount} college admin{totals.adminCount === 1 ? "" : "s"} · {totals.studentCount - data.general.studentCount} college students
+            </div>
+          </>
+        )}
+
+        {addForm && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!addForm.name.trim()) { setError("Enter the college name."); return; }
+              run("create", () => api("/api/colleges", { method: "POST", body: JSON.stringify(addForm) }), `Added "${addForm.name.trim()}". Now add an admin login for it below.`)
+                .then((result) => { if (result) setAddForm(null); });
+            }}
+            style={{ display: "grid", gap: 12, marginTop: 18, padding: 16, border: `1px solid ${T.border}`, borderRadius: 8, background: T.background }}
+          >
+            <div style={subTitle}>New college</div>
+            <CollegeDetailsForm value={addForm} onChange={setAddForm} S={S} isPhone={isPhone} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="submit" disabled={busy === "create"} style={S.adminButton("run")}>{busy === "create" ? "Adding..." : "Add college"}</button>
+              <button type="button" onClick={() => setAddForm(null)} style={S.adminButton("default")}>Cancel</button>
+            </div>
+          </form>
+        )}
+        {error && <div role="alert" style={{ ...S.adminAlert("error"), marginTop: 14, marginBottom: 0 }}>{error}</div>}
+        {notice && <div role="status" style={{ ...S.adminAlert("success"), marginTop: 14, marginBottom: 0, whiteSpace: "pre-wrap" }}>{notice}</div>}
+      </div>
+
+      <CollegeSeparationCheck api={api} S={S} T={T} isPhone={isPhone} />
+
+      {loading && !data && <div style={S.adminAlert("info")}>Loading colleges...</div>}
+
+      {colleges.map((college) => {
+        const isEditing = editing?.id === college.id;
+        const addingAdmin = adminForm?.collegeId === college.id;
+        const moving = moveForm?.collegeId === college.id;
+        const empty = college.studentCount === 0 && college.testCount === 0 && college.admins.length === 0;
+        return (
+          <div key={college.id} style={card}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+              <div style={{ minWidth: 0, flex: "1 1 260px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 18, fontWeight: 600, color: T.text }}>{college.name}</span>
+                  {college.code && <span style={{ fontSize: 12, fontWeight: 600, padding: "1px 7px", borderRadius: 4, border: `1px solid ${T.border}`, color: T.textSecondary }}>{college.code}</span>}
+                  {college.liveTests > 0 && <span style={{ fontSize: 12, fontWeight: 600, padding: "1px 7px", borderRadius: 999, background: "rgba(21,128,61,0.1)", color: T.success }}>Test live now</span>}
+                </div>
+                <div style={{ ...muted, marginTop: 3 }}>
+                  {[college.city, college.admins.length ? `${college.admins.length} admin${college.admins.length === 1 ? "" : "s"}` : "no admin yet", college.lastTest ? `last test: ${college.lastTest.title} (${collegeWhen(college.lastTest.at)})` : "no tests yet"].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button onClick={() => onViewCollege?.(college.id)} style={{ ...small, borderColor: T.primary, color: T.primary }}>View this college</button>
+                <button onClick={() => setEditing(isEditing ? null : { id: college.id, ...EMPTY_COLLEGE_DETAILS, ...college })} style={small}>Edit details</button>
+                <button onClick={() => setMoveForm(moving ? null : { collegeId: college.id, text: "" })} style={small}>Add / remove students</button>
+                <button
+                  disabled={busy === `export-${college.id}`}
+                  onClick={async () => {
+                    setBusy(`export-${college.id}`);
+                    setError("");
+                    try {
+                      const counts = await downloadCollegeBackup(api, college);
+                      setNotice(`Downloaded ${college.name}'s backup: ${counts.students || 0} students, ${counts.tests || 0} tests, ${counts.results || 0} results, ${counts.aiInterviews || 0} AI interviews.`);
+                    } catch (err) {
+                      setError(err.message || "Could not download the backup.");
+                    } finally {
+                      setBusy("");
+                    }
+                  }}
+                  style={small}
+                >
+                  {busy === `export-${college.id}` ? "Preparing..." : "Download backup"}
+                </button>
+                {empty && (
+                  <button
+                    onClick={() => { if (window.confirm(`Delete the college "${college.name}"?`)) run(`delete-${college.id}`, () => api(`/api/colleges/${college.id}`, { method: "DELETE" }), "College deleted."); }}
+                    style={{ ...small, color: T.error }}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <CollegeStatTiles college={college} T={T} isPhone={isPhone} />
+
+            {isEditing ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!editing.name.trim()) { setError("Enter the college name."); return; }
+                  run(`edit-${college.id}`, () => api(`/api/colleges/${college.id}`, { method: "PUT", body: JSON.stringify(editing) }), "College details saved.")
+                    .then((result) => { if (result) setEditing(null); });
+                }}
+                style={{ display: "grid", gap: 12, marginTop: 16, padding: 16, border: `1px solid ${T.border}`, borderRadius: 8, background: T.background }}
+              >
+                <CollegeDetailsForm value={editing} onChange={(next) => setEditing({ ...next, id: college.id })} S={S} isPhone={isPhone} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button type="submit" disabled={busy === `edit-${college.id}`} style={S.adminButton("run")}>{busy === `edit-${college.id}` ? "Saving..." : "Save details"}</button>
+                  <button type="button" onClick={() => setEditing(null)} style={S.adminButton("default")}>Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: isPhone ? "1fr" : "minmax(0,1fr) minmax(0,1fr)", gap: 20, marginTop: 18, borderTop: `1px solid ${T.divider}`, paddingTop: 16 }}>
+                <div>
+                  <div style={{ ...subTitle, marginBottom: 10 }}>Details</div>
+                  <CollegeDetailsList college={college} T={T} />
+                </div>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <span style={subTitle}>College admins</span>
+                    {!addingAdmin && (
+                      <button onClick={() => setAdminForm({ collegeId: college.id, name: "", email: "", password: randomPassword() })} style={{ ...small, marginLeft: "auto" }}>
+                        Add admin login
+                      </button>
+                    )}
+                  </div>
+                  {college.admins.length === 0 && !addingAdmin && <div style={muted}>No admin yet. Add one so this college can run its own tests.</div>}
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {college.admins.map((admin) => (
+                      <div key={admin.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 12px", border: `1px solid ${T.divider}`, borderRadius: 8 }}>
+                        <div style={{ minWidth: 0, flex: "1 1 180px" }}>
+                          <div style={{ fontWeight: 500, color: T.text }}>{admin.name || admin.email}</div>
+                          <div style={muted}>{admin.email}</div>
+                          <div style={muted}>{admin.lastLoginAt ? `Last login ${collegeWhen(admin.lastLoginAt)} · ${admin.loginCount} logins` : "Never logged in"}</div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const password = randomPassword();
+                            if (!window.confirm(`Set a new password for ${admin.email}? The old password stops working.`)) return;
+                            run(`pw-${admin.id}`, () => api(`/api/colleges/admins/${admin.id}/password`, { method: "POST", body: JSON.stringify({ password }) }),
+                              `New password for ${admin.email}:\n${password}\n\nCopy it now and send it to them. It is not shown again.`);
+                          }}
+                          style={small}
+                        >
+                          Reset password
+                        </button>
+                        <button
+                          onClick={() => { if (window.confirm(`Remove the admin login ${admin.email}? They will no longer be able to sign in.`)) run(`rm-${admin.id}`, () => api(`/api/colleges/admins/${admin.id}`, { method: "DELETE" }), "Admin login removed."); }}
+                          style={{ ...small, color: T.error }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {addingAdmin && (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const { name, email, password } = adminForm;
+                        run(`admin-${college.id}`, () => api(`/api/colleges/${college.id}/admins`, { method: "POST", body: JSON.stringify({ name, email, password }) }),
+                          `Admin login created for ${college.name}.\nEmail: ${email.trim().toLowerCase()}\nPassword: ${password}\nThey sign in at ${window.location.origin}/admin\n\nCopy this now. The password is not shown again.`)
+                          .then((result) => { if (result) setAdminForm(null); });
+                      }}
+                      style={{ display: "grid", gap: 10, marginTop: 10, padding: 14, border: `1px solid ${T.border}`, borderRadius: 8, background: T.background }}
+                    >
+                      <label><span style={S.adminFieldLabel}>Name</span>
+                        <input value={adminForm.name} onChange={(e) => setAdminForm({ ...adminForm, name: e.target.value })} placeholder="e.g. Placement Officer" style={S.adminInput} />
+                      </label>
+                      <label><span style={S.adminFieldLabel}>Email (their login)</span>
+                        <input type="email" value={adminForm.email} onChange={(e) => setAdminForm({ ...adminForm, email: e.target.value })} placeholder="admin@college.edu" style={S.adminInput} />
+                      </label>
+                      <label><span style={S.adminFieldLabel}>Password (at least 8 characters)</span>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <input value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} style={{ ...S.adminInput, fontFamily: "'IBM Plex Mono',monospace" }} />
+                          <button type="button" onClick={() => setAdminForm({ ...adminForm, password: randomPassword() })} style={small}>New</button>
+                        </div>
+                      </label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button type="submit" disabled={busy === `admin-${college.id}`} style={S.adminButton("run")}>{busy === `admin-${college.id}` ? "Creating..." : "Create admin login"}</button>
+                        <button type="button" onClick={() => setAdminForm(null)} style={S.adminButton("default")}>Cancel</button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {moving && (
+              <div style={{ marginTop: 16 }}>
+                <CollegeStudentsForm api={api} college={college} S={S} T={T} onDone={() => { load(); onCollegesChanged?.(); }} onCancel={() => setMoveForm(null)} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── MY COLLEGE (college admins) ──────────────────────────────────────────────
+// Shows a college admin which college they manage, its numbers and its admins.
+function MyCollegeCard({ api, S, T, isPhone, compact = false }) {
+  const [college, setCollege] = useState(undefined);
+  const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    api("/api/colleges/mine")
+      .then((data) => setCollege(data.college || null))
+      .catch((err) => setError(err.message || "Could not load your college."));
+  }, []);
+
+  const card = { ...S.adminCard, padding: isPhone ? "18px 16px" : "22px 24px" };
+  if (error) return <div style={S.adminAlert("error")}>{error}</div>;
+  if (college === undefined) return <div style={card}><span style={{ color: T.textSecondary, fontSize: 13 }}>Loading your college...</span></div>;
+  if (!college) return null;
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 999, background: T.primaryLight, color: T.primary }}>College admin</span>
+        <span style={{ fontSize: 20, fontWeight: 600, color: T.text }}>{college.name}</span>
+        {college.code && <span style={{ fontSize: 12, fontWeight: 600, padding: "1px 7px", borderRadius: 4, border: `1px solid ${T.border}`, color: T.textSecondary }}>{college.code}</span>}
+      </div>
+      <div style={{ color: T.textSecondary, fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+        {college.city ? `${college.city} · ` : ""}You see only {college.name}'s students, tests, reports and interviews. Questions and the IDE are shared with other colleges.
+      </div>
+      <CollegeStatTiles college={college} T={T} isPhone={isPhone} />
+      {!compact && (
+        <div style={{ display: "grid", gridTemplateColumns: isPhone ? "1fr" : "minmax(0,1fr) minmax(0,1fr)", gap: 20, marginTop: 18, borderTop: `1px solid ${T.divider}`, paddingTop: 16 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 10 }}>College details</div>
+            <CollegeDetailsList college={{ ...college, notes: "" }} T={T} />
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 10 }}>Admins of {college.name}</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {college.admins.map((admin) => (
+                <div key={admin.id} style={{ padding: "10px 12px", border: `1px solid ${T.divider}`, borderRadius: 8 }}>
+                  <div style={{ fontWeight: 500, color: T.text }}>{admin.name || admin.email}</div>
+                  <div style={{ color: T.textSecondary, fontSize: 13 }}>{admin.email}</div>
+                  <div style={{ color: T.textSecondary, fontSize: 13 }}>{admin.lastLoginAt ? `Last login ${collegeWhen(admin.lastLoginAt)}` : "Never logged in"}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ color: T.textSecondary, fontSize: 12.5, marginTop: 10 }}>To add or remove an admin, or change these details, contact the ScholarLogic team.</div>
+            <button
+              disabled={downloading}
+              onClick={async () => {
+                setDownloading(true);
+                setError("");
+                try { await downloadCollegeBackup(api, college); } catch (err) { setError(err.message || "Could not download the data."); } finally { setDownloading(false); }
+              }}
+              style={{ ...S.adminButton("default"), marginTop: 12, padding: "7px 12px", fontSize: 13 }}
+            >
+              {downloading ? "Preparing..." : `Download ${college.name} data`}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlaygroundExplorer({ files, activeId, onOpen, onCreate, onRename, onDelete, defaultExt }) {
   const [expanded, setExpanded] = useState(() => new Set(files.filter((item) => item.type === "folder").map((item) => item.id)));
   const [selectedFolder, setSelectedFolder] = useState(null);
@@ -1865,6 +2426,9 @@ function CodingPlatform() {
   const [authName, setAuthName]               = useState("");
   const [authUsn, setAuthUsn]                 = useState("");
   const [authDepartment, setAuthDepartment]   = useState("");
+  const [collegeOptions, setCollegeOptions]   = useState([]);
+  // The college the main admin is looking at ("all" = every college). Sent as X-College-Id.
+  const [adminCollegeId]                      = useState(loadAdminCollegeChoice);
   const [authPhone, setAuthPhone]             = useState("");
   const [authError, setAuthError]             = useState("");
   const [authSubmitting, setAuthSubmitting]   = useState(false);
@@ -2269,12 +2833,29 @@ function CodingPlatform() {
     }
   };
 
+  // The main admin's view: "general" (normal students, the default), a college id, or "all".
+  const collegeHeaders = () => (currentUser?.superAdmin ? { "X-College-Id": adminCollegeId || "general" } : {});
+
+  // Changing the college the main admin looks at reloads the admin panel with that college.
+  const switchAdminCollege = (collegeId) => {
+    try { window.localStorage?.setItem(ADMIN_COLLEGE_STORAGE_KEY, collegeId || "general"); } catch { /* optional */ }
+    window.location.reload();
+  };
+
+  const reloadCollegeOptions = () => {
+    fetch(buildBackendApiUrl("/api/colleges"))
+      .then((response) => response.json())
+      .then((data) => setCollegeOptions(Array.isArray(data.colleges) ? data.colleges : []))
+      .catch(() => {});
+  };
+
   const performApiRequest = async (path, options = {}) => {
     const hasBody = Boolean(options.body);
     const response = await fetchWithRetry(buildBackendApiUrl(path), {
       ...options,
       headers: {
         ...createAuthHeaders(authToken, hasBody),
+        ...collegeHeaders(),
         ...(options.headers || {}),
       },
     });
@@ -2505,6 +3086,30 @@ function CodingPlatform() {
       setPortalError(error.message || "Unable to load your current test.");
     }
   };
+
+  useEffect(() => { reloadCollegeOptions(); }, []);
+
+  // Admin sessions saved before colleges existed lack superAdmin / collegeId: refresh them once.
+  useEffect(() => {
+    if (view !== "admin" || !authToken) return;
+    performApiRequest("/api/auth/me")
+      .then((data) => {
+        if (!data?.user) return;
+        const refreshed = normalizeAuthenticatedUser(data.user, currentUser);
+        setCurrentUser(refreshed);
+        saveAuthSession(authToken, refreshed, refreshed.role);
+      })
+      .catch(() => {});
+  }, [view, authToken]);
+
+  // A college picked earlier that no longer exists falls back to "All colleges".
+  useEffect(() => {
+    if (adminCollegeId === "all" || adminCollegeId === "general") return;
+    if (!collegeOptions.some((college) => college.id === adminCollegeId)) {
+      try { window.localStorage?.setItem(ADMIN_COLLEGE_STORAGE_KEY, "general"); } catch { /* optional */ }
+      window.location.reload();
+    }
+  }, [collegeOptions]);
 
   useEffect(() => {
     try {
@@ -4767,7 +5372,7 @@ function CodingPlatform() {
       if (message.includes("Failed to fetch") || message.includes("Cannot reach backend")) {
         setAuthError("Unable to connect to the server. Please try again.");
       } else {
-        setAuthError(message.includes("Invalid") ? message : "Invalid email/username or password.");
+        setAuthError(message.includes("Invalid") || (authMode === "signup" && message) ? message : "Invalid email/username or password.");
       }
     } finally {
       setAuthSubmitting(false);
@@ -5302,7 +5907,7 @@ function CodingPlatform() {
   const downloadProctoringReport = async () => {
     try {
       const response = await fetch(buildBackendApiUrl("/api/admin/reports/proctoring/export"), {
-        headers: createAuthHeaders(authToken),
+        headers: { ...createAuthHeaders(authToken), ...collegeHeaders() },
       });
       if (!response.ok) {
         const data = await readJsonSafely(response);
@@ -6459,6 +7064,11 @@ function CodingPlatform() {
               <span style={{ fontFamily:"'IBM Plex Mono','JetBrains Mono',monospace", fontSize:13.5, color:"#a3a3a3", display:"flex", gap:16 }}>
                 <span style={{ color:streakInfo?.practicedToday ? "#e8873a" : "#a3a3a3" }}>streak {streak}</span>
                 {active !== "playground" && <span>{solvedTotal} solved</span>}
+              </span>
+            )}
+            {!isPhone && currentUser.collegeId && collegeOptions.some((college) => college.id === currentUser.collegeId) && (
+              <span title="Your college" style={{ fontSize:12.5, color:"#c9c9c9", border:"1px solid #2a2a2a", borderRadius:6, padding:"5px 9px", whiteSpace:"nowrap", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis" }}>
+                {collegeOptions.find((college) => college.id === currentUser.collegeId)?.name}
               </span>
             )}
             <button onClick={openProfile} title="Your profile" aria-current={active === "profile" ? "page" : undefined} style={{ width:32, height:32, borderRadius:6, background:"#1c1c1c", border:`1px solid ${active === "profile" ? "#e8873a" : "#2a2a2a"}`, color:"#ececec", fontFamily:"inherit", fontWeight:700, fontSize:13.5, cursor:"pointer" }}>{userBadge}</button>
@@ -7689,6 +8299,21 @@ function CodingPlatform() {
   };
 
   const renderAdminChallenges = () => {
+    // The monthly challenge is shared by every college and set up by the main admin only.
+    if (!currentUser.superAdmin) {
+      return (
+        <div style={{ display:"grid", gap:18 }}>
+          <div style={S.adminCard}>
+            <div style={S.adminSectionTitle}>Monthly Coding Challenge</div>
+            <div style={{ color:ADMIN_THEME.textSecondary, fontSize:14, lineHeight:1.6 }}>
+              The monthly challenge is shared by every college and set up by the ScholarLogic team. Your students take part from their dashboard.
+              You can still email your students below.
+            </div>
+          </div>
+          {renderAdminEmailCard()}
+        </div>
+      );
+    }
     const form = adminChallengeForm || createEmptyChallengeForm();
     const updateForm = (changes) => setAdminChallengeForm({ ...form, ...changes });
     const selectedIds = new Set(form.problemIds.map(String));
@@ -8370,7 +8995,7 @@ function CodingPlatform() {
         <div style={{ display:"grid", gap:10 }}>
           <div style={S.adminSubCard}>
             <div style={S.adminSectionTitle}>Role</div>
-            <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>Administrator</div>
+            <div style={{ color:ADMIN_THEME.text, fontWeight:700 }}>{currentUser.superAdmin ? "Main admin (all colleges)" : "College admin"}</div>
           </div>
           <div style={S.adminSubCard}>
             <div style={S.adminSectionTitle}>Department</div>
@@ -11385,11 +12010,30 @@ function CodingPlatform() {
           <div style={{ maxWidth:1240, margin:"0 auto", padding:`0 ${pageGutter}px`, boxSizing:"border-box" }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, padding:isPhone ? "12px 0 4px" : "14px 0 2px" }}>
               <button onClick={()=>setView("home")} style={{ background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit", fontSize:16, fontWeight:700, color:ADMIN_THEME.text }}>ScholarLogic</button>
-              <span style={{ color:ADMIN_THEME.textSecondary, fontSize:13 }}>Admin</span>
+              <span style={{ fontSize:12, fontWeight:600, padding:"2px 8px", borderRadius:999, background:currentUser.superAdmin ? ADMIN_THEME.secondary : ADMIN_THEME.primaryLight, color:currentUser.superAdmin ? "#FFFFFF" : ADMIN_THEME.primary }}>
+                {currentUser.superAdmin ? "Main admin" : "College admin"}
+              </span>
+              {currentUser.superAdmin ? (collegeOptions.length > 0 && (
+                <select
+                  value={adminCollegeId}
+                  aria-label="College"
+                  title="Whose data you are looking at. New tests and AI interviews go to this group."
+                  onChange={(e) => switchAdminCollege(e.target.value)}
+                  style={{ ...S.adminInput, width:"auto", maxWidth:isPhone ? 170 : 260, padding:"5px 8px", fontSize:13, marginLeft:6 }}
+                >
+                  <option value="general">General students</option>
+                  {collegeOptions.map((college) => <option key={college.id} value={college.id}>{college.name}</option>)}
+                  <option value="all">Everyone (all groups)</option>
+                </select>
+              )) : currentUser.collegeId ? (
+                <span style={{ fontSize:14, fontWeight:600, color:ADMIN_THEME.text, marginLeft:4 }}>
+                  {collegeOptions.find((college) => college.id === currentUser.collegeId)?.name || ""}
+                </span>
+              ) : null}
               <button onClick={signOut} style={{ ...S.adminButton("default"), marginLeft:"auto", padding:"7px 12px", fontSize:13 }}>Sign out</button>
             </div>
             <nav aria-label="Admin sections" style={{ display:"flex", gap:isPhone ? 18 : 22, overflowX:"auto", scrollbarWidth:"none" }}>
-              {adminTabs.map((tab) => {
+              {[...(currentUser.superAdmin ? [{ id: "colleges", label: "Colleges" }] : []), ...adminTabs].map((tab) => {
                 const active = adminTab === tab.id;
                 return (
                   <button key={tab.id} onClick={() => setAdminTab(tab.id)} aria-current={active ? "page" : undefined}
@@ -11439,6 +12083,21 @@ function CodingPlatform() {
 
           {adminTab === "overview" && (
             <div style={{ display:"grid", gap:isPhone ? 16 : 20, minWidth:0 }}>
+              {!currentUser.superAdmin && currentUser.collegeId && (
+                <MyCollegeCard api={performApiRequest} S={S} T={ADMIN_THEME} isPhone={isPhone} compact />
+              )}
+              {currentUser.superAdmin && collegeOptions.length > 0 && (
+                <div style={{ ...S.adminAlert("info"), display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:0 }}>
+                  <span style={{ flex:1, minWidth:0 }}>
+                    {adminCollegeId === "all"
+                      ? "You are viewing everyone: general students and every college. New tests and AI interviews go to general students."
+                      : adminCollegeId === "general"
+                        ? "You are viewing general students (not in any partner college). New tests and AI interviews go to them."
+                        : `You are viewing ${collegeOptions.find((college) => college.id === adminCollegeId)?.name || "one college"}. New tests and AI interviews go to this college's students only.`}
+                  </span>
+                  <button onClick={() => setAdminTab("colleges")} style={{ ...S.adminButton("default"), padding:"6px 10px", fontSize:13 }}>College dashboard</button>
+                </div>
+              )}
               {renderOverviewStats()}
 
               <div style={{ display:"grid", gridTemplateColumns:isPhone || isTablet ? "minmax(0,1fr)" : "minmax(0,1fr) 300px", gap:24, alignItems:"start" }}>
@@ -12398,9 +13057,27 @@ function CodingPlatform() {
           {adminTab === "challenge" && renderAdminChallenges()}
           {adminTab === "feedback" && renderAdminFeedback()}
           {adminTab === "aihire" && renderAdminAiHire()}
+          {adminTab === "students" && !currentUser.superAdmin && currentUser.collegeId && (
+            <div style={{ marginBottom:18 }}>
+              <CollegeStudentsForm
+                api={performApiRequest}
+                college={{ id: currentUser.collegeId, name: collegeOptions.find((college) => college.id === currentUser.collegeId)?.name || "your college" }}
+                S={S}
+                T={ADMIN_THEME}
+                isCollegeAdmin
+                onDone={() => loadAdminPortalData(undefined, { background: true })}
+              />
+            </div>
+          )}
           {adminTab === "students" && renderStudentList()}
+          {adminTab === "colleges" && currentUser.superAdmin && (
+            <CollegesPanel api={performApiRequest} S={S} T={ADMIN_THEME} isPhone={isPhone} onCollegesChanged={reloadCollegeOptions} onViewCollege={switchAdminCollege} />
+          )}
           {adminTab === "monitor" && renderLiveMonitor()}
           {adminTab === "profile" && renderAdminProfile()}
+          {adminTab === "profile" && !currentUser.superAdmin && currentUser.collegeId && (
+            <div style={{ marginTop:18 }}><MyCollegeCard api={performApiRequest} S={S} T={ADMIN_THEME} isPhone={isPhone} /></div>
+          )}
         </div>
       </div>
     </div>
@@ -12430,6 +13107,7 @@ function CodingPlatform() {
                   <div style={{ color:"#93c5fd", fontSize:15, fontWeight:600, marginTop:6 }}>{currentUser.email || "--"}</div>
                   <div style={{ color:"#94a3b8", fontSize:14, maxWidth:620, marginTop:10, lineHeight:1.7 }}>
                     {[
+                      currentUser.collegeId ? collegeOptions.find((college) => college.id === currentUser.collegeId)?.name || null : null,
                       currentUser.department || null,
                       currentUser.role ? formatDisplayName(currentUser.role) : null,
                     ].filter(Boolean).join(" | ") || "Personal details will appear here once your account data is available."}

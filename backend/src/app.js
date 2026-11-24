@@ -20,6 +20,7 @@ const authRoutes = require('./routes/auth');
 const { ensureDefaultAdmin } = require('./controllers/authController');
 
 ensureDefaultAdmin().catch((err) => console.error('Admin seed error:', err));
+require('./lib/collegeScope').ensureColleges().catch((err) => console.error('College setup error:', err));
 const notificationRoutes = require('./routes/notification');
 const problemRoutes = require('./routes/problem');
 const runRoutes = require('./routes/run');
@@ -42,6 +43,7 @@ app.use('/api/admin/announcements', require('./routes/announcements'));
 app.use('/api/admin/feedback', require('./routes/adminFeedback'));
 app.use('/api/ai-hire', require('./routes/aiHire'));
 app.use('/api/admin/ai-hire', require('./routes/adminAiHire'));
+app.use('/api/colleges', require('./routes/colleges'));
 
 async function health(req, res) {
   const database = await prisma.$ping()

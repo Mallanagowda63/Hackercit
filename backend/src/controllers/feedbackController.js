@@ -1,4 +1,14 @@
 const prisma = require('../prismaClient');
+const { canAccessCollege, scopedAssignmentIds } = require('../lib/collegeScope');
+
+// Feedback in the admin's scope (their college's tests; every test for the super admin).
+async function scopedFeedback(req, where = {}, orderBy = undefined) {
+  const [feedback, testIds] = await Promise.all([
+    prisma.testFeedback.findMany({ where, ...(orderBy ? { orderBy } : {}) }),
+    scopedAssignmentIds(req),
+  ]);
+  return testIds ? feedback.filter((entry) => testIds.has(String(entry.assignmentId))) : feedback;
+}
 
 const MAX_COMMENT_LENGTH = 1000;
 
@@ -15,7 +25,7 @@ exports.submitFeedback = async (req, res) => {
     }
 
     const assignment = await prisma.testAssignment.findUnique({ where: { id } });
-    if (!assignment) return res.status(404).json({ error: 'test not found' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'test not found' });
 
     const existing = await prisma.testFeedback.findFirst({
       where: { assignmentId: id, userId: req.user.id },
@@ -54,7 +64,7 @@ function averageOf(feedback) {
 // Feedback the admin hasn't marked as seen has isNew: true.
 exports.listAllFeedback = async (req, res) => {
   try {
-    const feedback = await prisma.testFeedback.findMany({ orderBy: { updatedAt: 'desc' } });
+    const feedback = await scopedFeedback(req, {}, { updatedAt: 'desc' });
     const userIds = [...new Set(feedback.map((entry) => String(entry.userId || '')).filter(Boolean))];
     const users = userIds.length
       ? await prisma.user.findMany({
@@ -98,7 +108,7 @@ exports.listAllFeedback = async (req, res) => {
 // GET /api/admin/feedback/new-count — just the number of unseen feedback (for the tab badge).
 exports.newFeedbackCount = async (req, res) => {
   try {
-    const unseen = await prisma.testFeedback.findMany({ where: { seenByAdmin: { not: true } }, select: { id: true } });
+    const unseen = await scopedFeedback(req, { seenByAdmin: { not: true } });
     return res.json({ newCount: unseen.length });
   } catch (err) {
     console.error(err);
@@ -110,8 +120,10 @@ exports.newFeedbackCount = async (req, res) => {
 exports.markFeedbackSeen = async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).filter(Boolean) : null;
-    const where = ids ? { id: { in: ids } } : { seenByAdmin: { not: true } };
-    const result = await prisma.testFeedback.updateMany({ where, data: { seenByAdmin: true } });
+    const allowed = (await scopedFeedback(req, ids ? { id: { in: ids } } : { seenByAdmin: { not: true } })).map((entry) => entry.id);
+    const result = allowed.length
+      ? await prisma.testFeedback.updateMany({ where: { id: { in: allowed } }, data: { seenByAdmin: true } })
+      : { count: 0 };
     return res.json({ ok: true, updated: result.count });
   } catch (err) {
     console.error(err);
@@ -122,6 +134,8 @@ exports.markFeedbackSeen = async (req, res) => {
 // GET /api/tests/:id/feedback — all feedback for a test (admin only).
 exports.listFeedback = async (req, res) => {
   try {
+    const assignment = await prisma.testAssignment.findUnique({ where: { id: req.params.id } });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'test not found' });
     const feedback = await prisma.testFeedback.findMany({ where: { assignmentId: req.params.id } });
     const ratings = feedback.map((entry) => Number(entry.rating)).filter(Number.isFinite);
     const averageRating = ratings.length

@@ -1,5 +1,6 @@
 const prisma = require('../prismaClient');
 const { toClientDifficulty } = require('../lib/problemHelpers');
+const { canAccessCollege, filterByScope } = require('../lib/collegeScope');
 
 function formatStudentName(user) {
   if (!user) return 'Unknown Student';
@@ -48,9 +49,9 @@ function calculateTimeUsedMinutes(createdAt, assignmentStartAt, durationMinutes)
 // GET /api/admin/reports/tests
 exports.listReportsOverview = async (req, res) => {
   try {
-    const assignments = await prisma.testAssignment.findMany({
+    const assignments = filterByScope(req, await prisma.testAssignment.findMany({
       orderBy: { createdAt: 'desc' },
-    });
+    }));
 
     // Only the score fields this overview shows (not every answer and line of code).
     const submissions = await prisma.assessmentSubmission.findMany({
@@ -114,7 +115,7 @@ exports.getTestReport = async (req, res) => {
       where: { id: testId },
     });
 
-    if (!assignment) {
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) {
       return res.status(404).json({ error: 'Assessment not found.' });
     }
 
@@ -357,16 +358,16 @@ exports.getStudentDetailReport = async (req, res) => {
       where: { id: testId },
     });
 
-    if (!assignment) {
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) {
       return res.status(404).json({ error: 'Assessment not found.' });
     }
 
     const user = await prisma.user.findUnique({
       where: { id: studentId },
-      select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
+      select: { id: true, name: true, email: true, usn: true, department: true, phone: true, collegeId: true },
     });
 
-    if (!user) {
+    if (!user || !canAccessCollege(req.user, user.collegeId)) {
       return res.status(404).json({ error: 'Student not found.' });
     }
 
@@ -464,7 +465,7 @@ exports.getCodingSubmissionDetail = async (req, res) => {
     const submission = await prisma.submission.findUnique({
       where: { id: submissionId },
       include: {
-        user: { select: { id: true, name: true, email: true, usn: true, department: true, phone: true } },
+        user: { select: { id: true, name: true, email: true, usn: true, department: true, phone: true, collegeId: true } },
         problem: { select: { id: true, title: true, statement: true, difficulty: true, marks: true } },
       },
     });
@@ -476,8 +477,12 @@ exports.getCodingSubmissionDetail = async (req, res) => {
     if (!submission.user && submission.userId) {
       submission.user = await prisma.user.findUnique({
         where: { id: submission.userId },
-        select: { id: true, name: true, email: true, usn: true, department: true, phone: true },
+        select: { id: true, name: true, email: true, usn: true, department: true, phone: true, collegeId: true },
       });
+    }
+
+    if (!canAccessCollege(req.user, submission.user?.collegeId)) {
+      return res.status(404).json({ error: 'Coding submission not found.' });
     }
 
     if (submission.user) {
@@ -508,9 +513,9 @@ exports.getLiveMonitor = async (req, res) => {
     const { testId } = req.params;
     const assignment = await prisma.testAssignment.findUnique({
       where: { id: testId },
-      select: { id: true, title: true, status: true, startsAt: true, endsAt: true, durationMinutes: true, problemIds: true },
+      select: { id: true, title: true, status: true, startsAt: true, endsAt: true, durationMinutes: true, problemIds: true, collegeId: true },
     });
-    if (!assignment) return res.status(404).json({ error: 'Assessment not found.' });
+    if (!assignment || !canAccessCollege(req.user, assignment.collegeId)) return res.status(404).json({ error: 'Assessment not found.' });
 
     const runStart = assignment.startsAt ? new Date(assignment.startsAt).getTime() : 0;
     const attempts = await prisma.testAttempt.findMany({
@@ -631,10 +636,10 @@ exports.getStudentActivity = async (req, res) => {
       where: { id: userId },
       select: {
         id: true, name: true, email: true, usn: true, department: true, phone: true, createdAt: true,
-        lastLoginAt: true, loginCount: true, badgeTier: true, solvedProblemCount: true,
+        lastLoginAt: true, loginCount: true, badgeTier: true, solvedProblemCount: true, collegeId: true,
       },
     });
-    if (!user) return res.status(404).json({ error: 'Student not found.' });
+    if (!user || !canAccessCollege(req.user, user.collegeId)) return res.status(404).json({ error: 'Student not found.' });
 
     const [submissions, examResults, attempts] = await Promise.all([
       prisma.submission.findMany({

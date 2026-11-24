@@ -1,5 +1,6 @@
 const prisma = require('../prismaClient');
 const { effectiveRole } = require('../lib/adminConfig');
+const { scopeCollegeId, filterByScope } = require('../lib/collegeScope');
 const { sendEmail, sendBulk, isMailConfigured, mailFrom } = require('../lib/mailer');
 const { renderAnnouncementEmail } = require('../lib/emailTemplate');
 
@@ -38,8 +39,9 @@ function readInput(body = {}) {
   return { subject, message };
 }
 
-async function loadStudents() {
-  const users = await prisma.user.findMany({});
+// Students the admin may email: their own college's (every college for the super admin).
+async function loadStudents(req) {
+  const users = filterByScope(req, await prisma.user.findMany({}));
   const seen = new Set();
   return users.filter((user) => {
     if (String(effectiveRole(user) || '').toUpperCase() !== 'USER') return false;
@@ -59,8 +61,15 @@ function presentJob(job) {
 // GET /api/admin/announcements/status
 exports.status = async (req, res) => {
   try {
-    const students = await loadStudents();
-    const logs = await prisma.emailLog.findMany({ orderBy: { sentAt: 'desc' }, take: 200 });
+    const students = await loadStudents(req);
+    const scoped = scopeCollegeId(req) !== null;
+    const studentIds = new Set(students.map((student) => String(student.id)));
+    const allLogs = await prisma.emailLog.findMany({ orderBy: { sentAt: 'desc' }, take: 200 });
+    // A college admin only sees sends that went to their own students.
+    const logs = scoped
+      ? allLogs.filter((log) => (Array.isArray(log.userIds) ? log.userIds : []).some((id) => studentIds.has(String(id))))
+      : allLogs;
+    const job = currentJob && (!scoped || currentJob.collegeId === scopeCollegeId(req)) ? currentJob : null;
     return res.json({
       configured: isMailConfigured(),
       from: mailFrom(),
@@ -78,10 +87,10 @@ exports.status = async (req, res) => {
         subject: log.subject,
         sentAt: log.sentAt,
         sent: log.sent,
-        userIds: Array.isArray(log.userIds) ? log.userIds.map(String) : [],
+        userIds: (Array.isArray(log.userIds) ? log.userIds.map(String) : []).filter((id) => !scoped || studentIds.has(id)),
       })),
       adminEmail: req.user.email || '',
-      job: presentJob(currentJob),
+      job: presentJob(job),
     });
   } catch (error) {
     console.error(error);
@@ -107,7 +116,8 @@ exports.send = async (req, res) => {
       return res.json({ ok: true, test: true, to: testTo });
     }
 
-    if (currentJob?.status === 'SENDING') return res.status(409).json({ error: 'An email is already being sent. Wait for it to finish.' });
+    // All colleges share one email account, so only one send runs at a time.
+    if (currentJob?.status === 'SENDING') return res.status(409).json({ error: 'An email is already being sent (maybe by another college). Wait a minute and try again.' });
 
     const requestedIds = [...new Set((Array.isArray(req.body.userIds) ? req.body.userIds : []).map(String).filter(Boolean))];
     if (!requestedIds.length) return res.status(400).json({ error: 'Select at least one student.' });
@@ -115,7 +125,7 @@ exports.send = async (req, res) => {
       return res.status(400).json({ error: `You can email at most ${MAX_RECIPIENTS} students at a time. You selected ${requestedIds.length}.` });
     }
     const wanted = new Set(requestedIds);
-    const students = (await loadStudents()).filter((student) => wanted.has(String(student.id)));
+    const students = (await loadStudents(req)).filter((student) => wanted.has(String(student.id)));
     if (!students.length) return res.status(400).json({ error: 'None of the selected students could be found.' });
 
     const messages = students.map((student) => ({
@@ -134,6 +144,7 @@ exports.send = async (req, res) => {
       startedAt: new Date().toISOString(),
       finishedAt: null,
       sentBy: req.user.email || '',
+      collegeId: scopeCollegeId(req),
     };
     currentJob = job;
 
@@ -149,7 +160,18 @@ exports.send = async (req, res) => {
         // With up to 100 recipients everything goes in one batch, so it is all sent or all failed.
         if (result.sent && !result.failed) {
           await prisma.emailLog.create({
-            data: { subject, userIds: students.map((student) => String(student.id)), sent: result.sent, sentAt: new Date(), sentBy: job.sentBy },
+            data: {
+              subject,
+              userIds: students.map((student) => String(student.id)),
+              collegeIds: [...new Set(students.map((student) => String(student.collegeId || '')).filter(Boolean))],
+              collegeId: (() => {
+                const ids = [...new Set(students.map((student) => String(student.collegeId || '')))];
+                return ids.length === 1 && ids[0] ? ids[0] : null;
+              })(),
+              sent: result.sent,
+              sentAt: new Date(),
+              sentBy: job.sentBy,
+            },
           }).catch((logError) => console.error('emailLog write failed', logError));
         }
         job.status = result.failed ? (result.sent ? 'PARTIAL' : 'FAILED') : 'DONE';

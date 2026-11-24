@@ -35,7 +35,9 @@ function groupBy(items, key) {
 
 async function buildAssignmentReport(assignment) {
   const [students, attempts, submissions, problems] = await Promise.all([
-    prisma.user.findMany({ where: { role: 'USER' } }),
+    // Only the students of the test's group (its college, or general students) are listed.
+    prisma.user.findMany({ where: { role: 'USER' } })
+      .then((users) => users.filter((user) => String(user.collegeId || '') === String(assignment.collegeId || ''))),
     prisma.testAttempt.findMany({ where: { assignmentId: assignment.id } }),
     prisma.submission.findMany({ include: { problem: true }, orderBy: { createdAt: 'asc' } }),
     assignment.problemIds?.length
