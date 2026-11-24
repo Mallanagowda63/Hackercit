@@ -2127,6 +2127,8 @@ function JoinCollegeBanner() {
   const [college, setCollege] = useState(null);
   const [error, setError] = useState("");
   const [state, setState] = useState("idle"); // idle | joining | joined
+  // Hidden while the student fills in the sign-up / login box; the join still happens after.
+  const [waitingForLogin, setWaitingForLogin] = useState(false);
   const [session, setSession] = useState(readStoredSession);
 
   const forget = () => {
@@ -2186,10 +2188,14 @@ function JoinCollegeBanner() {
   }, [code, college, session, role]);
 
   if (!code && state !== "joined") return null;
+  if (waitingForLogin && !session && state !== "joined" && !error) return null;
 
   const box = { position: "fixed", left: "50%", bottom: 20, transform: "translateX(-50%)", zIndex: 5000, width: "min(560px, calc(100vw - 32px))", boxSizing: "border-box", background: "#15171f", border: "1px solid #2f3445", borderRadius: 12, padding: "16px 18px", color: "#ececec", fontFamily: "'IBM Plex Sans','Outfit',system-ui,sans-serif", boxShadow: "0 18px 50px rgba(0,0,0,0.45)" };
   const button = (primary) => ({ background: primary ? "#e8873a" : "transparent", color: primary ? "#1a1009" : "#d4d4d4", border: `1px solid ${primary ? "#e8873a" : "#3a3a3a"}`, borderRadius: 7, padding: "8px 14px", fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer" });
-  const openAuth = (mode) => window.dispatchEvent(new CustomEvent("devorbit:open-auth", { detail: { mode } }));
+  const openAuth = (mode) => {
+    setWaitingForLogin(true);
+    window.dispatchEvent(new CustomEvent("devorbit:open-auth", { detail: { mode } }));
+  };
 
   return (
     <div role="dialog" aria-label="College invite" style={box}>
