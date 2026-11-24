@@ -3390,6 +3390,9 @@ function CodingPlatform() {
 
   // `background`: the 20s auto-refresh, which may reuse the problem bank downloaded in the last 2
   // minutes. Every other call (after adding, editing or importing questions) downloads it fresh.
+  const adminHeavyLoadedAtRef = useRef(0);
+  const adminReportTestIdRef = useRef("");
+
   const loadAdminPortalData = async (preferredAssignmentId = adminCurrentTest?.id, { background = false } = {}) => {
     // The 20s background refresh updates quietly; only the first load and admin actions show the banner.
     if (!background) setAdminAssignmentsLoading(true);
@@ -3397,12 +3400,17 @@ function CodingPlatform() {
 
     try {
       // Everything loads at the same time; the problem bank is reused for 2 minutes.
+      // The 20s background refresh re-reads the tests. The student list and leaderboard are heavy
+      // (every student and submission), so it re-reads them at most every 2 minutes; opening the
+      // panel or an admin action always loads them fresh.
+      const reuseHeavy = background && Date.now() - adminHeavyLoadedAtRef.current < 120000;
       const [problems, testsData, studentsData, leaderboardData] = await Promise.all([
         background && isProblemBankFresh() ? problemBankCacheRef.current.problems : loadProblemBank(),
         performApiRequest("/api/tests"),
-        performApiRequest("/api/auth/students"),
-        performApiRequest("/api/submissions/leaderboard"),
+        reuseHeavy ? null : performApiRequest("/api/auth/students"),
+        reuseHeavy ? null : performApiRequest("/api/submissions/leaderboard"),
       ]);
+      if (!reuseHeavy) adminHeavyLoadedAtRef.current = Date.now();
 
       const assignments = Array.isArray(testsData.assignments)
         ? testsData.assignments.map(mapAssignmentRecord).filter(Boolean)
@@ -3430,7 +3438,7 @@ function CodingPlatform() {
           average: assignment.questionIds.length * 25,
         }));
 
-      const students = Array.isArray(studentsData.students) ? studentsData.students : [];
+      const students = Array.isArray(studentsData?.students) ? studentsData.students : [];
       const mappedRegisteredStudents = students.map((student) => ({
         id: student.id,
         name: student.name || student.email,
@@ -3447,7 +3455,7 @@ function CodingPlatform() {
         solvedProblemCount: Number(student.solvedProblemCount || 0),
       }));
       const mappedStudents = mappedRegisteredStudents.filter((student) => Number(student.loginCount || 0) > 0);
-      const nextLeaderboard = Array.isArray(leaderboardData.leaderboard)
+      const nextLeaderboard = Array.isArray(leaderboardData?.leaderboard)
         ? leaderboardData.leaderboard
         : [];
 
@@ -3464,15 +3472,22 @@ function CodingPlatform() {
       setAdminCurrentTest(currentAssignment);
       setPreviousTests(history.length ? history : defaultPreviousTests);
       setSelectedPreviousTest(history[0] || defaultPreviousTests[0]);
-      setLeaderboard(nextLeaderboard);
-      setRegisteredStudents(mappedRegisteredStudents);
-      setActiveUsers(mappedStudents);
-      setParticipantsCount(mappedStudents.length);
+      if (!reuseHeavy) {
+        setLeaderboard(nextLeaderboard);
+        setRegisteredStudents(mappedRegisteredStudents);
+        setActiveUsers(mappedStudents);
+        setParticipantsCount(mappedStudents.length);
+      }
+      // An ended test's report does not change, so the background refresh does not reload it.
       if (currentAssignment?.id && currentAssignment.status === "ENDED") {
-        const reportData = await performApiRequest(`/api/tests/${currentAssignment.id}/report`);
-        setAdminTestReport(reportData.report || null);
+        if (!background || adminReportTestIdRef.current !== currentAssignment.id) {
+          const reportData = await performApiRequest(`/api/tests/${currentAssignment.id}/report`);
+          setAdminTestReport(reportData.report || null);
+          adminReportTestIdRef.current = currentAssignment.id;
+        }
       } else {
         setAdminTestReport(null);
+        adminReportTestIdRef.current = "";
       }
 
       if (currentAssignment?.problems?.length) {

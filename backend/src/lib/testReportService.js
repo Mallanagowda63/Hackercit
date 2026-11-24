@@ -39,7 +39,10 @@ async function buildAssignmentReport(assignment) {
     prisma.user.findMany({ where: { role: 'USER' } })
       .then((users) => users.filter((user) => String(user.collegeId || '') === String(assignment.collegeId || ''))),
     prisma.testAttempt.findMany({ where: { assignmentId: assignment.id } }),
-    prisma.submission.findMany({ include: { problem: true }, orderBy: { createdAt: 'asc' } }),
+    // Only submissions to this test's questions are read (not every practice submission).
+    assignment.problemIds?.length
+      ? prisma.submission.findMany({ where: { problemId: { in: assignment.problemIds } }, include: { problem: true }, orderBy: { createdAt: 'asc' } })
+      : [],
     assignment.problemIds?.length
       ? prisma.problem.findMany({ where: { id: { in: assignment.problemIds } } })
       : [],

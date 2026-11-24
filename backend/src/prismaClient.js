@@ -122,10 +122,22 @@ function getFieldValue(document, key) {
   return document?.[key];
 }
 
+// `{ in: [...] }` lists can hold thousands of ids (e.g. every student). Checking each document
+// against the whole list was O(documents x list) and took seconds, so the list is turned into a
+// Set of comparable values once per array (rebuilt if the array's length changes).
+const inSetCache = new WeakMap();
+function inValueSet(list) {
+  const cached = inSetCache.get(list);
+  if (cached && cached.length === list.length) return cached.set;
+  const set = new Set(list.map(normalizeComparable));
+  inSetCache.set(list, { length: list.length, set });
+  return set;
+}
+
 function matchesCondition(value, condition) {
   if (isPlainObject(condition)) {
     if ('in' in condition) {
-      return Array.isArray(condition.in) && condition.in.some((entry) => valuesEqual(value, entry));
+      return Array.isArray(condition.in) && inValueSet(condition.in).has(normalizeComparable(value));
     }
 
     if ('not' in condition) {
