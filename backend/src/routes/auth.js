@@ -10,5 +10,6 @@ router.post('/forgot', controller.forgotPassword);
 router.post('/reset', controller.resetPassword);
 router.get('/me', controller.me);
 router.get('/students', requireAuth, requireRole('ADMIN'), controller.listStudents);
+router.delete('/students/:id', requireAuth, requireRole('ADMIN'), controller.deleteStudent);
 
 module.exports = router;

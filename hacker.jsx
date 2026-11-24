@@ -9229,6 +9229,36 @@ function CodingPlatform() {
     );
   };
 
+  const studentLabel = (student) => `${student.name || student.email}${student.usn ? ` (${student.usn})` : ""}`;
+
+  const removeStudentFromCollege = async (student) => {
+    const collegeName = collegeOptions.find((college) => college.id === student.collegeId)?.name || "the college";
+    if (!window.confirm(`Remove ${studentLabel(student)} from ${collegeName}?\n\nTheir DevOrbit account stays; they become a normal student and stop seeing ${collegeName}'s tests.`)) return;
+    try {
+      await performApiRequest(`/api/colleges/${student.collegeId}/remove-students`, { method: "POST", body: JSON.stringify({ identifiers: [student.email] }) });
+      setRegisteredStudents((list) => list.filter((item) => item.id !== student.id));
+      setPortalMessage(`${studentLabel(student)} was removed from ${collegeName}.`);
+    } catch (error) {
+      setPortalError(error.message || "Could not remove the student.");
+    }
+  };
+
+  const deleteStudentAccount = async (student) => {
+    const typed = window.prompt(`Permanently delete ${studentLabel(student)}?\n\nThis deletes their account and ALL their data: practice submissions, test attempts and scores, feedback and AI interviews. It cannot be undone.\n\nType DELETE to confirm.`);
+    if (typed === null) return;
+    if (typed.trim().toUpperCase() !== "DELETE") {
+      setPortalError("Not deleted. Type DELETE to confirm.");
+      return;
+    }
+    try {
+      await performApiRequest(`/api/auth/students/${student.id}`, { method: "DELETE" });
+      setRegisteredStudents((list) => list.filter((item) => item.id !== student.id));
+      setPortalMessage(`${studentLabel(student)}'s account was deleted.`);
+    } catch (error) {
+      setPortalError(error.message || "Could not delete the student.");
+    }
+  };
+
   const renderStudentList = () => (
     <div style={{ display:"grid", gap:18 }}>
       <div style={S.adminCardGrid}>
@@ -9254,7 +9284,7 @@ function CodingPlatform() {
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr>
-              {["Student", "Mobile", "Department", "Badge", "Status", "Last Login", "Logins"].map((heading) => (
+              {["Student", "Mobile", "Department", "Badge", "Status", "Last Login", "Logins", ""].map((heading) => (
                 <th key={heading} style={S.adminTableHead}>{heading}</th>
               ))}
             </tr>
@@ -9281,10 +9311,26 @@ function CodingPlatform() {
                 <td style={{ ...S.adminTableCell, color:student.status === "Logged In" ? ADMIN_THEME.success : ADMIN_THEME.warning, fontWeight:700 }}>{student.status}</td>
                 <td style={S.adminTableCell}>{formatPortalDate(student.lastLoginAt)}</td>
                 <td style={{ ...S.adminTableCell, color:ADMIN_THEME.primary, fontWeight:700 }}>{student.loginCount || 0}</td>
+                <td style={{ ...S.adminTableCell, whiteSpace:"nowrap", textAlign:"right" }}>
+                  {student.collegeId && (!currentUser.superAdmin || adminCollegeId !== "general") && (
+                    <button type="button" title="Take this student out of the college. Their DevOrbit account stays."
+                      onClick={() => removeStudentFromCollege(student)}
+                      style={{ ...S.adminButton("default"), padding:"5px 10px", fontSize:12.5 }}>
+                      Remove from college
+                    </button>
+                  )}
+                  {currentUser.superAdmin && (
+                    <button type="button" title="Permanently delete this student account and all its data."
+                      onClick={() => deleteStudentAccount(student)}
+                      style={{ ...S.adminButton("default"), padding:"5px 10px", fontSize:12.5, color:ADMIN_THEME.error, marginLeft:6 }}>
+                      Delete account
+                    </button>
+                  )}
+                </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan="7" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No registered students yet.</td>
+                <td colSpan="8" style={{ ...S.adminTableCell, textAlign:"center", color:ADMIN_THEME.textMuted }}>No registered students yet.</td>
               </tr>
             )}
           </tbody>

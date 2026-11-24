@@ -409,3 +409,30 @@ exports.listStudents = async (req, res) => {
   }
 };
 
+
+// DELETE /api/auth/students/:id — main admin only. Permanently deletes a student account and
+// everything recorded for it (practice, tests, results, feedback, AI interviews, notifications).
+exports.deleteStudent = async (req, res) => {
+  try {
+    if (!isSuperAdmin(req.user)) return res.status(403).json({ error: 'Only the main admin can delete student accounts.' });
+    const student = await prisma.user.findUnique({ where: { id: String(req.params.id) } });
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+    if (effectiveRole(student) !== 'USER') return res.status(400).json({ error: 'Only student accounts can be deleted here.' });
+
+    const { idForms } = require('../lib/collegeScope');
+    const ids = idForms([student.id]);
+    const removed = {};
+    for (const name of ['submission', 'testAttempt', 'assessmentSubmission', 'testFeedback', 'aiHireInterview', 'aiHireAnswer', 'notification', 'verificationToken', 'resetToken']) {
+      const result = await (await prisma[name].collection()).deleteMany({ userId: { $in: ids } });
+      removed[name] = result.deletedCount;
+    }
+    // Keep uploaded class lists, but forget that this person joined.
+    await (await prisma.collegeRoster.collection()).updateMany({ joinedUserId: { $in: ids } }, { $set: { joinedUserId: null } });
+    await prisma.user.delete({ where: { id: student.id } });
+    console.log(`[admin] ${req.user.email} deleted student ${student.email}`, removed);
+    return res.json({ deleted: true, email: student.email, removed });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not delete the student.' });
+  }
+};
