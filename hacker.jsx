@@ -1514,11 +1514,11 @@ function CollegeStudentList({ api, college, S, T, onChanged }) {
   const label = (student) => `${student.name || student.email}${student.usn ? ` (${student.usn})` : ""}`;
   const act = async (student, mode) => {
     if (mode === "remove") {
-      if (!window.confirm(`Remove ${label(student)} from ${college.name}?\n\nTheir DevOrbit account stays; they become a normal student.`)) return;
+      const ok = await askConfirm({ title: `Remove ${label(student)} from ${college.name}?`, message: "Their DevOrbit account stays. They become a normal student and stop seeing this college's tests.", confirmLabel: "Remove from college" });
+      if (!ok) return;
     } else {
-      const typed = window.prompt(`Permanently delete ${label(student)}?\n\nThis deletes their account and ALL their data (practice, test scores, feedback, AI interviews). It cannot be undone.\n\nType DELETE to confirm.`);
-      if (typed === null) return;
-      if (typed.trim().toUpperCase() !== "DELETE") { setError("Not deleted. Type DELETE to confirm."); return; }
+      const ok = await askConfirm({ title: `Delete ${label(student)}'s account?`, message: "This permanently deletes the account and ALL its data: practice, test scores, feedback and AI interviews. It cannot be undone.", confirmLabel: "Delete account", danger: true, requireText: "DELETE" });
+      if (!ok) return;
     }
     setBusy(`${mode}-${student.id}`);
     setError("");
@@ -1792,7 +1792,7 @@ function CollegesPanel({ api, S, T, isPhone, onCollegesChanged, onViewCollege })
                 </button>
                 {empty && (
                   <button
-                    onClick={() => { if (window.confirm(`Delete the college "${college.name}"?`)) run(`delete-${college.id}`, () => api(`/api/colleges/${college.id}`, { method: "DELETE" }), "College deleted."); }}
+                    onClick={async () => { if (await askConfirm({ title: `Delete the college "${college.name}"?`, message: "The college has no students, admins or tests, so nothing else is removed.", confirmLabel: "Delete college", danger: true })) run(`delete-${college.id}`, () => api(`/api/colleges/${college.id}`, { method: "DELETE" }), "College deleted."); }}
                     style={{ ...small, color: T.error }}
                   >
                     Delete
@@ -1844,9 +1844,9 @@ function CollegesPanel({ api, S, T, isPhone, onCollegesChanged, onViewCollege })
                           <div style={muted}>{admin.lastLoginAt ? `Last login ${collegeWhen(admin.lastLoginAt)} · ${admin.loginCount} logins` : "Never logged in"}</div>
                         </div>
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             const password = randomPassword();
-                            if (!window.confirm(`Set a new password for ${admin.email}? The old password stops working.`)) return;
+                            if (!(await askConfirm({ title: `Set a new password for ${admin.email}?`, message: "Their old password stops working. You will see the new one once, to send to them.", confirmLabel: "Reset password" }))) return;
                             run(`pw-${admin.id}`, () => api(`/api/colleges/admins/${admin.id}/password`, { method: "POST", body: JSON.stringify({ password }) }),
                               `New password for ${admin.email}:\n${password}\n\nCopy it now and send it to them. It is not shown again.`);
                           }}
@@ -1855,7 +1855,7 @@ function CollegesPanel({ api, S, T, isPhone, onCollegesChanged, onViewCollege })
                           Reset password
                         </button>
                         <button
-                          onClick={() => { if (window.confirm(`Remove the admin login ${admin.email}? They will no longer be able to sign in.`)) run(`rm-${admin.id}`, () => api(`/api/colleges/admins/${admin.id}`, { method: "DELETE" }), "Admin login removed."); }}
+                          onClick={async () => { if (await askConfirm({ title: `Remove the admin login ${admin.email}?`, message: "They will no longer be able to sign in. The college and its students are not affected.", confirmLabel: "Remove login", danger: true })) run(`rm-${admin.id}`, () => api(`/api/colleges/admins/${admin.id}`, { method: "DELETE" }), "Admin login removed."); }}
                           style={{ ...small, color: T.error }}
                         >
                           Remove
@@ -1970,6 +1970,91 @@ function MyCollegeCard({ api, S, T, isPhone, compact = false }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── CONFIRM POPUP ────────────────────────────────────────────────────────────
+// askConfirm({ title, message, confirmLabel, danger, requireText }) shows an in-app popup and
+// resolves to true / false. With requireText (e.g. "DELETE") the button stays off until it is typed.
+function askConfirm(options) {
+  return new Promise((resolve) => {
+    window.dispatchEvent(new CustomEvent("devorbit:confirm", { detail: { ...options, resolve } }));
+  });
+}
+
+function ConfirmDialogHost() {
+  const [dialog, setDialog] = useState(null);
+  const [typed, setTyped] = useState("");
+  const inputRef = useRef(null);
+  const confirmRef = useRef(null);
+
+  useEffect(() => {
+    const open = (event) => {
+      setTyped("");
+      setDialog((current) => {
+        current?.resolve(false);
+        return event.detail;
+      });
+    };
+    window.addEventListener("devorbit:confirm", open);
+    return () => window.removeEventListener("devorbit:confirm", open);
+  }, []);
+
+  useEffect(() => {
+    if (!dialog) return;
+    setTimeout(() => (dialog.requireText ? inputRef.current : confirmRef.current)?.focus(), 30);
+  }, [dialog]);
+
+  if (!dialog) return null;
+  const ready = !dialog.requireText || typed.trim().toUpperCase() === String(dialog.requireText).toUpperCase();
+  const close = (answer) => {
+    dialog.resolve(Boolean(answer));
+    setDialog(null);
+  };
+  const red = "#B42318";
+
+  return (
+    <div role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) close(false); }}
+      onKeyDown={(e) => { if (e.key === "Escape") close(false); }}
+      style={{ position: "fixed", inset: 0, zIndex: 6000, background: "rgba(15,15,20,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, fontFamily: "'IBM Plex Sans','Outfit',system-ui,sans-serif" }}>
+      <div role="alertdialog" aria-modal="true" aria-labelledby="dv-confirm-title"
+        style={{ width: "min(460px, 100%)", background: "#FFFFFF", color: "#1C1917", borderRadius: 12, boxShadow: "0 24px 60px rgba(0,0,0,0.35)", overflow: "hidden" }}>
+        <div style={{ padding: "20px 22px 4px", display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <div style={{ width: 38, height: 38, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: dialog.danger ? "rgba(180,35,24,0.1)" : "#EEF2FD", color: dialog.danger ? red : "#1D3FCF" }}>
+            {dialog.danger ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16.5v.5" /></svg>
+            )}
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div id="dv-confirm-title" style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35, marginBottom: 6, wordBreak: "break-word" }}>{dialog.title}</div>
+            {dialog.message && <div style={{ fontSize: 14, color: "#57534E", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{dialog.message}</div>}
+          </div>
+        </div>
+        {dialog.requireText && (
+          <div style={{ padding: "14px 22px 0 74px" }}>
+            <label style={{ display: "block", fontSize: 13, color: "#57534E", marginBottom: 6 }}>
+              Type <strong style={{ color: red, fontFamily: "'IBM Plex Mono',monospace" }}>{dialog.requireText}</strong> to confirm
+            </label>
+            <input ref={inputRef} value={typed} onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && ready) close(true); }}
+              autoComplete="off" spellCheck={false}
+              style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${ready ? red : "#E7E5E4"}`, borderRadius: 6, padding: "9px 12px", fontSize: 14, outline: "none", fontFamily: "'IBM Plex Mono',monospace" }} />
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "20px 22px", marginTop: 6, background: "#FAFAF9", borderTop: "1px solid #EEEDEB" }}>
+          <button type="button" onClick={() => close(false)}
+            style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #E7E5E4", background: "#FFFFFF", color: "#1C1917", fontSize: 14, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>
+            {dialog.cancelLabel || "Cancel"}
+          </button>
+          <button ref={confirmRef} type="button" disabled={!ready} onClick={() => close(true)}
+            style={{ padding: "9px 16px", borderRadius: 6, border: `1px solid ${dialog.danger ? red : "#1C1917"}`, background: dialog.danger ? red : "#1C1917", color: "#FFFFFF", fontSize: 14, fontWeight: 600, cursor: ready ? "pointer" : "not-allowed", opacity: ready ? 1 : 0.45, fontFamily: "inherit" }}>
+            {dialog.confirmLabel || "Confirm"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2089,7 +2174,7 @@ function AddStudentsPanel({ api, college: collegeProp, S, T, isPhone, isCollegeA
                 <button type="button" disabled={busy === "invite"} onClick={() => updateInvite({ enabled: !college.inviteEnabled }, college.inviteEnabled ? "Invite link turned off. Nobody new can join with it." : "Invite link turned on.")} style={small}>
                   {college.inviteEnabled ? "Turn link off" : "Turn link on"}
                 </button>
-                <button type="button" disabled={busy === "invite"} onClick={() => { if (window.confirm("Make a new link? The old link stops working.")) updateInvite({ regenerate: true, enabled: true }, "New link made. The old link no longer works."); }} style={small}>
+                <button type="button" disabled={busy === "invite"} onClick={async () => { if (await askConfirm({ title: "Make a new invite link?", message: "The old link stops working. Students who already joined stay in the college.", confirmLabel: "Make new link" })) updateInvite({ regenerate: true, enabled: true }, "New link made. The old link no longer works."); }} style={small}>
                   Make new link
                 </button>
               </div>
@@ -2136,7 +2221,7 @@ function AddStudentsPanel({ api, college: collegeProp, S, T, isPhone, isCollegeA
                 <span style={{ color: T.success }}>{roster.counts.joined} joined</span>
                 <span style={{ color: T.warning }}>{roster.counts.waiting} not signed up yet</span>
                 {roster.counts.waiting > 0 && (
-                  <button type="button" onClick={() => { if (window.confirm("Remove the students who have not signed up yet from the list?")) run("clear", async () => { const r = await api(`/api/colleges/${college.id}/roster`, { method: "DELETE" }); say("success", `Removed ${r.removed} from the waiting list.`); loadRoster(); }); }}
+                  <button type="button" onClick={async () => { if (await askConfirm({ title: "Clear the waiting list?", message: "Students on your list who have not signed up yet are removed from it, so they will not join automatically.", confirmLabel: "Clear waiting list", danger: true })) run("clear", async () => { const r = await api(`/api/colleges/${college.id}/roster`, { method: "DELETE" }); say("success", `Removed ${r.removed} from the waiting list.`); loadRoster(); }); }}
                     style={{ ...small, marginLeft: "auto" }}>Clear waiting list</button>
                 )}
               </div>
@@ -2162,9 +2247,9 @@ function AddStudentsPanel({ api, college: collegeProp, S, T, isPhone, isCollegeA
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {["add", "remove"].map((mode) => (
               <button key={mode} type="button" disabled={!text.trim() || Boolean(busy)}
-                onClick={() => {
+                onClick={async () => {
                   const identifiers = text.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean);
-                  if (mode === "remove" && !window.confirm(`Take these students out of ${college.name}? They become normal DevOrbit students again.`)) return;
+                  if (mode === "remove" && !(await askConfirm({ title: `Take these students out of ${college.name}?`, message: "Their accounts stay. They become normal DevOrbit students again.", confirmLabel: "Remove from college" }))) return;
                   run(mode, async () => {
                     const result = await api(`/api/colleges/${college.id}/${mode === "add" ? "move-students" : "remove-students"}`, { method: "POST", body: JSON.stringify({ identifiers }) });
                     const parts = mode === "add"
@@ -9321,7 +9406,8 @@ function CodingPlatform() {
 
   const removeStudentFromCollege = async (student) => {
     const collegeName = collegeOptions.find((college) => college.id === student.collegeId)?.name || "the college";
-    if (!window.confirm(`Remove ${studentLabel(student)} from ${collegeName}?\n\nTheir DevOrbit account stays; they become a normal student and stop seeing ${collegeName}'s tests.`)) return;
+    const ok = await askConfirm({ title: `Remove ${studentLabel(student)} from ${collegeName}?`, message: `Their DevOrbit account stays. They become a normal student and stop seeing ${collegeName}'s tests.`, confirmLabel: "Remove from college" });
+    if (!ok) return;
     try {
       await performApiRequest(`/api/colleges/${student.collegeId}/remove-students`, { method: "POST", body: JSON.stringify({ identifiers: [student.email] }) });
       setRegisteredStudents((list) => list.filter((item) => item.id !== student.id));
@@ -9332,12 +9418,8 @@ function CodingPlatform() {
   };
 
   const deleteStudentAccount = async (student) => {
-    const typed = window.prompt(`Permanently delete ${studentLabel(student)}?\n\nThis deletes their account and ALL their data: practice submissions, test attempts and scores, feedback and AI interviews. It cannot be undone.\n\nType DELETE to confirm.`);
-    if (typed === null) return;
-    if (typed.trim().toUpperCase() !== "DELETE") {
-      setPortalError("Not deleted. Type DELETE to confirm.");
-      return;
-    }
+    const ok = await askConfirm({ title: `Delete ${studentLabel(student)}'s account?`, message: "This permanently deletes the account and ALL its data: practice submissions, test attempts and scores, feedback and AI interviews. It cannot be undone.", confirmLabel: "Delete account", danger: true, requireText: "DELETE" });
+    if (!ok) return;
     try {
       await performApiRequest(`/api/auth/students/${student.id}`, { method: "DELETE" });
       setRegisteredStudents((list) => list.filter((item) => item.id !== student.id));
@@ -16140,5 +16222,6 @@ root.render(
   <ErrorBoundary>
     <CodingPlatform />
     <JoinCollegeBanner />
+    <ConfirmDialogHost />
   </ErrorBoundary>
 );
