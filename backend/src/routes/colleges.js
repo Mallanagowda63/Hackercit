@@ -6,6 +6,9 @@ const { requireAuth, requireRole } = require('../middleware/authMiddleware');
 const superAdmin = [requireAuth, requireRole('ADMIN'), controller.requireSuperAdmin];
 
 router.get('/', controller.publicList);
+// Invite links: public preview, and the signed-in student joining.
+router.get('/join/:code', controller.invitePreview);
+router.post('/join', requireAuth, controller.joinWithCode);
 router.get('/manage', ...superAdmin, controller.manageList);
 router.get('/mine', requireAuth, requireRole('ADMIN'), controller.mine);
 router.get('/check', ...superAdmin, controller.check);
@@ -17,6 +20,10 @@ router.post('/:id/admins', ...superAdmin, controller.createAdmin);
 // The main admin, or that college's own admin (checked in the controller).
 router.post('/:id/move-students', requireAuth, requireRole('ADMIN'), controller.moveStudents);
 router.post('/:id/remove-students', requireAuth, requireRole('ADMIN'), controller.removeStudents);
+router.post('/:id/invite', requireAuth, requireRole('ADMIN'), controller.updateInvite);
+router.get('/:id/roster', requireAuth, requireRole('ADMIN'), controller.listRoster);
+router.post('/:id/roster', requireAuth, requireRole('ADMIN'), controller.uploadRoster);
+router.delete('/:id/roster', requireAuth, requireRole('ADMIN'), controller.clearWaitingRoster);
 router.post('/admins/:userId/password', ...superAdmin, controller.resetAdminPassword);
 router.delete('/admins/:userId', ...superAdmin, controller.removeAdmin);
 

@@ -164,7 +164,7 @@ async function backfillRecordColleges() {
 // Indexes so filtering by college stays fast as the data grows.
 async function ensureCollegeIndexes() {
   const names = ['user', 'testAssignment', 'testAttempt', 'assessmentSubmission', 'testFeedback', 'submission',
-    'aiHireInterview', 'aiHireAnswer', 'aiHireAssignment', 'emailLog', 'notification'];
+    'aiHireInterview', 'aiHireAnswer', 'aiHireAssignment', 'emailLog', 'notification', 'collegeRoster'];
   await Promise.all(names.map(async (name) => {
     try {
       await (await prisma[name].collection()).createIndex({ collegeId: 1 });

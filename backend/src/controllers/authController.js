@@ -200,6 +200,10 @@ exports.register = async (req, res) => {
       },
     });
 
+    // A college that uploaded its class list gets this student automatically.
+    const joinedCollegeId = await require('./collegeController').joinFromRoster(user);
+    if (joinedCollegeId) user.collegeId = joinedCollegeId;
+
     // create verification token
     const token = uuidv4();
     const inOneDay = new Date(Date.now() + 24 * 3600 * 1000);

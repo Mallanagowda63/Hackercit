@@ -28,6 +28,8 @@ function presentCollege(college) {
   return {
     id: college.id,
     name: college.name,
+    inviteCode: college.inviteCode || '',
+    inviteEnabled: college.inviteEnabled !== false,
     code: college.code || '',
     city: college.city || '',
     address: college.address || '',
@@ -37,6 +39,30 @@ function presentCollege(college) {
     notes: college.notes || '',
     createdAt: college.createdAt || null,
   };
+}
+
+// ── Invite codes ─────────────────────────────────────────────────────────────
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+function randomPart(length) {
+  return Array.from({ length }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
+}
+
+async function newInviteCode(college) {
+  const base = (String(college.code || '').replace(/[^A-Z0-9]/gi, '')
+    || String(college.name || '').split(/\s+/).map((word) => word[0] || '').join('').replace(/[^A-Z0-9]/gi, '')
+    || 'COL').toUpperCase().slice(0, 6);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const code = `${base}-${randomPart(4)}`;
+    if (!(await prisma.college.findFirst({ where: { inviteCode: code }, select: { id: true } }))) return code;
+  }
+  return `${base}-${randomPart(8)}`;
+}
+
+async function withInviteCode(college) {
+  if (!college || college.inviteCode) return college;
+  const inviteCode = await newInviteCode(college);
+  return prisma.college.update({ where: { id: college.id }, data: { inviteCode, inviteEnabled: true } });
 }
 
 // Months follow India time, like the rest of the backend.
@@ -103,10 +129,11 @@ exports.publicList = async (req, res) => {
 // GET /api/colleges/manage — every college with its details, admins and numbers (main admin).
 exports.manageList = async (req, res) => {
   try {
-    const [colleges, stats] = await Promise.all([
+    const [stored, stats] = await Promise.all([
       prisma.college.findMany({ orderBy: [{ name: 'asc' }] }),
       collegeStats(),
     ]);
+    const colleges = await Promise.all(stored.map(withInviteCode));
     const { admins: allAdmins, ...totals } = stats.build(() => true);
     return res.json({
       colleges: colleges.map((college) => ({ ...presentCollege(college), ...stats.build((id) => id === college.id) })),
@@ -126,11 +153,12 @@ exports.mine = async (req, res) => {
   try {
     const collegeId = String(req.user?.collegeId || '');
     if (!collegeId) return res.json({ college: null });
-    const [college, stats] = await Promise.all([
+    const [stored, stats] = await Promise.all([
       prisma.college.findUnique({ where: { id: collegeId } }),
       collegeStats(),
     ]);
-    if (!college) return res.json({ college: null });
+    if (!stored) return res.json({ college: null });
+    const college = await withInviteCode(stored);
     // Notes are the main admin's private notes about the college.
     const { notes: _privateNotes, ...details } = presentCollege(college);
     return res.json({ college: { ...details, ...stats.build((id) => id === collegeId) } });
@@ -152,7 +180,8 @@ exports.create = async (req, res) => {
     const { details, error } = readDetails(req.body);
     if (error) return res.status(400).json({ error });
     const now = new Date();
-    const college = await prisma.college.create({ data: { name, ...details, createdAt: now, updatedAt: now } });
+    const created = await prisma.college.create({ data: { name, ...details, inviteEnabled: true, createdAt: now, updatedAt: now } });
+    const college = await withInviteCode(created);
     invalidateColleges();
     return res.status(201).json({ college: presentCollege(college) });
   } catch (err) {
@@ -312,6 +341,16 @@ async function moveStudentRecords(userIds, collegeId) {
   await (await prisma.testFeedback.collection()).updateMany({ userId: { $in: ids }, assignmentId: 'ai-hire' }, update);
 }
 
+// Puts general students into a college (their own records follow them).
+async function joinCollege(userIds, collegeId) {
+  if (!userIds.length) return;
+  await (await prisma.user.collection()).updateMany(
+    { _id: { $in: userIds.map((id) => new ObjectId(String(id))) } },
+    { $set: { collegeId: String(collegeId), updatedAt: new Date() } },
+  );
+  await moveStudentRecords(userIds, String(collegeId));
+}
+
 // Only the main admin, or this college's own admin, may change who is in the college.
 function canManageCollegeStudents(user, collegeId) {
   return isSuperAdmin(user) || (Boolean(user?.collegeId) && String(user.collegeId) === String(collegeId));
@@ -334,13 +373,7 @@ exports.moveStudents = async (req, res) => {
       ? []
       : matches.filter((student) => student.collegeId && String(student.collegeId) !== collegeId);
     const toMove = matches.filter((student) => !alreadyThere.includes(student) && !inOtherCollege.includes(student));
-    if (toMove.length) {
-      await (await prisma.user.collection()).updateMany(
-        { _id: { $in: toMove.map((student) => new ObjectId(student.id)) } },
-        { $set: { collegeId, updatedAt: new Date() } },
-      );
-      await moveStudentRecords(toMove.map((student) => student.id), collegeId);
-    }
+    await joinCollege(toMove.map((student) => student.id), collegeId);
     return res.json({
       moved: toMove.length,
       alreadyThere: alreadyThere.length,
@@ -452,5 +485,213 @@ exports.exportCollege = async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'server error' });
+  }
+};
+
+// ── Invite link ──────────────────────────────────────────────────────────────
+
+// POST /api/colleges/:id/invite { enabled?: boolean, regenerate?: true } — turn the link on/off or
+// make a new code (the old link stops working). Main admin or that college's admin.
+exports.updateInvite = async (req, res) => {
+  try {
+    const collegeId = String(req.params.id);
+    if (!canManageCollegeStudents(req.user, collegeId)) return res.status(404).json({ error: 'College not found.' });
+    let college = await prisma.college.findUnique({ where: { id: collegeId } });
+    if (!college) return res.status(404).json({ error: 'College not found.' });
+    const data = { updatedAt: new Date() };
+    if (typeof req.body?.enabled === 'boolean') data.inviteEnabled = req.body.enabled;
+    if (req.body?.regenerate) data.inviteCode = await newInviteCode(college);
+    college = await withInviteCode(await prisma.college.update({ where: { id: collegeId }, data }));
+    return res.json({ inviteCode: college.inviteCode, inviteEnabled: college.inviteEnabled !== false });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+async function collegeByInvite(code) {
+  const clean = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9-]{4,30}$/.test(clean)) return null;
+  return prisma.college.findFirst({ where: { inviteCode: clean } });
+}
+
+// GET /api/colleges/join/:code — public: which college an invite link is for.
+exports.invitePreview = async (req, res) => {
+  try {
+    const college = await collegeByInvite(req.params.code);
+    if (!college) return res.status(404).json({ error: 'This invite link is not valid. Ask your college for the correct link.' });
+    if (college.inviteEnabled === false) return res.status(410).json({ error: `${college.name} has turned this invite link off. Ask your college for a new one.` });
+    return res.json({ college: { name: college.name, city: college.city || '' } });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+// POST /api/colleges/join { code } — the signed-in student joins the college of that invite code.
+exports.joinWithCode = async (req, res) => {
+  try {
+    if (req.user.role !== 'USER') return res.status(400).json({ error: 'Only student accounts can join a college.' });
+    const college = await collegeByInvite(req.body?.code);
+    if (!college) return res.status(404).json({ error: 'This college code is not valid. Check it with your college.' });
+    if (college.inviteEnabled === false) return res.status(410).json({ error: `${college.name} has turned this invite off. Ask your college for a new code.` });
+    const current = String(req.user.collegeId || '');
+    if (current === college.id) return res.json({ joined: true, already: true, college: { id: college.id, name: college.name } });
+    if (current) {
+      const other = await prisma.college.findUnique({ where: { id: current } });
+      return res.status(409).json({ error: `Your account is already in ${other?.name || 'another college'}. Ask the ScholarLogic team to move you.` });
+    }
+    await joinCollege([req.user.id], college.id);
+    await prisma.collegeRoster.updateMany({ where: { collegeId: college.id, email: String(req.user.email || '').toLowerCase() }, data: { joinedUserId: req.user.id, joinedAt: new Date() } });
+    return res.json({ joined: true, college: { id: college.id, name: college.name } });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+// ── Uploaded class list ──────────────────────────────────────────────────────
+
+const ROSTER_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// POST /api/colleges/:id/roster { students: [{ name, email, usn }] }
+// Students already on DevOrbit join now; the rest join automatically when they sign up with that
+// email or USN. Main admin or that college's admin.
+exports.uploadRoster = async (req, res) => {
+  try {
+    const collegeId = String(req.params.id);
+    if (!canManageCollegeStudents(req.user, collegeId)) return res.status(404).json({ error: 'College not found.' });
+    const college = await prisma.college.findUnique({ where: { id: collegeId } });
+    if (!college) return res.status(404).json({ error: 'College not found.' });
+    const rows = Array.isArray(req.body?.students) ? req.body.students.slice(0, 5000) : [];
+    if (!rows.length) return res.status(400).json({ error: 'The file has no students. It needs an Email or USN column.' });
+
+    const seen = new Set();
+    const entries = [];
+    let invalid = 0;
+    rows.forEach((row) => {
+      const email = String(row?.email || '').trim().toLowerCase();
+      const usn = String(row?.usn || '').trim().toUpperCase();
+      const name = String(row?.name || '').trim().slice(0, 120);
+      const validEmail = ROSTER_EMAIL.test(email) ? email : '';
+      if (!validEmail && !usn) { invalid += 1; return; }
+      const key = validEmail || `usn:${usn}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      entries.push({ email: validEmail, usn, name });
+    });
+
+    const users = await prisma.user.findMany({ where: { role: 'USER' }, select: { id: true, email: true, usn: true, collegeId: true } });
+    const byEmail = new Map(users.map((user) => [String(user.email || '').toLowerCase(), user]));
+    const byUsn = new Map(users.filter((user) => user.usn).map((user) => [String(user.usn).toUpperCase(), user]));
+
+    const toJoin = [];
+    let alreadyIn = 0;
+    let inOtherCollege = 0;
+    let waiting = 0;
+    const rosterRows = [];
+    entries.forEach((entry) => {
+      const user = (entry.email && byEmail.get(entry.email)) || (entry.usn && byUsn.get(entry.usn)) || null;
+      let joinedUserId = null;
+      if (user) {
+        if (String(user.collegeId || '') === collegeId) { alreadyIn += 1; joinedUserId = user.id; }
+        else if (user.collegeId && !isSuperAdmin(req.user)) inOtherCollege += 1;
+        else { toJoin.push(user.id); joinedUserId = user.id; }
+      } else {
+        waiting += 1;
+      }
+      rosterRows.push({ ...entry, joinedUserId });
+    });
+
+    await joinCollege(toJoin, collegeId);
+
+    // Remember the whole list, so students who sign up later join automatically.
+    const roster = await prisma.collegeRoster.collection();
+    const now = new Date();
+    for (const row of rosterRows) {
+      const filter = row.email ? { collegeId, email: row.email } : { collegeId, usn: row.usn, email: '' };
+      await roster.updateOne(filter, {
+        $set: { ...row, collegeId, updatedAt: now, ...(row.joinedUserId ? { joinedAt: now } : {}) },
+        $setOnInsert: { createdAt: now, addedBy: req.user.email || '' },
+      }, { upsert: true });
+    }
+
+    return res.json({
+      total: entries.length,
+      joinedNow: toJoin.length,
+      alreadyIn,
+      waitingToSignUp: waiting,
+      inOtherCollege,
+      invalid,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+// GET /api/colleges/:id/roster — the uploaded list with who has joined and who has not signed up yet.
+exports.listRoster = async (req, res) => {
+  try {
+    const collegeId = String(req.params.id);
+    if (!canManageCollegeStudents(req.user, collegeId)) return res.status(404).json({ error: 'College not found.' });
+    const rows = await prisma.collegeRoster.findMany({ where: { collegeId }, orderBy: [{ createdAt: 'desc' }] });
+    const members = new Set((await prisma.user.findMany({ where: { collegeId }, select: { id: true } })).map((user) => user.id));
+    const list = rows.map((row) => ({
+      id: row.id,
+      name: row.name || '',
+      email: row.email || '',
+      usn: row.usn || '',
+      status: row.joinedUserId && members.has(String(row.joinedUserId)) ? 'joined' : row.joinedUserId ? 'left' : 'waiting',
+    }));
+    return res.json({
+      roster: list,
+      counts: {
+        total: list.length,
+        joined: list.filter((row) => row.status === 'joined').length,
+        waiting: list.filter((row) => row.status === 'waiting').length,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+// DELETE /api/colleges/:id/roster — clears the students still waiting to sign up from the list.
+exports.clearWaitingRoster = async (req, res) => {
+  try {
+    const collegeId = String(req.params.id);
+    if (!canManageCollegeStudents(req.user, collegeId)) return res.status(404).json({ error: 'College not found.' });
+    const result = await (await prisma.collegeRoster.collection()).deleteMany({ collegeId, $or: [{ joinedUserId: null }, { joinedUserId: { $exists: false } }] });
+    return res.json({ removed: result.deletedCount });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'server error' });
+  }
+};
+
+// Called after a student signs up: if a college uploaded a list with their email or USN, they join it.
+exports.joinFromRoster = async (user) => {
+  try {
+    if (!user || user.collegeId) return null;
+    const email = String(user.email || '').toLowerCase();
+    const usn = String(user.usn || '').trim().toUpperCase();
+    const roster = await prisma.collegeRoster.collection();
+    const match = await roster.findOne({
+      $and: [
+        { $or: [{ joinedUserId: null }, { joinedUserId: { $exists: false } }] },
+        { $or: [...(email ? [{ email }] : []), ...(usn ? [{ usn }] : [])] },
+      ],
+    });
+    if (!match) return null;
+    const college = await prisma.college.findUnique({ where: { id: String(match.collegeId) } });
+    if (!college) return null;
+    await joinCollege([user.id], college.id);
+    await roster.updateOne({ _id: match._id }, { $set: { joinedUserId: String(user.id), joinedAt: new Date() } });
+    return college.id;
+  } catch (err) {
+    console.error('joinFromRoster failed', err);
+    return null;
   }
 };

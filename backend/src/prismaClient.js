@@ -633,6 +633,7 @@ prisma = {
   aiHireAnswer: new MongoModel('aiHireAnswer', 'AiHireAnswer'),
   aiHireAssignment: new MongoModel('aiHireAssignment', 'AiHireAssignment'),
   college: new MongoModel('college', 'College'),
+  collegeRoster: new MongoModel('collegeRoster', 'CollegeRoster'),
   async $transaction(operations) {
     return Promise.all(operations);
   },

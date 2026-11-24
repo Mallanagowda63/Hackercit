@@ -1491,56 +1491,6 @@ async function downloadCollegeBackup(api, college) {
   return data.counts || {};
 }
 
-// Adds students (by email or USN) to a college, or takes them out again (they become general
-// students). Used by the main admin and by a college's own admin.
-function CollegeStudentsForm({ api, college, S, T, isCollegeAdmin = false, onDone, onCancel }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState("");
-  const [message, setMessage] = useState(null); // { tone, text }
-
-  const identifiers = () => text.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean);
-  const submit = async (mode) => {
-    if (!identifiers().length) return;
-    if (mode === "remove" && !window.confirm(`Take these students out of ${college.name}? They become normal DevOrbit students again.`)) return;
-    setBusy(mode);
-    setMessage(null);
-    try {
-      const result = await api(`/api/colleges/${college.id}/${mode === "add" ? "move-students" : "remove-students"}`, { method: "POST", body: JSON.stringify({ identifiers: identifiers() }) });
-      const parts = mode === "add"
-        ? [`Added ${result.moved} student${result.moved === 1 ? "" : "s"} to ${college.name}.`,
-          result.alreadyThere ? `${result.alreadyThere} already in it.` : "",
-          result.inOtherCollege ? `${result.inOtherCollege} belong to another college (ask the ScholarLogic team).` : ""]
-        : [`Removed ${result.removed} student${result.removed === 1 ? "" : "s"} from ${college.name}.`,
-          result.notInCollege ? `${result.notInCollege} were not in it.` : ""];
-      if (result.notFound?.length) parts.push(`\nNo account found for (${result.notFound.length}): ${result.notFound.slice(0, 20).join(", ")}${result.notFound.length > 20 ? " ..." : ""}`);
-      setMessage({ tone: "success", text: parts.filter(Boolean).join(" ") });
-      setText("");
-      onDone?.(result);
-    } catch (err) {
-      setMessage({ tone: "error", text: err.message || "Something went wrong." });
-    } finally {
-      setBusy("");
-    }
-  };
-
-  return (
-    <div style={{ display: "grid", gap: 10, padding: 14, border: `1px solid ${T.border}`, borderRadius: 8, background: T.background }}>
-      <span style={S.adminFieldLabel}>
-        {isCollegeAdmin
-          ? `Students sign up on DevOrbit as usual. Paste their emails or USNs here to add them to ${college.name}. Only then do they see ${college.name}'s tests.`
-          : `Paste the emails or USNs of students to add to (or take out of) ${college.name}, one per line or separated by commas.`}
-      </span>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder={"student1@gmail.com\n4XX21CS001"} style={S.adminTextarea} />
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button type="button" onClick={() => submit("add")} disabled={!text.trim() || Boolean(busy)} style={S.adminButton("run")}>{busy === "add" ? "Adding..." : `Add to ${college.name}`}</button>
-        <button type="button" onClick={() => submit("remove")} disabled={!text.trim() || Boolean(busy)} style={{ ...S.adminButton("default"), color: T.error }}>{busy === "remove" ? "Removing..." : "Remove from college"}</button>
-        {onCancel && <button type="button" onClick={onCancel} style={S.adminButton("default")}>Close</button>}
-      </div>
-      {message && <div role={message.tone === "error" ? "alert" : "status"} style={{ ...S.adminAlert(message.tone), marginBottom: 0, whiteSpace: "pre-wrap" }}>{message.text}</div>}
-    </div>
-  );
-}
-
 const SEPARATION_LABELS = {
   students: "Students", tests: "Tests", testAttempt: "Test attempts", assessmentSubmission: "Test results",
   testFeedback: "Feedback", submission: "Practice submissions", aiHireInterview: "AI interviews",
@@ -1735,7 +1685,7 @@ function CollegesPanel({ api, S, T, isPhone, onCollegesChanged, onViewCollege })
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => onViewCollege?.(college.id)} style={{ ...small, borderColor: T.primary, color: T.primary }}>View this college</button>
                 <button onClick={() => setEditing(isEditing ? null : { id: college.id, ...EMPTY_COLLEGE_DETAILS, ...college })} style={small}>Edit details</button>
-                <button onClick={() => setMoveForm(moving ? null : { collegeId: college.id, text: "" })} style={small}>Add / remove students</button>
+                <button onClick={() => setMoveForm(moving ? null : { collegeId: college.id, text: "" })} style={small}>Add students</button>
                 <button
                   disabled={busy === `export-${college.id}`}
                   onClick={async () => {
@@ -1862,7 +1812,7 @@ function CollegesPanel({ api, S, T, isPhone, onCollegesChanged, onViewCollege })
 
             {moving && (
               <div style={{ marginTop: 16 }}>
-                <CollegeStudentsForm api={api} college={college} S={S} T={T} onDone={() => { load(); onCollegesChanged?.(); }} onCancel={() => setMoveForm(null)} />
+                <AddStudentsPanel api={api} college={college} S={S} T={T} isPhone={isPhone} onChanged={() => { load(); onCollegesChanged?.(); }} onClose={() => setMoveForm(null)} />
               </div>
             )}
           </div>
@@ -1931,6 +1881,350 @@ function MyCollegeCard({ api, S, T, isPhone, compact = false }) {
             </button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── ADDING STUDENTS TO A COLLEGE ─────────────────────────────────────────────
+// Three ways: the college's invite link, an uploaded class list (Excel/CSV), or emails/USNs.
+
+const USN_PATTERN = /^[0-9][A-Z]{2}[0-9]{2}[A-Z]{2,4}[0-9]{2,4}$/i;
+const EMAIL_PATTERN_SIMPLE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Reads a class list. Finds the Email / USN / Name columns by their headings, or by what the
+// cells look like when there is no heading row.
+async function readClassList(file) {
+  const XLSX = await loadSheetJs();
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false })
+    .map((row) => row.map((cell) => String(cell || "").trim()))
+    .filter((row) => row.some(Boolean));
+  if (!rows.length) return [];
+
+  const findColumn = (header, tests) => header.findIndex((cell) => tests.some((test) => test.test(cell)));
+  const header = rows[0].map((cell) => cell.toLowerCase());
+  let emailCol = findColumn(header, [/e-?mail/]);
+  let usnCol = findColumn(header, [/\busn\b/, /roll/, /reg(istration)?\s*(no|number)/, /university\s*(seat|no)/]);
+  let nameCol = findColumn(header, [/^name$/, /student\s*name/, /full\s*name/, /\bname\b/]);
+  const hasHeader = emailCol >= 0 || usnCol >= 0 || nameCol >= 0;
+  const body = hasHeader ? rows.slice(1) : rows;
+
+  if (emailCol < 0) emailCol = (rows[hasHeader ? 1 : 0] || []).findIndex((cell) => EMAIL_PATTERN_SIMPLE.test(cell));
+  if (usnCol < 0) usnCol = (rows[hasHeader ? 1 : 0] || []).findIndex((cell) => USN_PATTERN.test(cell));
+
+  return body.map((row) => ({
+    email: emailCol >= 0 ? row[emailCol] : "",
+    usn: usnCol >= 0 ? row[usnCol] : "",
+    name: nameCol >= 0 ? row[nameCol] : "",
+  })).filter((row) => row.email || row.usn);
+}
+
+function AddStudentsPanel({ api, college: collegeProp, S, T, isPhone, isCollegeAdmin = false, onChanged, onClose }) {
+  const [college, setCollege] = useState(collegeProp);
+  const [tab, setTab] = useState("link");
+  const [message, setMessage] = useState(null); // { tone, text }
+  const [busy, setBusy] = useState("");
+  const [text, setText] = useState("");
+  const [roster, setRoster] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  // College admins get the invite code from their own college record.
+  useEffect(() => {
+    if (college?.inviteCode) return;
+    api("/api/colleges/mine").then((data) => { if (data.college) setCollege({ ...college, ...data.college }); }).catch(() => {});
+  }, []);
+
+  const loadRoster = () => api(`/api/colleges/${college.id}/roster`).then(setRoster).catch(() => {});
+  useEffect(() => { if (tab === "upload") loadRoster(); }, [tab]);
+
+  const link = college?.inviteCode ? `${window.location.origin}/join/${college.inviteCode}` : "";
+  const say = (tone, textValue) => setMessage({ tone, text: textValue });
+
+  const run = async (key, work) => {
+    setBusy(key);
+    setMessage(null);
+    try {
+      await work();
+    } catch (err) {
+      say("error", err.message || "Something went wrong.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const updateInvite = (body, doneText) => run("invite", async () => {
+    const result = await api(`/api/colleges/${college.id}/invite`, { method: "POST", body: JSON.stringify(body) });
+    setCollege({ ...college, ...result });
+    if (doneText) say("success", doneText);
+  });
+
+  const tabButton = (id, label) => (
+    <button type="button" onClick={() => { setTab(id); setMessage(null); }}
+      style={{ background: "none", border: "none", borderBottom: `2px solid ${tab === id ? T.text : "transparent"}`, padding: "8px 0", marginRight: 22, cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: tab === id ? 600 : 400, color: tab === id ? T.text : T.textSecondary }}>
+      {label}
+    </button>
+  );
+  const small = { ...S.adminButton("default"), padding: "7px 12px", fontSize: 13 };
+
+  return (
+    <div style={{ ...S.adminCard, padding: isPhone ? "18px 16px" : "22px 24px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <span style={{ fontSize: 17, fontWeight: 600, color: T.text }}>Add students to {college?.name || "your college"}</span>
+        {onClose && <button type="button" onClick={onClose} style={{ ...small, marginLeft: "auto" }}>Close</button>}
+      </div>
+      <div style={{ color: T.textSecondary, fontSize: 13, marginBottom: 12 }}>
+        Students who join see {college?.name || "your college"}'s name, tests and leaderboard. Everyone else on DevOrbit is not affected.
+      </div>
+      <div style={{ borderBottom: `1px solid ${T.divider}`, marginBottom: 16, display: "flex", flexWrap: "wrap" }}>
+        {tabButton("link", "Invite link")}
+        {tabButton("upload", "Upload class list")}
+        {tabButton("manual", "Add by email / USN")}
+      </div>
+
+      {tab === "link" && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ color: T.textSecondary, fontSize: 13.5, lineHeight: 1.6 }}>
+            Share this link in your class WhatsApp group. Students who open it sign up or log in and join {college?.name} automatically.
+          </div>
+          {link ? (
+            <>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <code style={{ flex: "1 1 280px", padding: "10px 12px", border: `1px solid ${T.border}`, borderRadius: 6, background: T.background, fontFamily: "'IBM Plex Mono',monospace", fontSize: 13.5, color: college.inviteEnabled ? T.text : T.textMuted, wordBreak: "break-all", textDecoration: college.inviteEnabled ? "none" : "line-through" }}>{link}</code>
+                <button type="button" disabled={!college.inviteEnabled} onClick={() => { navigator.clipboard?.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }} style={S.adminButton("run")}>{copied ? "Copied" : "Copy link"}</button>
+                <a href={`https://wa.me/?text=${encodeURIComponent(`Join ${college.name} on DevOrbit for coding tests and practice: ${link}`)}`} target="_blank" rel="noopener noreferrer"
+                  style={{ ...small, textDecoration: "none", display: "inline-block", pointerEvents: college.inviteEnabled ? "auto" : "none", opacity: college.inviteEnabled ? 1 : 0.5 }}>Share on WhatsApp</a>
+              </div>
+              <div style={{ color: T.textSecondary, fontSize: 13 }}>Code: <strong style={{ color: T.text, fontFamily: "'IBM Plex Mono',monospace" }}>{college.inviteCode}</strong></div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" disabled={busy === "invite"} onClick={() => updateInvite({ enabled: !college.inviteEnabled }, college.inviteEnabled ? "Invite link turned off. Nobody new can join with it." : "Invite link turned on.")} style={small}>
+                  {college.inviteEnabled ? "Turn link off" : "Turn link on"}
+                </button>
+                <button type="button" disabled={busy === "invite"} onClick={() => { if (window.confirm("Make a new link? The old link stops working.")) updateInvite({ regenerate: true, enabled: true }, "New link made. The old link no longer works."); }} style={small}>
+                  Make new link
+                </button>
+              </div>
+              <div style={{ color: T.textMuted, fontSize: 12.5 }}>If the link reaches someone outside your college, make a new link. You can remove students in the "Add by email / USN" tab.</div>
+            </>
+          ) : <div style={{ color: T.textSecondary, fontSize: 13 }}>Loading the invite link...</div>}
+        </div>
+      )}
+
+      {tab === "upload" && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ color: T.textSecondary, fontSize: 13.5, lineHeight: 1.6 }}>
+            Upload your class list as Excel (.xlsx) or CSV with an <strong>Email</strong> and/or <strong>USN</strong> column (a Name column is optional).
+            Students already on DevOrbit join now. The others join automatically when they sign up with that email or USN.
+          </div>
+          <label style={{ ...S.adminButton("run"), display: "inline-flex", alignItems: "center", gap: 8, width: "fit-content", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.7 : 1 }}>
+            {busy === "upload" ? "Reading the file..." : "Choose Excel / CSV file"}
+            <input type="file" accept=".xlsx,.xls,.csv" disabled={Boolean(busy)} style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file) return;
+                run("upload", async () => {
+                  const students = await readClassList(file);
+                  if (!students.length) throw new Error("No emails or USNs found in that file. Make sure it has an Email or USN column.");
+                  const result = await api(`/api/colleges/${college.id}/roster`, { method: "POST", body: JSON.stringify({ students }) });
+                  say("success", [
+                    `${file.name}: ${result.total} students.`,
+                    `${result.joinedNow} joined now.`,
+                    result.alreadyIn ? `${result.alreadyIn} were already in.` : "",
+                    result.waitingToSignUp ? `${result.waitingToSignUp} will join when they sign up.` : "",
+                    result.inOtherCollege ? `${result.inOtherCollege} belong to another college (ask the ScholarLogic team).` : "",
+                    result.invalid ? `${result.invalid} rows had no valid email or USN.` : "",
+                  ].filter(Boolean).join(" "));
+                  loadRoster();
+                  onChanged?.();
+                });
+              }} />
+          </label>
+          {roster && roster.counts.total > 0 && (
+            <div style={{ border: `1px solid ${T.divider}`, borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", background: T.background, fontSize: 13 }}>
+                <span style={{ color: T.text, fontWeight: 600 }}>Uploaded list</span>
+                <span style={{ color: T.success }}>{roster.counts.joined} joined</span>
+                <span style={{ color: T.warning }}>{roster.counts.waiting} not signed up yet</span>
+                {roster.counts.waiting > 0 && (
+                  <button type="button" onClick={() => { if (window.confirm("Remove the students who have not signed up yet from the list?")) run("clear", async () => { const r = await api(`/api/colleges/${college.id}/roster`, { method: "DELETE" }); say("success", `Removed ${r.removed} from the waiting list.`); loadRoster(); }); }}
+                    style={{ ...small, marginLeft: "auto" }}>Clear waiting list</button>
+                )}
+              </div>
+              <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                {roster.roster.filter((row) => row.status !== "joined").slice(0, 300).map((row) => (
+                  <div key={row.id} style={{ display: "flex", gap: 12, padding: "7px 12px", borderTop: `1px solid ${T.divider}`, fontSize: 13 }}>
+                    <span style={{ flex: "1 1 160px", color: T.text }}>{row.name || "--"}</span>
+                    <span style={{ flex: "1 1 200px", color: T.textSecondary }}>{row.email || "--"}</span>
+                    <span style={{ flex: "0 0 120px", color: T.textSecondary }}>{row.usn || "--"}</span>
+                    <span style={{ flex: "0 0 120px", color: T.warning }}>{row.status === "left" ? "Removed" : "Not signed up"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "manual" && (
+        <div style={{ display: "grid", gap: 10 }}>
+          <span style={{ color: T.textSecondary, fontSize: 13.5 }}>Paste emails or USNs of students who already have a DevOrbit account, one per line or separated by commas.</span>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder={"student1@gmail.com\n4XX21CS001"} style={S.adminTextarea} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {["add", "remove"].map((mode) => (
+              <button key={mode} type="button" disabled={!text.trim() || Boolean(busy)}
+                onClick={() => {
+                  const identifiers = text.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean);
+                  if (mode === "remove" && !window.confirm(`Take these students out of ${college.name}? They become normal DevOrbit students again.`)) return;
+                  run(mode, async () => {
+                    const result = await api(`/api/colleges/${college.id}/${mode === "add" ? "move-students" : "remove-students"}`, { method: "POST", body: JSON.stringify({ identifiers }) });
+                    const parts = mode === "add"
+                      ? [`Added ${result.moved} student${result.moved === 1 ? "" : "s"}.`, result.alreadyThere ? `${result.alreadyThere} already in.` : "", result.inOtherCollege ? `${result.inOtherCollege} belong to another college.` : ""]
+                      : [`Removed ${result.removed} student${result.removed === 1 ? "" : "s"}.`, result.notInCollege ? `${result.notInCollege} were not in ${college.name}.` : ""];
+                    if (result.notFound?.length) parts.push(`\nNo DevOrbit account for (${result.notFound.length}): ${result.notFound.slice(0, 20).join(", ")}${result.notFound.length > 20 ? " ..." : ""}. Send them the invite link, or upload them in a class list so they join when they sign up.`);
+                    say("success", parts.filter(Boolean).join(" "));
+                    setText("");
+                    onChanged?.();
+                  });
+                }}
+                style={mode === "add" ? S.adminButton("run") : { ...S.adminButton("default"), color: T.error }}>
+                {busy === mode ? (mode === "add" ? "Adding..." : "Removing...") : (mode === "add" ? `Add to ${college?.name || "college"}` : "Remove from college")}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {message && <div role={message.tone === "error" ? "alert" : "status"} style={{ ...S.adminAlert(message.tone), marginTop: 14, marginBottom: 0, whiteSpace: "pre-wrap" }}>{message.text}</div>}
+    </div>
+  );
+}
+
+// ── JOIN LINK (students) ─────────────────────────────────────────────────────
+// /join/<code>: shows which college invited the student. Not signed in: asks them to sign up or
+// log in (the main app opens its login box). Signed in as a student: joins with one click.
+const JOIN_CODE_STORAGE_KEY = "devorbit.joinCode.v1";
+const JOIN_CODE_FROM_URL = (window.location.pathname.match(/^\/join\/([A-Za-z0-9-]{4,30})\/?$/) || [])[1] || "";
+if (JOIN_CODE_FROM_URL) {
+  try { window.localStorage?.setItem(JOIN_CODE_STORAGE_KEY, JOIN_CODE_FROM_URL.toUpperCase()); } catch { /* optional */ }
+  window.history.replaceState(null, "", "/");
+}
+
+function readStoredSession() {
+  try {
+    const session = JSON.parse(window.localStorage?.getItem(AUTH_SESSION_STORAGE_KEY) || "null");
+    return session?.token ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+function JoinCollegeBanner() {
+  const [code, setCode] = useState(() => {
+    try { return window.localStorage?.getItem(JOIN_CODE_STORAGE_KEY) || ""; } catch { return ""; }
+  });
+  const [college, setCollege] = useState(null);
+  const [error, setError] = useState("");
+  const [state, setState] = useState("idle"); // idle | joining | joined
+  const [session, setSession] = useState(readStoredSession);
+
+  const forget = () => {
+    try { window.localStorage?.removeItem(JOIN_CODE_STORAGE_KEY); } catch { /* optional */ }
+    setCode("");
+  };
+
+  useEffect(() => {
+    if (!code) return;
+    fetch(buildBackendApiUrl(`/api/colleges/join/${encodeURIComponent(code)}`))
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "This invite link is not valid.");
+        setCollege(data.college);
+      })
+      .catch((err) => setError(err.message));
+  }, [code]);
+
+  // The main app saves the session after login / sign-up; pick it up.
+  useEffect(() => {
+    const refresh = () => setSession(readStoredSession());
+    window.addEventListener("devorbit:session", refresh);
+    window.addEventListener("storage", refresh);
+    return () => { window.removeEventListener("devorbit:session", refresh); window.removeEventListener("storage", refresh); };
+  }, []);
+
+  const role = session?.user?.role || session?.role || "";
+  const join = async () => {
+    setState("joining");
+    setError("");
+    try {
+      const response = await fetch(buildBackendApiUrl("/api/colleges/join"), {
+        method: "POST",
+        headers: createAuthHeaders(session.token, true),
+        body: JSON.stringify({ code }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not join.");
+      // Keep the saved session in step, then reload so every page shows the college.
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY));
+        saved.user = { ...saved.user, collegeId: data.college.id };
+        window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(saved));
+      } catch { /* the app refreshes the profile on load anyway */ }
+      forget();
+      setState("joined");
+      setCollege(data.college);
+    } catch (err) {
+      setError(err.message);
+      setState("idle");
+    }
+  };
+
+  // Signed in as a student: join straight away (the student opened the link on purpose).
+  useEffect(() => {
+    if (code && college && session && role === "student" && state === "idle" && !error) join();
+  }, [code, college, session, role]);
+
+  if (!code && state !== "joined") return null;
+
+  const box = { position: "fixed", left: "50%", bottom: 20, transform: "translateX(-50%)", zIndex: 5000, width: "min(560px, calc(100vw - 32px))", boxSizing: "border-box", background: "#15171f", border: "1px solid #2f3445", borderRadius: 12, padding: "16px 18px", color: "#ececec", fontFamily: "'IBM Plex Sans','Outfit',system-ui,sans-serif", boxShadow: "0 18px 50px rgba(0,0,0,0.45)" };
+  const button = (primary) => ({ background: primary ? "#e8873a" : "transparent", color: primary ? "#1a1009" : "#d4d4d4", border: `1px solid ${primary ? "#e8873a" : "#3a3a3a"}`, borderRadius: 7, padding: "8px 14px", fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer" });
+  const openAuth = (mode) => window.dispatchEvent(new CustomEvent("devorbit:open-auth", { detail: { mode } }));
+
+  return (
+    <div role="dialog" aria-label="College invite" style={box}>
+      {state === "joined" ? (
+        <>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>You joined {college?.name}.</div>
+          <div style={{ color: "#a3a3a3", fontSize: 14, marginBottom: 12 }}>Your college's tests and leaderboard now appear on your dashboard.</div>
+          <button style={button(true)} onClick={() => window.location.assign("/")}>Continue</button>
+        </>
+      ) : error ? (
+        <>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6, color: "#ff8a8a" }}>Could not join the college</div>
+          <div style={{ color: "#c9c9c9", fontSize: 14, marginBottom: 12 }}>{error}</div>
+          <button style={button(false)} onClick={forget}>Close</button>
+        </>
+      ) : !college ? (
+        <div style={{ color: "#a3a3a3", fontSize: 14 }}>Checking your invite...</div>
+      ) : session && role !== "student" ? (
+        <>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Invite to {college.name}</div>
+          <div style={{ color: "#a3a3a3", fontSize: 14, marginBottom: 12 }}>You are signed in as an admin. Students open this link with their own account to join.</div>
+          <button style={button(false)} onClick={forget}>Close</button>
+        </>
+      ) : session ? (
+        <div style={{ color: "#a3a3a3", fontSize: 14 }}>Joining {college.name}...</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>You're invited to join {college.name} on DevOrbit</div>
+          <div style={{ color: "#a3a3a3", fontSize: 14, marginBottom: 12 }}>Sign up (or log in if you already have an account). You'll be added to {college.name} right after.</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button style={button(true)} onClick={() => openAuth("signup")}>Sign up</button>
+            <button style={button(false)} onClick={() => openAuth("login")}>I have an account</button>
+            <button style={{ ...button(false), border: "none", marginLeft: "auto", color: "#8e8e8e" }} onClick={forget}>Not now</button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -2822,6 +3116,7 @@ function CodingPlatform() {
     } catch {
       // Storage can be blocked in private browsing; login should still work for this tab.
     }
+    window.dispatchEvent(new Event("devorbit:session"));
   };
 
   const clearAuthSession = () => {
@@ -3087,6 +3382,18 @@ function CodingPlatform() {
   };
 
   useEffect(() => { reloadCollegeOptions(); }, []);
+
+  useEffect(() => {
+    const openAuth = (event) => {
+      setView("home");
+      setAuthMode(event.detail?.mode === "signup" ? "signup" : "login");
+      setAuthRole("student");
+      setAuthError("");
+      setAuthModalOpen(true);
+    };
+    window.addEventListener("devorbit:open-auth", openAuth);
+    return () => window.removeEventListener("devorbit:open-auth", openAuth);
+  }, []);
 
   // Admin sessions saved before colleges existed lack superAdmin / collegeId: refresh them once.
   useEffect(() => {
@@ -13060,13 +13367,14 @@ function CodingPlatform() {
           {adminTab === "aihire" && renderAdminAiHire()}
           {adminTab === "students" && !currentUser.superAdmin && currentUser.collegeId && (
             <div style={{ marginBottom:18 }}>
-              <CollegeStudentsForm
+              <AddStudentsPanel
                 api={performApiRequest}
                 college={{ id: currentUser.collegeId, name: collegeOptions.find((college) => college.id === currentUser.collegeId)?.name || "your college" }}
                 S={S}
                 T={ADMIN_THEME}
+                isPhone={isPhone}
                 isCollegeAdmin
-                onDone={() => loadAdminPortalData(undefined, { background: true })}
+                onChanged={() => loadAdminPortalData(undefined, { background: true })}
               />
             </div>
           )}
@@ -15691,5 +15999,6 @@ const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
   <ErrorBoundary>
     <CodingPlatform />
+    <JoinCollegeBanner />
   </ErrorBoundary>
 );
